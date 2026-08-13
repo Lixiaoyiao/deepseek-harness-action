@@ -1,0 +1,6 @@
+node_modules/
+coverage/
+*.log
+.env
+.dsh-action/
+work/

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Linux Docker DSH runtime smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="$(mktemp -d)"
+          run_as="$(id -u):$(id -g)"
+          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" node:24-bookworm rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json || true; rmdir "$runtime_dir" || true; }
+          trap cleanup EXIT
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$run_as" \
+            --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
+            --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package" \
+            --workdir /opt/dsh-action/package \
+            --env HOME=/tmp --env npm_config_cache=/tmp/npm-cache \
+            node:24-bookworm \
+            npm install --no-audit --no-fund --omit=dev --save=false --loglevel=error \
+              @deepseek-ai/dsh@0.1.0-rc.6
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$run_as" \
+            --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
+            --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
+            --workdir /tmp \
+            node:24-bookworm \
+            node -e 'import("/opt/dsh-action/package/node_modules/node-pty/lib/node-pty.js").then(()=>process.stdout.write("node-pty ok\\n"))'
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$run_as" \
+            --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
+            --tmpfs /dsh-home:rw,nosuid,nodev,size=536870912 \
+            --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/assets/dsh/trusted-write.patch.yml,target=/opt/dsh-action/policy.patch.yml,readonly" \
+            --workdir /tmp \
+            --env DSH_HOME=/dsh-home --env HOME=/dsh-home \
+            --env DSH_TELEMETRY_DISABLED=1 --env DSH_TOOLS_MODE=native \
+            node:24-bookworm \
+            node /opt/dsh-action/package/node_modules/@deepseek-ai/dsh/lib/bin.js \
+              --profile headless --patch /opt/dsh-action/policy.patch.yml --dump-config

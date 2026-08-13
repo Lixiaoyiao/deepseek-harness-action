@@ -1,0 +1,38 @@
+# Copy this file to .github/workflows/dsh-ci-auto-fix.yml and replace both
+# zero-valued references with audited immutable image/action digests.
+name: DSH trusted CI auto-fix
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: dsh-ci-fix-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: your-org/dsh-action@0000000000000000000000000000000000000000
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          allow-write: "true"
+          run-tests: "true"
+          test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
+          container-image: node@sha256:0000000000000000000000000000000000000000000000000000000000000000

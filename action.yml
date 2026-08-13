@@ -1,0 +1,84 @@
+name: "DeepSeek Harness for GitHub"
+description: "AI Code Review · CI Diagnosis · Auto Fix · Issue → PR"
+author: "dsh-action contributors"
+branding:
+  icon: "code"
+  color: "blue"
+
+inputs:
+  deepseek-api-key:
+    description: "DeepSeek API key. Kept by the controller-side credential proxy; never passed to DSH or repository code."
+    required: true
+  github-token:
+    description: "GitHub token used only by the trusted controller."
+    required: false
+    default: ${{ github.token }}
+  allow-write:
+    description: "Allow trusted same-repository fix/implement operations after all trust gates pass."
+    required: false
+    default: "false"
+  command:
+    description: "Optional explicit operation: review, diagnose, fix, implement, or auto."
+    required: false
+    default: "auto"
+  prompt:
+    description: "Additional trusted operator instructions. Repository/event content is always treated as untrusted data."
+    required: false
+    default: ""
+  dsh-version:
+    description: "Pinned @deepseek-ai/dsh version."
+    required: false
+    default: "0.1.0-rc.6"
+  dsh-executable:
+    description: "Optional absolute path to a preinstalled dsh executable."
+    required: false
+    default: ""
+  isolation:
+    description: "DSH isolation backend. 'docker' is required for untrusted review data."
+    required: false
+    default: "docker"
+  container-image:
+    description: "Node 24 image used for DSH isolation. Trusted-write requires a full name@sha256 digest; review/diagnose may use a tag."
+    required: false
+    default: "node:24-bookworm"
+  timeout-minutes:
+    description: "Overall DSH worker timeout in minutes."
+    required: false
+    default: "20"
+  max-findings:
+    description: "Maximum high-confidence findings to publish."
+    required: false
+    default: "20"
+  run-tests:
+    description: "Run trusted validation commands for same-repository write operations."
+    required: false
+    default: "true"
+  test-commands:
+    description: 'JSON array of argv arrays for trusted validation, e.g. [["npm","test"]].'
+    required: false
+    default: "[]"
+  base-url:
+    description: "DeepSeek API base URL used by the controller-side proxy."
+    required: false
+    default: "https://api.deepseek.com"
+  bot-user-id:
+    description: "Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot]."
+    required: false
+    default: "41898282"
+outputs:
+  conclusion:
+    description: "success, neutral, or failure"
+  operation:
+    description: "Resolved operation"
+  review-summary:
+    description: "Validated review or diagnosis summary"
+  findings-count:
+    description: "Number of published findings"
+  branch-name:
+    description: "Created or updated dsh branch"
+  pull-request-url:
+    description: "Created pull request URL"
+
+runs:
+  using: "node24"
+  main: "dist/index.js"
