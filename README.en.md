@@ -12,6 +12,8 @@ Run DeepSeek Harness directly from GitHub pull requests, issues, and failed CI j
 GitHub PR / Issue / CI  →  DeepSeek Harness  →  Review / Diagnose / Fix / Issue → PR
 ```
 
+It belongs to the same category of GitHub integration as [Claude Code Action](https://github.com/anthropics/claude-code-action): GitHub events start a coding agent, and the action writes reviews, diagnoses, or code changes back to the repository. This project uses DeepSeek Harness.
+
 Pull requests can receive automatic inline reviews. Failed CI runs can receive a diagnosis. Once you explicitly enable write access, `@dsh` can also fix code or turn an issue into a pull request.
 
 This is a community project. It is not an official DeepSeek or GitHub product.
@@ -29,7 +31,7 @@ These are public runs from this repository. You can inspect the comments and Act
 | Fix and validation in trusted write mode                | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
 | Issue implementation followed by a pull request         | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
-## 60-second quick start
+## Quick start
 
 Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions** in your repository.
 
@@ -83,18 +85,6 @@ The command must be on the first line of the comment. Ready-to-copy workflows ar
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml) for trusted CI auto-fix
 
 Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"` and define validation commands. See [`action.yml`](action.yml) for all inputs.
-
-## Why this project exists
-
-I did not want another GitHub tool inside a local chat window. I wanted the pull request and the failed CI run to be the entry points. Reviews should land on the relevant lines, diagnoses should use the real logs, and code changes should still pass through the repository's existing permissions and CI.
-
-This project keeps that split explicit: DSH reads the code and makes the judgment; the action owns GitHub events, authorization, and publication. That makes the result easier to inspect and easier to fit into routine maintenance.
-
-## How it differs from dsh-github
-
-The community project [`PerryLink/dsh-github`](https://github.com/PerryLink/dsh-github) brings pull request and issue operations into a DSH session.
-
-This project goes the other way: pull request events, failed CI runs, and `@dsh` commands on pull requests or issues start DSH. In short, `dsh-github` is **DSH → GitHub**; this action is **GitHub → DSH**. They are complementary.
 
 ## Write mode
 

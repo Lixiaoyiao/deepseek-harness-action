@@ -12,6 +12,8 @@
 GitHub PR / Issue / CI  →  DeepSeek Harness  →  Review / Diagnose / Fix / Issue → PR
 ```
 
+它和 [Claude Code Action](https://github.com/anthropics/claude-code-action) 属于同一类 GitHub 集成：由 GitHub 事件启动 coding agent，再把 review、诊断或代码改动写回仓库。这个项目使用的是 DeepSeek Harness。
+
 PR 可以自动收到行内 review；失败的 CI 可以得到诊断；在你明确开放写权限后，`@dsh` 也可以修代码或把 Issue 做成 PR。
 
 这是由社区维护的项目，不是 DeepSeek 或 GitHub 官方产品。
@@ -29,7 +31,7 @@ Maintained by [@Lixiaoyiao](https://github.com/Lixiaoyiao).
 | 受信任写模式下修复并验证        | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
 | 从 Issue 实现代码并创建 PR      | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
-## 60 秒开始使用
+## 快速开始
 
 先在仓库的 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。
 
@@ -83,18 +85,6 @@ jobs:
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml)：受信任的 CI 自动修复
 
 `fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`，并配置测试命令。详细输入见 [`action.yml`](action.yml)。
-
-## 为什么做这个项目
-
-我想要的不是在本地聊天窗口里再加一个 GitHub 工具，而是让 PR 和失败 CI 本身成为入口。Review 应该落在具体代码行，diagnose 应该读取真实日志；需要改代码时，也应该沿用仓库原有的权限和 CI。
-
-所以这里让 DSH 负责读代码和做判断，让 Action 负责事件、权限和最终写回 GitHub。两边的职责分开后，行为更容易检查，也更适合放进日常维护流程。
-
-## 和 dsh-github 有什么区别
-
-社区项目 [`PerryLink/dsh-github`](https://github.com/PerryLink/dsh-github) 把 PR 和 Issue 操作带进 DSH 会话。
-
-这个项目的方向相反：由 GitHub 的 PR 事件、失败 CI，以及 PR / Issue 里的 `@dsh` 命令启动 DSH。简单说，前者是 **DSH → GitHub**，这里是 **GitHub → DSH**。它们不是替代关系。
 
 ## 写模式
 
