@@ -439,6 +439,7 @@ function dockerSpec(
   args.push(
     request.containerImage,
     "node",
+    "--expose-internals",
     CONTAINER_DSH_BIN,
     "--profile",
     "headless",
@@ -545,7 +546,7 @@ function localSpec(
   }
   return {
     command: process.execPath,
-    args: [executable, "--profile", "headless", "--patch", patchPath, prompt],
+    args: ["--expose-internals", executable, "--profile", "headless", "--patch", patchPath, prompt],
     cwd: workspace,
     env: workerEnvironment,
   };

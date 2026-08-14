@@ -98,9 +98,9 @@ because GitHub loads review-event workflow YAML from the PR merge revision.
 originating actors have write access and the target is the same repository.
 Forks, unresolved PR origins and `pull_request_target` never gain write tools.
 Every actual trusted-write run also requires `container-image` to be a complete
-immutable `name@sha256:<64 lowercase hex>` reference. The default mutable tag is
-accepted only by review/diagnosis paths, so replace the placeholder digest in
-the write examples before enabling them.
+immutable `name@sha256:<64 lowercase hex>` reference. The default image is the
+same audited Node 24.18.0 digest exercised by CI; review/diagnosis may accept an
+explicit tag override, but doing so weakens runtime reproducibility.
 
 When `run-tests` is true but `test-commands` is empty, write mode fails closed.
 Set `run-tests: "false"` explicitly only when an **unverified** change is

@@ -158,7 +158,8 @@ describe("runDsh", () => {
       repoToolsEnabled: false,
       networkIsolated: false,
     });
-    expect(captured?.args.slice(0, 5)).toEqual([
+    expect(captured?.args.slice(0, 6)).toEqual([
+      "--expose-internals",
       fixture.executable,
       "--profile",
       "headless",
@@ -368,6 +369,7 @@ describe("runDsh", () => {
     expect(captured?.args).toContain(
       "/opt/dsh-action/package/node_modules/@deepseek-ai/dsh/lib/bin.js",
     );
+    expect(captured?.args).toContain("--expose-internals");
     expect(captured?.args).toContain("HOME=/dsh-home");
     expect(captured?.args).toContain("DSH_HOME=/dsh-home");
     expect(captured?.args).toContain("npm_config_cache=/dsh-home/npm-cache");

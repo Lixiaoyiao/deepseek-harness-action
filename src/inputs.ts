@@ -59,7 +59,8 @@ const defaults = {
   dshVersion: "0.1.0-rc.6",
   dshExecutable: "",
   isolation: "docker",
-  containerImage: "node:24-bookworm",
+  containerImage:
+    "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
   timeoutMinutes: "20",
   maxFindings: "20",
   runTests: "true",
