@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "DeepSeek Harness for GitHub - AI Code Review, CI Diagnosis, Auto Fix, and Issue to PR",
   "author": "Lixiaoyiao",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lixiaoyiao/deepseek-harness-action.git"
+  },
   "private": false,
   "license": "MIT",
   "keywords": [
