@@ -137,7 +137,14 @@ describe("fingerprintFinding", () => {
     expect(fingerprintFinding({ ...original, anchorContext })).toMatch(/^[a-f0-9]{64}$/u);
   });
 
-  it("changes for a distinct category, path or source anchor", () => {
+  it("ignores model classification for a stable source anchor", () => {
+    const anchorContext = "authorize(user);\nupdateRecord();";
+    expect(fingerprintFinding({ ...finding({ category: "correctness" }), anchorContext })).toBe(
+      fingerprintFinding({ ...finding({ category: "security" }), anchorContext }),
+    );
+  });
+
+  it("changes for a distinct fallback category, path or source anchor", () => {
     const original = fingerprintFinding(finding());
     expect(fingerprintFinding(finding({ category: "correctness" }))).not.toBe(original);
     expect(fingerprintFinding(finding({ path: "src/other.ts" }))).not.toBe(original);

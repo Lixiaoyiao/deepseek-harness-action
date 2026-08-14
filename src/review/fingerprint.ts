@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { ReviewFinding } from "./schema.js";
 
-const FINGERPRINT_VERSION = "dsh-finding-v2";
+const FINGERPRINT_VERSION = "dsh-finding-v3";
 
 export interface FingerprintableFinding extends Pick<
   ReviewFinding,
@@ -47,7 +47,7 @@ export function fingerprintFinding(finding: FingerprintableFinding): string {
       : ["source", sourceAnchor];
   const canonical = JSON.stringify([
     FINGERPRINT_VERSION,
-    finding.category,
+    sourceAnchor === undefined || sourceAnchor.length === 0 ? finding.category : null,
     normalizePath(finding.path),
     anchor,
   ]);

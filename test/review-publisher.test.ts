@@ -227,6 +227,7 @@ describe("publishPullRequestReview", () => {
     expect(duplicate).toMatchObject({ duplicatesSkipped: 1, inlinePublished: 0 });
 
     const rewritten = finding({
+      category: "correctness",
       title: "Mutation can precede caller verification",
       body: "The write happens before authorization, allowing an unauthorized mutation.",
       evidence: "The mutation call is reached before the user guard.",
