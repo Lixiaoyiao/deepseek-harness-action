@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Lixiaoyiao/deepseek-harness-action
-          ref: 873eebdd9395e2455a00023c49a7b2eaba5d6ddd
+          ref: 50580590de152abcc3bd81c07b26dd632b76360b
           path: .dsh-action
           persist-credentials: false
           fetch-depth: 1
