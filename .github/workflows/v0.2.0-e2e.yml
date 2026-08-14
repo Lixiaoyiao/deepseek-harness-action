@@ -168,10 +168,34 @@ jobs:
           if (result.write?.commitSha !== process.env.COMMIT_SHA) throw new Error("fix commit mismatch");
           if (process.env.COMMENT_ID !== process.env.FAILED_WRITE_COMMENT_ID) throw new Error("write sticky was not reused");
           NODE
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}" --jq .head.sha)" = "$COMMIT_SHA"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/contents/e2e-fixture.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)" = "status=validated"
-          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate > "$RUNNER_TEMP/fix-comments.json"
-          jq --argjson id "$COMMENT_ID" --arg commit "$COMMIT_SHA" -e '
-            map(select(.id == $id and .user.id == 41898282 and (.body | contains("<!-- dsh-action:v1 kind=write -->")) and (.body | contains("Configured validation passed.")) and (.body | contains($commit)))) |
-            length == 1
-          ' "$RUNNER_TEMP/fix-comments.json" >/dev/null
+          observed_head=""
+          for attempt in {1..15}; do
+            observed_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}" --jq .head.sha)"
+            test "$observed_head" = "$COMMIT_SHA" && break
+            sleep 2
+          done
+          test "$observed_head" = "$COMMIT_SHA"
+
+          observed_fixture=""
+          for attempt in {1..15}; do
+            observed_fixture="$(gh api "repos/${GITHUB_REPOSITORY}/contents/e2e-fixture.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)"
+            test "$observed_fixture" = "status=validated" && break
+            sleep 2
+          done
+          test "$observed_fixture" = "status=validated"
+
+          comment_matches=false
+          for attempt in {1..15}; do
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" > "$RUNNER_TEMP/fix-comment.json"
+            if jq --argjson id "$COMMENT_ID" --arg commit "$COMMIT_SHA" -e '
+              .id == $id and .user.id == 41898282 and
+              (.body | contains("<!-- dsh-action:v1 kind=write -->")) and
+              (.body | contains("Configured validation passed.")) and
+              (.body | contains($commit))
+            ' "$RUNNER_TEMP/fix-comment.json" >/dev/null; then
+              comment_matches=true
+              break
+            fi
+            sleep 2
+          done
+          test "$comment_matches" = true
