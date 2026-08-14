@@ -62,4 +62,39 @@ describe("Marketplace action metadata", () => {
       );
     }
   });
+
+  it("keeps active command and diagnosis workflows on trusted action code", async () => {
+    const commands = await readFile(
+      new URL("../.github/workflows/commands.yml", import.meta.url),
+      "utf8",
+    );
+    expect(commands).toContain("issue_comment:");
+    expect(commands).toContain("github.event.sender.id != 41898282");
+    expect(commands).toContain("contains(github.event.comment.body, '@dsh')");
+    expect(commands).toContain("ref: ${{ github.workflow_sha }}");
+    expect(commands).toContain("persist-credentials: false");
+    expect(commands).toContain("uses: ./");
+    expect(commands).toContain('allow-write: "true"');
+    expect(commands).toContain(
+      "container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+    );
+    expect(commands.indexOf("ref: ${{ github.workflow_sha }}")).toBeLessThan(
+      commands.indexOf("deepseek-api-key:"),
+    );
+
+    const diagnose = await readFile(
+      new URL("../.github/workflows/ci-diagnose.yml", import.meta.url),
+      "utf8",
+    );
+    expect(diagnose).toContain("workflow_run:");
+    expect(diagnose).toContain("workflows: [CI]");
+    expect(diagnose).toContain("github.event.workflow_run.conclusion == 'failure'");
+    expect(diagnose).toContain("ref: ${{ github.workflow_sha }}");
+    expect(diagnose).toContain("persist-credentials: false");
+    expect(diagnose).toContain("uses: ./");
+    expect(diagnose).toContain('allow-write: "false"');
+    expect(diagnose.indexOf("ref: ${{ github.workflow_sha }}")).toBeLessThan(
+      diagnose.indexOf("deepseek-api-key:"),
+    );
+  });
 });

@@ -58,6 +58,19 @@ async function copyEntry(source: string, destination: string, state: FileState):
   await chmod(destination, state.mode);
 }
 
+/** Reject every symbolic-link component before path containment resolves it. */
+async function assertNoSymlinkComponents(root: string, path: string): Promise<string> {
+  let candidate = resolve(root);
+  for (const segment of path.split("/")) {
+    candidate = join(candidate, segment);
+    const metadata = await lstat(candidate);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`Symbolic links are not allowed: ${candidate}`);
+    }
+  }
+  return candidate;
+}
+
 async function trackedPaths(root: string): Promise<readonly string[]> {
   const result = await requireGitSuccess(["ls-files", "-z", "--cached"], {
     cwd: root,
@@ -104,7 +117,14 @@ export async function createWorkspaceSnapshot(
   const baseline = new Map<string, FileState>();
   let bytes = 0;
   for (const path of await repositoryPaths(sourceRoot)) {
+    // Check the lexical path before assertPathWithin resolves it. Otherwise a
+    // repository symlink to an in-root file is silently converted to its
+    // target and copied as a regular file on Linux.
+    const lexicalSource = await assertNoSymlinkComponents(sourceRoot, path);
     const source = await assertPathWithin(sourceRoot, path);
+    if (resolve(source) !== resolve(lexicalSource)) {
+      throw new Error(`Repository path changed while validating: ${path}`);
+    }
     const metadata = await lstat(source);
     bytes += metadata.size;
     if (bytes > MAX_SNAPSHOT_BYTES) throw new Error("Repository exceeds snapshot byte limit");
