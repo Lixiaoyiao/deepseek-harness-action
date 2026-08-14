@@ -47,7 +47,7 @@ describe("Marketplace action metadata", () => {
     expect(commands).not.toContain("pull_request_review:");
     expect(commands).not.toContain("pull_request_review_comment:");
     expect(commands).toContain(
-      "container-image: node@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
     );
     for (const relativePath of [
       "../examples/fork-review.yml",
@@ -58,7 +58,22 @@ describe("Marketplace action metadata", () => {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(example).not.toContain("uses: ./");
       expect(example).toContain(
-        "uses: your-org/dsh-action@0000000000000000000000000000000000000000",
+        "uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663",
+      );
+    }
+  });
+
+  it("ships release examples without reference placeholders", async () => {
+    for (const relativePath of [
+      "../README.md",
+      "../examples/fork-review.yml",
+      "../examples/commands.yml",
+      "../examples/ci-diagnose.yml",
+      "../examples/ci-auto-fix.yml",
+    ]) {
+      const document = await readFile(new URL(relativePath, import.meta.url), "utf8");
+      expect(document).not.toMatch(
+        /your-org|@0{40}|sha256:0{64}|immutable-reference placeholders|replace (?:the zero|both)/iu,
       );
     }
   });

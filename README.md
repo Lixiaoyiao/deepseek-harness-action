@@ -10,8 +10,8 @@ then replaces Claude SDK execution with an isolated DeepSeek Harness worker.
 
 > Developer preview. `@deepseek-ai/dsh` is currently pinned to `0.1.0-rc.6`.
 
-This repository is a standard Node 24 JavaScript Action: `action.yml` and the
-committed `dist/` bundle are ready to tag for Marketplace publication.
+This repository is a standard Node 24 JavaScript Action with a committed
+`dist/` bundle for GitHub Marketplace releases.
 
 ## Features
 
@@ -50,12 +50,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      # Replace the zero SHA with an audited immutable dsh-action commit.
-      - uses: your-org/dsh-action@0000000000000000000000000000000000000000
+      - uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +67,7 @@ receive only the bounded context packet and no repository tools. Never check out
 or run the PR head in a privileged workflow. Commands and CI examples are in
 [`examples/commands.yml`](examples/commands.yml) and
 [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml). Trusted workflow-run
-auto-fix, with validation and immutable-reference placeholders, is in
+auto-fix, with validation and immutable references, is in
 [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml).
 
 ## Commands
@@ -115,12 +114,12 @@ is explicitly configured (or explicitly disabled).
 with:
   allow-write: "true"
   test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
-  container-image: node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
 ```
 
-Replace the zero digest with the audited Node image digest you deploy. For
-Marketplace workflows, pin the action by immutable commit as well. Docker must
-be available on the runner.
+The reference above is the audited Node image digest exercised by the v0.1.0
+release CI. Marketplace workflows should pin the action by immutable commit as
+shown in Quick start. Docker must be available on the runner.
 
 ## Architecture
 

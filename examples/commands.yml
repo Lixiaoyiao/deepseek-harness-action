@@ -1,5 +1,5 @@
-# Copy this file to .github/workflows/dsh-commands.yml and replace both
-# zero-valued references with audited immutable image/action digests.
+# Copy this file to .github/workflows/dsh-commands.yml. The action and
+# validation image are pinned to the v0.1.0 audited release inputs.
 name: DSH commands
 
 on:
@@ -29,11 +29,10 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-      # Replace the zero SHA and image digest before enabling this workflow.
-      - uses: your-org/dsh-action@0000000000000000000000000000000000000000
+      - uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "true"
           run-tests: "true"
           test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
-          container-image: node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059

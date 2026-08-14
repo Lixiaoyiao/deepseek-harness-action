@@ -28,8 +28,8 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      # Replace the zero SHA with an audited immutable dsh-action commit.
-      - uses: your-org/dsh-action@0000000000000000000000000000000000000000
+      # Pinned to the v0.1.0 audited runtime commit.
+      - uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "false"
