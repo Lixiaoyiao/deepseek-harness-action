@@ -1,5 +1,5 @@
 {
-  "name": "dsh-action",
+  "name": "deepseek-harness-action",
   "version": "0.1.0",
   "description": "DeepSeek Harness for GitHub - AI Code Review, CI Diagnosis, Auto Fix, and Issue to PR",
   "private": false,

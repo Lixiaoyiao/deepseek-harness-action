@@ -6,6 +6,7 @@ describe("Marketplace action metadata", () => {
   it("uses the supported Node 24 runtime and ships the declared bundle", async () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
     expect(metadata).toContain('name: "DeepSeek Harness for GitHub"');
+    expect(metadata).toContain('author: "Lixiaoyiao"');
     expect(metadata).toContain('using: "node24"');
     expect(metadata).toContain('main: "dist/index.js"');
     await expect(readFile(new URL("../dist/index.js", import.meta.url), "utf8")).resolves.not.toBe(
@@ -58,7 +59,7 @@ describe("Marketplace action metadata", () => {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(example).not.toContain("uses: ./");
       expect(example).toContain(
-        "uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663",
+        "uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1",
       );
     }
   });

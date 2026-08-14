@@ -1,6 +1,6 @@
 name: "DeepSeek Harness for GitHub"
 description: "AI Code Review · CI Diagnosis · Auto Fix · Issue → PR"
-author: "dsh-action contributors"
+author: "Lixiaoyiao"
 branding:
   icon: "code"
   color: "blue"

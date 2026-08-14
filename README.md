@@ -1,52 +1,54 @@
 # DeepSeek Harness for GitHub
 
-**AI Code Review · CI Diagnosis · Auto Fix · Issue → PR**
+[![CI](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/workflows/ci.yml/badge.svg)](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Lixiaoyiao/deepseek-harness-action?display_name=tag)](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/latest)
+[![MIT](https://img.shields.io/github/license/Lixiaoyiao/deepseek-harness-action)](LICENSE)
 
-`dsh-action` adapts the mature GitHub integration architecture of
-[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)
-to current `@deepseek-ai/dsh` headless execution. It keeps GitHub event routing,
-actor permission checks, trigger-time snapshots and controller-side finalization,
-then replaces Claude SDK execution with an isolated DeepSeek Harness worker.
+[English](README.en.md)
 
-> Developer preview. `@deepseek-ai/dsh` is currently pinned to `0.1.0-rc.6`.
+让 GitHub 里的 PR、Issue 和失败 CI 直接调用 DeepSeek Harness。
 
-This repository is a standard Node 24 JavaScript Action with a committed
-`dist/` bundle for GitHub Marketplace releases.
+```text
+GitHub PR / Issue / CI  →  DeepSeek Harness  →  Review / Diagnose / Fix / Issue → PR
+```
 
-## Features
+PR 可以自动收到行内 review；失败的 CI 可以得到诊断；在你明确开放写权限后，`@dsh` 也可以修代码或把 Issue 做成 PR。
 
-- Automatic high-precision review on `opened`, `synchronize`,
-  `ready_for_review` and `reopened`.
-- Exact `@dsh review`, `@dsh diagnose`, `@dsh fix` and `@dsh implement`
-  command routing.
-- Host-fetched, bounded and redacted Actions logs for CI root-cause diagnosis.
-- Trusted same-repository fixes and issue-to-PR implementation with tests.
-- Unified-diff to GitHub line mapping, stable finding fingerprints, sticky
-  summaries and rerun deduplication.
-- Strict TypeScript, Zod runtime schemas, timeout/output limits and partial
-  GitHub publication fallbacks.
+这是由社区维护的项目，不是 DeepSeek 或 GitHub 官方产品。
 
-Same-repository trusted reviews give DSH read/search access to an immutable,
-`.git`-less API snapshot. Trusted write runs additionally enable editing, but
-DSH never gets a shell; operator-configured tests run later in a separate
-credential-free container. Fork reviews receive no filesystem or execution
-tools. The current stock headless bundle does not include LSP, so v0.1 does not
-claim LSP verification.
+Maintained by [@Lixiaoyiao](https://github.com/Lixiaoyiao).
 
-## Quick start
+## 真实运行
 
-Automatic review with a trusted workflow and a bounded PR context packet:
+下面都是这个仓库自己的公开运行记录，可以直接查看评论和 Actions 日志。
+
+| 场景                            | 运行记录                                                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR Review，以及复跑不重复发评论 | [PR #3](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/3) · [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760570162) |
+| 读取失败 check 和日志后给出诊断 | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760603284)                                                                         |
+| 受信任写模式下修复并验证        | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
+| 从 Issue 实现代码并创建 PR      | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
+
+## 60 秒开始使用
+
+先在仓库的 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。
+
+然后创建 `.github/workflows/dsh-review.yml`：
 
 ```yaml
 name: DSH review
+
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
+
 permissions:
   contents: read
   pull-requests: write
+
 jobs:
   review:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -54,99 +56,102 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663
+          fetch-depth: 1
+      - uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1 # v0.1.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
-The standalone template is in [`examples/fork-review.yml`](examples/fork-review.yml).
-Automatic `pull_request_target` review never checks out the PR head. A confirmed
-same-repository PR from a write-authorized actor may use read/search against the
-controller-materialized immutable snapshot; fork and untrusted-actor reviews
-receive only the bounded context packet and no repository tools. Never check out
-or run the PR head in a privileged workflow. Commands and CI examples are in
-[`examples/commands.yml`](examples/commands.yml) and
-[`examples/ci-diagnose.yml`](examples/ci-diagnose.yml). Trusted workflow-run
-auto-fix, with validation and immutable references, is in
-[`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml).
+现在打开一个非 draft PR。Action 会读取 diff 和仓库上下文，并发布 review summary；有确定问题时，也会在对应代码行留下评论。
 
-## Commands
+完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
 
-The triggering issue/PR conversation comment must start with exactly one command:
+## 能做什么
 
-```text
-@dsh review
-@dsh diagnose
-@dsh fix
-@dsh implement
-```
+| 入口                                             | 结果                                  |
+| ------------------------------------------------ | ------------------------------------- |
+| PR `opened` / `synchronize` / `ready_for_review` | 自动 review，发布 summary 和行内评论  |
+| `@dsh review`                                    | 手动重新 review 当前 PR               |
+| `@dsh diagnose`                                  | 读取失败的 check 和日志，定位原因     |
+| `@dsh fix`                                       | 在受信任写模式下修改代码并运行验证    |
+| Issue 中的 `@dsh implement`                      | 理解 Issue、改代码、运行验证并创建 PR |
 
-Only the triggering command line and trusted workflow `prompt` are interpreted
-as instructions. Repository content is always data. Mention commands require
-write access from every originating actor; automatic fork review remains
-available through the separate review-only workflow.
+命令必须出现在评论第一行。可以直接复制这些 workflow：
 
-The controller can parse `pull_request_review` and `pull_request_review_comment`
-webhooks for API/App integrations, matching the Claude Action state machine.
-The bundled secret-bearing workflow deliberately uses only `issue_comment`,
-because GitHub loads review-event workflow YAML from the PR merge revision.
+- [`examples/commands.yml`](examples/commands.yml)：`@dsh` 命令、修复和 Issue → PR
+- [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml)：CI 失败诊断
+- [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml)：受信任的 CI 自动修复
 
-## Write mode
+`fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`，并配置测试命令。详细输入见 [`action.yml`](action.yml)。
 
-`allow-write` is `false` by default. When true, write is still denied unless all
-originating actors have write access and the target is the same repository.
-Forks, unresolved PR origins and `pull_request_target` never gain write tools.
-Every actual trusted-write run also requires `container-image` to be a complete
-immutable `name@sha256:<64 lowercase hex>` reference. The default image is the
-same audited Node 24.18.0 digest exercised by CI; review/diagnosis may accept an
-explicit tag override, but doing so weakens runtime reproducibility.
+## 为什么做这个项目
 
-When `run-tests` is true but `test-commands` is empty, write mode fails closed.
-Set `run-tests: "false"` explicitly only when an **unverified** change is
-acceptable; otherwise configure concrete argv arrays. The default combination
-is intentionally a write interlock: review/diagnosis still work, while `fix`
-and `implement` cannot commit, update a branch or create a PR until validation
-is explicitly configured (or explicitly disabled).
+我想要的不是在本地聊天窗口里再加一个 GitHub 工具，而是让 PR 和失败 CI 本身成为入口。Review 应该落在具体代码行，diagnose 应该读取真实日志；需要改代码时，也应该沿用仓库原有的权限和 CI。
 
-`test-commands` is a JSON array of argv arrays. No command is shell-expanded:
+所以这里让 DSH 负责读代码和做判断，让 Action 负责事件、权限和最终写回 GitHub。两边的职责分开后，行为更容易检查，也更适合放进日常维护流程。
+
+## 和 dsh-github 有什么区别
+
+社区项目 [`PerryLink/dsh-github`](https://github.com/PerryLink/dsh-github) 把 PR 和 Issue 操作带进 DSH 会话。
+
+这个项目的方向相反：由 GitHub 的 PR 事件、失败 CI，以及 PR / Issue 里的 `@dsh` 命令启动 DSH。简单说，前者是 **DSH → GitHub**，这里是 **GitHub → DSH**。它们不是替代关系。
+
+## 写模式
+
+`allow-write` 默认是 `false`。写入只对同仓库、受信任操作者开放；fork PR 始终是 review-only。测试命令使用 argv 数组，不经过 shell 展开：
 
 ```yaml
 with:
   allow-write: "true"
+  run-tests: "true"
   test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
   container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
 ```
 
-The reference above is the audited Node image digest exercised by the v0.1.0
-release CI. Marketplace workflows should pin the action by immutable commit as
-shown in Quick start. Docker must be available on the runner.
+写模式要求使用完整的 Docker image digest。Docker 需要在 runner 上可用。
 
-## Architecture
+## 安全
 
-The controller follows Claude Code Action's `prepare -> route -> authorize -> run -> finalize`
-lifecycle. Modules are split across `github`, `commands`, `security`,
-`dsh`, `review`, `diff`, `ci` and `write`. DSH is an untrusted-output worker; it
-does not receive an Octokit client or GitHub token.
+仓库文件、diff、CI 日志、Issue、PR 和评论都按不可信数据处理。
 
-See [`SECURITY.md`](SECURITY.md), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
-and [`BUNDLED_DEPENDENCIES.md`](BUNDLED_DEPENDENCIES.md), plus the action inputs
-in [`action.yml`](action.yml).
+- `GITHUB_TOKEN` 只留在 Action controller，不会交给 DSH。
+- DeepSeek key 由 controller 侧代理注入，不会进入工作区或测试命令。
+- fork 不获得文件系统或执行工具；`pull_request_target` 不 checkout PR head。
+- 写入前会重新检查操作者权限、仓库来源、绑定的 commit 和实际改动文件。
+- 验证在单独的无凭据容器中运行。
 
-## Development
+完整的信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。v0.1.0 固定使用 `@deepseek-ai/dsh@0.1.0-rc.6`；DSH 仍在快速迭代，升级前请重新检查配置。
 
-Requires Node 24.
+## 架构
+
+```text
+GitHub event
+    ↓
+Action controller: route → authorize → snapshot
+    ↓
+DSH worker in Docker
+    ↓
+Action controller: validate → comment / commit / open PR
+```
+
+DSH worker 不持有 GitHub client。模型输出通过 schema 校验后，才由 controller 映射到 diff 行、更新 tracking 评论或执行受信任写入。
+
+## 开发
+
+需要 Node.js 24。
 
 ```bash
 npm ci
 npm run check
 ```
 
-`dist/` is generated with `@vercel/ncc` and committed for Marketplace releases.
-The CI gate runs strict formatting/lint/type checks, the full coverage suite,
-and a clean rebuild check so stale Marketplace bundles cannot pass.
+Marketplace 使用的 `dist/` 会随 release 一起提交。依赖和打包说明见 [`BUNDLED_DEPENDENCIES.md`](BUNDLED_DEPENDENCIES.md)。
 
 ## License
 
-MIT. Portions are derived from Claude Code Action under its MIT license; exact
-attribution and the pinned upstream source commit are in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE)。第三方许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+## Acknowledgements
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供本项目使用的 headless agent runtime。
+- GitHub 事件路由、权限检查和 tracking 机制基于 [Claude Code Action](https://github.com/anthropics/claude-code-action) 的 MIT 实现适配。对应上游 commit 和许可文本记录在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       # Pinned to the v0.1.0 audited runtime commit.
-      - uses: Lixiaoyiao/deepseek-harness-action@297154b8a1403001b950567ef1a8ad9beafda663
+      - uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "false"
