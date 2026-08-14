@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1 # v0.1.0
+      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b # v0.2.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +68,7 @@ jobs:
 
 完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
 
-> v0.2.0 仍在开发中。上面的 Quick start 和 `examples/` 会继续固定到最近已发布的 v0.1.0 commit SHA，直到 v0.2.0 正式发布；下面标注为 v0.2.0 的功能描述对应当前 `main` 分支。完整 release notes 见 [`CHANGELOG.md`](CHANGELOG.md)。
+> v0.2.0 已发布。上面的 Quick start 和 `examples/` 固定到本次真实 E2E 验证过的不可变 runtime commit SHA；完整 release notes 见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 能做什么
 
@@ -88,7 +88,7 @@ jobs:
 
 `fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`，并配置测试命令。详细输入见 [`action.yml`](action.yml)。
 
-## 运行进度与结构化输出（v0.2.0，Unreleased）
+## 运行进度与结构化输出（v0.2.0）
 
 当一次获准的操作能够对应到 PR 或 Issue 时，controller 会在三个主要阶段更新一条 sticky comment：准备受限上下文、运行 DSH 并校验结构化输出、发布结果或执行受信任写入。它复用现有的 controller-owned v1 marker，因此不会额外制造一条“进度评论”：
 
@@ -179,7 +179,7 @@ with:
 | 支持 fix / implement 的命令 | `contents: write`、`actions: read`、`checks: read`、`issues: write`、`pull-requests: write` |
 | CI auto-fix                 | 与上一行相同                                                                                |
 
-progress comment 使用与最终结果评论相同的权限，不新增 scope。`GITHUB_TOKEN` 只留在 controller；DeepSeek key 由 controller 侧代理注入，两者都不会进入 DSH workspace 或 validation 命令。完整信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。当前已发布的 v0.1.0 固定使用 `@deepseek-ai/dsh@0.1.0-rc.6`；DSH 仍在快速迭代，升级前请重新检查配置。
+progress comment 使用与最终结果评论相同的权限，不新增 scope。`GITHUB_TOKEN` 只留在 controller；DeepSeek key 由 controller 侧代理注入，两者都不会进入 DSH workspace 或 validation 命令。完整信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。v0.2.0 固定使用 `@deepseek-ai/dsh@0.1.0-rc.6`；DSH 仍在快速迭代，升级前请重新检查配置。
 
 ## 架构
 

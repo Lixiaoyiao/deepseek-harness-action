@@ -1,5 +1,5 @@
 # Copy this file to .github/workflows/dsh-commands.yml. The action and
-# validation image are pinned to the v0.1.0 audited release inputs.
+# validation image are pinned to the v0.2.0 audited release inputs.
 name: DSH commands
 
 on:
@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-      - uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1
+      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "true"

@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-08-15
 
 ### Added
 
@@ -53,8 +53,8 @@ versioning for published action releases.
   `summary` output.
 - Existing controller-owned v1 tracking markers remain the source of sticky
   comment identity; no marker migration is required.
-- Until v0.2.0 is published, README and `examples/` action references remain
-  pinned to the released v0.1.0 commit SHA.
+- README and `examples/` action references are pinned to the immutable v0.2.0
+  runtime commit exercised by the real E2E release checks.
 
 ### Security
 
@@ -88,5 +88,5 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
-[0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.1.0

@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1 # v0.1.0
+      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b # v0.2.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +68,7 @@ Open a non-draft pull request. The action reads the diff and repository context,
 
 See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
-> v0.2.0 is still under development. The Quick start above and the files in `examples/` intentionally remain pinned to the latest published v0.1.0 commit SHA until v0.2.0 is released. Features marked v0.2.0 below describe the current `main` branch. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
+> v0.2.0 is released. The Quick start above and the files in `examples/` are pinned to the immutable runtime commit exercised by the real E2E release checks. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
 
 ## What it does
 
@@ -88,7 +88,7 @@ The command must be on the first line of the comment. Ready-to-copy workflows ar
 
 Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"` and define validation commands. See [`action.yml`](action.yml) for all inputs.
 
-## Progress and structured outputs (v0.2.0, Unreleased)
+## Progress and structured outputs (v0.2.0)
 
 When an authorized operation resolves to a pull request or issue, the controller updates one sticky comment at three major stages: preparing bounded context, running DSH and validating its structured output, and publishing the result or applying the trusted write. It reuses the existing controller-owned v1 marker, so progress does not create a second status comment:
 
@@ -179,7 +179,7 @@ Workflow permissions used by the supplied templates are:
 | Commands that support fix / implement | `contents: write`, `actions: read`, `checks: read`, `issues: write`, `pull-requests: write` |
 | CI auto-fix                           | Same as the preceding row                                                                   |
 
-Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH workspace or validation commands. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. The currently released v0.1.0 pins `@deepseek-ai/dsh@0.1.0-rc.6`; DSH is moving quickly, so review the configuration again before upgrading it.
+Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH workspace or validation commands. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.2.0 pins `@deepseek-ai/dsh@0.1.0-rc.6`; DSH is moving quickly, so review the configuration again before upgrading it.
 
 ## Architecture
 

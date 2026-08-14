@@ -62,7 +62,7 @@ describe("Marketplace action metadata", () => {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(example).not.toContain("uses: ./");
       expect(example).toContain(
-        "uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1",
+        "uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b",
       );
     }
   });
