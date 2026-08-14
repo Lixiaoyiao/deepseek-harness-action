@@ -17,9 +17,12 @@ describe("Marketplace action metadata", () => {
   it("keeps safe defaults in the published metadata", async () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
     expect(metadata).toMatch(/allow-write:[\s\S]*?default: "false"/u);
+    expect(metadata).toMatch(/progress-comment:[\s\S]*?default: "true"/u);
     expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
     expect(metadata).toContain('default: "0.1.0-rc.6"');
     expect(metadata).toContain("Trusted-write requires a full name@sha256 digest");
+    expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
+    expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
   });
 
   it("never executes the pull request revision before loading the DeepSeek secret", async () => {
@@ -59,7 +62,7 @@ describe("Marketplace action metadata", () => {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(example).not.toContain("uses: ./");
       expect(example).toContain(
-        "uses: Lixiaoyiao/deepseek-harness-action@badb4542f53941ae99c13773574ea90e48a277a1",
+        "uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b",
       );
     }
   });

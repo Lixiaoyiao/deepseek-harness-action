@@ -7,6 +7,7 @@ import { inputs } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   assertRemoteBranchHead: vi.fn(),
+  assertValidation: vi.fn(),
   createCommit: vi.fn(),
   inspectChanges: vi.fn(),
   publishStatus: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("../src/write/github.js", () => ({
   updateRemoteBranch: mocks.updateRemoteBranch,
 }));
 vi.mock("../src/write/validate.js", () => ({
+  assertValidationSucceeded: mocks.assertValidation,
   runValidationCommandsInDocker: mocks.runValidation,
 }));
 vi.mock("../src/write/workspace.js", () => ({ inspectWorkspaceChanges: mocks.inspectChanges }));
@@ -89,6 +91,7 @@ beforeEach(() => {
 
 describe("finishFix recovery", () => {
   it("fails closed before commit or branch mutation when default validation has no commands", async () => {
+    const onPhase = vi.fn();
     await expect(
       finishFix({
         client: {} as GitHubClient,
@@ -106,6 +109,7 @@ describe("finishFix recovery", () => {
         result,
         inputs: inputs(),
         runUrl: "https://github.com/octo/repo/actions/runs/1",
+        onPhase,
       }),
     ).rejects.toThrow("run-tests is true but test-commands is empty");
 
@@ -113,10 +117,12 @@ describe("finishFix recovery", () => {
     expect(mocks.createCommit).not.toHaveBeenCalled();
     expect(mocks.updateRemoteBranch).not.toHaveBeenCalled();
     expect(mocks.publishStatus).not.toHaveBeenCalled();
+    expect(onPhase).toHaveBeenLastCalledWith("validation");
   });
 
   it("reports partial success instead of failing after a pushed fix when comment publication fails", async () => {
     mocks.publishStatus.mockRejectedValue(new Error("GitHub comments unavailable"));
+    const onPhase = vi.fn();
 
     const outcome = await finishFix({
       client: {} as GitHubClient,
@@ -134,11 +140,13 @@ describe("finishFix recovery", () => {
       result,
       inputs: inputs({ runTests: false }),
       runUrl: "https://github.com/octo/repo/actions/runs/1",
+      onPhase,
     });
 
     expect(outcome).toMatchObject({ commitSha, status: "partial-success" });
     expect(mocks.updateRemoteBranch).toHaveBeenCalledOnce();
     expect(mocks.warning).toHaveBeenCalledWith(expect.stringContaining("Partial success"));
     expect(mocks.summaryHeading).toHaveBeenCalledWith("DeepSeek Harness fix: partial success", 2);
+    expect(onPhase.mock.calls).toEqual([["validation"], ["write"]]);
   });
 });

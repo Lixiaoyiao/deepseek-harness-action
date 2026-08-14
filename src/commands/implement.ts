@@ -14,7 +14,7 @@ import {
 } from "../write/implementation.js";
 import { revalidateIssueIdentity, type BoundIssueIdentity } from "../write/issue.js";
 import { createPullRequest, findPullRequestByOperationKey } from "../write/pr.js";
-import { runValidationCommandsInDocker } from "../write/validate.js";
+import { assertValidationSucceeded, runValidationCommandsInDocker } from "../write/validate.js";
 import type { WorkspaceSnapshot } from "../write/workspace.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
 import { stripTrackingMarkers } from "../review/tracking.js";
@@ -32,11 +32,13 @@ export interface FinishImplementationInput {
   readonly operationKey: string;
   readonly result: DshRunResult;
   readonly inputs: ActionInputs;
+  readonly onPhase?: (phase: "validation" | "write") => void;
 }
 
 export async function finishImplementation(
   input: FinishImplementationInput,
 ): Promise<{ branch: string; pullNumber: number; url: string }> {
+  input.onPhase?.("write");
   const operation = buildImplementationOperation({
     owner: input.owner,
     repo: input.repo,
@@ -76,6 +78,7 @@ export async function finishImplementation(
     input.boundHeadSha,
   );
   await revalidateForImplementation(input);
+  input.onPhase?.("validation");
   if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
     throw new Error(
       "run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write",
@@ -88,9 +91,9 @@ export async function finishImplementation(
       input.inputs.testCommands,
       input.inputs.containerImage,
     );
-    const failed = tests.find(({ result }) => result.exitCode !== 0 || result.timedOut);
-    if (failed !== undefined) throw new Error(`Validation failed: ${failed.argv.join(" ")}`);
+    assertValidationSucceeded(tests);
   }
+  input.onPhase?.("write");
   await revalidateForImplementation(input);
 
   const candidate = await createGitHubCommitFromWorkspace(

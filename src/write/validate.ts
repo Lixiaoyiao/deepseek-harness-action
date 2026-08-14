@@ -23,6 +23,35 @@ export interface ValidationResult {
   readonly result: CommandResult;
 }
 
+export class ValidationFailureError extends Error {
+  public readonly code: "VALIDATION_FAILED" | "VALIDATION_TIMEOUT";
+  public readonly argv: readonly string[];
+  public readonly exitCode: number;
+  public readonly timedOut: boolean;
+  public readonly outputTruncated: boolean;
+
+  public constructor(failure: ValidationResult) {
+    const command = failure.argv.join(" ");
+    const status = failure.result.timedOut
+      ? "timed out"
+      : `exited with code ${String(failure.result.exitCode)}`;
+    super(
+      `Validation command ${JSON.stringify(command)} ${status}${failure.result.outputTruncated ? "; captured output was truncated" : ""}`,
+    );
+    this.name = "ValidationFailureError";
+    this.code = failure.result.timedOut ? "VALIDATION_TIMEOUT" : "VALIDATION_FAILED";
+    this.argv = failure.argv;
+    this.exitCode = failure.result.exitCode;
+    this.timedOut = failure.result.timedOut;
+    this.outputTruncated = failure.result.outputTruncated;
+  }
+}
+
+export function assertValidationSucceeded(results: readonly ValidationResult[]): void {
+  const failed = results.find(({ result }) => result.exitCode !== 0 || result.timedOut);
+  if (failed !== undefined) throw new ValidationFailureError(failed);
+}
+
 function hostUserForContainer(): string {
   return process.platform === "win32"
     ? "0:0"

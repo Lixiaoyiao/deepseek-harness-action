@@ -46,6 +46,7 @@ const actionInputsSchema = z.object({
   testCommands: argvListInput,
   baseUrl: z.url(),
   botUserId: integerInput(1, 2_147_483_647),
+  progressComment: booleanInput,
 });
 
 export type ActionInputs = z.infer<typeof actionInputsSchema>;
@@ -67,6 +68,7 @@ const defaults = {
   testCommands: "[]",
   baseUrl: "https://api.deepseek.com",
   botUserId: "41898282",
+  progressComment: "true",
 } as const;
 
 function optionalInput(reader: InputReader, name: string, fallback: string): string {
@@ -92,6 +94,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     testCommands: optionalInput(reader, "test-commands", defaults.testCommands),
     baseUrl: optionalInput(reader, "base-url", defaults.baseUrl),
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
+    progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
   });
 
   if (!parsed.success) {

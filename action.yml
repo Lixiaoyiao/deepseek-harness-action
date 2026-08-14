@@ -65,19 +65,39 @@ inputs:
     description: "Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot]."
     required: false
     default: "41898282"
+  progress-comment:
+    description: "Create or update one controller-owned sticky comment at major lifecycle stages, reusing the operation's result marker."
+    required: false
+    default: "true"
 outputs:
   conclusion:
     description: "success, neutral, or failure"
   operation:
     description: "Resolved operation"
+  summary:
+    description: "Validated final summary for any operation, or a safe failure summary"
   review-summary:
-    description: "Validated review or diagnosis summary"
+    description: "Backward-compatible alias of summary"
   findings-count:
-    description: "Number of published findings"
+    description: "Selected review findings, or validated agent findings for other operations"
   branch-name:
     description: "Created or updated dsh branch"
   pull-request-url:
     description: "Created pull request URL"
+  commit-sha:
+    description: "Commit created by a successful fix operation"
+  trust:
+    description: "Resolved execution profile: untrusted, trusted-read, trusted-write, or none"
+  duration-ms:
+    description: "Total controller duration in milliseconds"
+  comment-id:
+    description: "Sticky progress/result comment ID when progress tracking was available"
+  error-code:
+    description: "Stable failure code, empty on success or neutral completion"
+  error-message:
+    description: "Redacted and bounded failure message"
+  result-json:
+    description: "Versioned JSON envelope containing status, result, policy, timing, publication, validation, write, and error details"
 
 runs:
   using: "node24"

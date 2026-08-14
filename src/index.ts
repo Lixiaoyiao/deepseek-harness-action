@@ -1,25 +1,48 @@
 import * as core from "@actions/core";
 
-import { reportFailure, runAction } from "./orchestrator.js";
+import { runAction } from "./orchestrator.js";
+import {
+  buildActionOutputs,
+  describeActionFailure,
+  formatStepSummary,
+  type RunOutcome,
+} from "./result.js";
 
-async function main(): Promise<void> {
+async function writeStepSummary(result: RunOutcome): Promise<void> {
   try {
-    const result = await runAction();
-    core.setOutput("conclusion", result.conclusion);
-    core.setOutput("operation", result.operation ?? "none");
-    core.setOutput("review-summary", result.summary);
-    core.setOutput("findings-count", result.findingsCount);
-    core.setOutput("branch-name", result.branchName ?? "");
-    core.setOutput("pull-request-url", result.pullRequestUrl ?? "");
     await core.summary
       .addHeading("DeepSeek Harness for GitHub")
-      .addRaw(result.summary)
-      .addEOL()
-      .addRaw(`Operation: ${result.operation ?? "none"}; findings: ${String(result.findingsCount)}`)
+      .addRaw(formatStepSummary(result))
       .write();
+  } catch {
+    // A summary is secondary UX. It must never turn an already-completed
+    // review or trusted write into a failed/retried mutation.
+    core.warning("The GitHub Actions step summary could not be published.");
+  }
+}
+
+async function main(): Promise<void> {
+  let result: RunOutcome;
+  try {
+    result = await runAction();
   } catch (error: unknown) {
-    core.setOutput("conclusion", "failure");
-    core.setFailed(reportFailure(error));
+    const failure = describeActionFailure(error, "configuration");
+    result = {
+      schemaVersion: 1,
+      conclusion: "failure",
+      summary: failure.title,
+      findingsCount: 0,
+      durationMs: 0,
+      error: failure,
+    };
+  }
+
+  for (const [name, value] of Object.entries(buildActionOutputs(result))) {
+    core.setOutput(name, value);
+  }
+  await writeStepSummary(result);
+  if (result.conclusion === "failure") {
+    core.setFailed(result.error?.message ?? result.summary);
   }
 }
 

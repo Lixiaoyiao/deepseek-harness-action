@@ -7,6 +7,7 @@ import { inputs } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   assertRemoteBranchHead: vi.fn(),
+  assertValidation: vi.fn(),
   assertEquivalent: vi.fn(),
   assertOwned: vi.fn(),
   buildOperation: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../src/write/pr.js", () => ({
   findPullRequestByOperationKey: mocks.findPullRequest,
 }));
 vi.mock("../src/write/validate.js", () => ({
+  assertValidationSucceeded: mocks.assertValidation,
   runValidationCommandsInDocker: mocks.runValidation,
 }));
 
@@ -110,6 +112,7 @@ describe("finishImplementation validation gate", () => {
   });
 
   it("validates, rechecks issue/base identity, creates a branch, and opens a marked PR", async () => {
+    const onPhase = vi.fn();
     const outcome = await finishImplementation({
       client: {} as GitHubClient,
       owner: "octo",
@@ -123,6 +126,7 @@ describe("finishImplementation validation gate", () => {
       operationKey: "10",
       result,
       inputs: inputs({ testCommands: [["npm", "test"]] }),
+      onPhase,
     });
 
     expect(outcome).toEqual({
@@ -149,6 +153,7 @@ describe("finishImplementation validation gate", () => {
       expect.stringContaining("configured commands passed"),
       expect.stringContaining("dsh-action:implement"),
     );
+    expect(onPhase.mock.calls).toEqual([["write"], ["validation"], ["write"]]);
   });
 
   it("sanitizes untrusted issue and model text before creating the pull request", async () => {
@@ -208,6 +213,9 @@ describe("finishImplementation validation gate", () => {
   });
 
   it("fails before writing when configured validation fails", async () => {
+    mocks.assertValidation.mockImplementationOnce(() => {
+      throw new Error('Validation command "npm test" exited with code 1');
+    });
     mocks.runValidation.mockResolvedValue([
       {
         argv: ["npm", "test"],
@@ -235,7 +243,7 @@ describe("finishImplementation validation gate", () => {
         result,
         inputs: inputs({ testCommands: [["npm", "test"]] }),
       }),
-    ).rejects.toThrow("Validation failed: npm test");
+    ).rejects.toThrow('Validation command "npm test" exited with code 1');
     expect(mocks.createCommit).not.toHaveBeenCalled();
   });
 });

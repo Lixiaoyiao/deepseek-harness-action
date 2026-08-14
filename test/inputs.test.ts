@@ -15,6 +15,7 @@ describe("loadInputs", () => {
       }),
     );
     expect(result.allowWrite).toBe(false);
+    expect(result.progressComment).toBe(true);
     expect(result.timeoutMinutes).toBe(20);
     expect(result.containerImage).toBe(
       "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
@@ -27,6 +28,7 @@ describe("loadInputs", () => {
 
   it.each([
     ["allow-write", "yes"],
+    ["progress-comment", "yes"],
     ["timeout-minutes", "0"],
     ["max-findings", "101"],
     ["test-commands", '["npm test"]'],

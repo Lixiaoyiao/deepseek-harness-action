@@ -10,7 +10,7 @@ import {
   createGitHubCommitFromWorkspace,
   updateRemoteBranch,
 } from "../write/github.js";
-import { runValidationCommandsInDocker } from "../write/validate.js";
+import { assertValidationSucceeded, runValidationCommandsInDocker } from "../write/validate.js";
 import { inspectWorkspaceChanges, type WorkspaceSnapshot } from "../write/workspace.js";
 
 export interface FinishFixInput {
@@ -24,6 +24,7 @@ export interface FinishFixInput {
   readonly result: DshRunResult;
   readonly inputs: ActionInputs;
   readonly runUrl: string;
+  readonly onPhase?: (phase: "validation" | "write") => void;
 }
 
 export async function finishFix(input: FinishFixInput): Promise<{
@@ -31,6 +32,7 @@ export async function finishFix(input: FinishFixInput): Promise<{
   paths: readonly string[];
   status: "success" | "partial-success";
 }> {
+  input.onPhase?.("validation");
   await revalidatePullRequestIdentity(
     input.client,
     input.target.owner,
@@ -53,12 +55,10 @@ export async function finishFix(input: FinishFixInput): Promise<{
       input.inputs.testCommands,
       input.inputs.containerImage,
     );
-    const failed = tests.find(({ result }) => result.exitCode !== 0 || result.timedOut);
-    if (failed !== undefined) {
-      throw new Error(`Validation failed: ${failed.argv.join(" ")}`);
-    }
+    assertValidationSucceeded(tests);
   }
 
+  input.onPhase?.("write");
   await revalidatePullRequestIdentity(
     input.client,
     input.target.owner,
