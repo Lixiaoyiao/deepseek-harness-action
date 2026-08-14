@@ -67,7 +67,8 @@ export async function runValidationCommandsInDocker(
   // Repeat the check at this boundary so future callers cannot run
   // trusted-write validation with a mutable image tag.
   assertPinnedContainerImage(containerImage);
-  const validationRoot = await mkdtemp(join(tmpdir(), "dsh-action-validation-"));
+  const validationParent = await mkdtemp(join(tmpdir(), "dsh-action-validation-"));
+  const validationRoot = join(validationParent, "workspace");
   try {
     await cp(cwd, validationRoot, { recursive: true, force: false, errorOnExist: true });
     const results: ValidationResult[] = [];
@@ -115,6 +116,6 @@ export async function runValidationCommandsInDocker(
     }
     return results;
   } finally {
-    await rm(validationRoot, { force: true, recursive: true });
+    await rm(validationParent, { force: true, recursive: true });
   }
 }
