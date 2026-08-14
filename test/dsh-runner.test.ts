@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -408,5 +409,39 @@ describe("runDsh", () => {
     expect(captured?.args).toContain(
       `${join(fixture.assets, "trusted-read.patch.yml")}:/opt/dsh-action/policy.patch.yml:ro`,
     );
+  });
+
+  it("resolves policy profiles from the action package instead of the caller workspace", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+    const callerWorkspace = join(fixture.root, "caller-workspace");
+    const callerAssets = join(callerWorkspace, "assets", "dsh");
+    await mkdir(callerAssets, { recursive: true });
+    await writeFile(join(callerAssets, "trusted-read.patch.yml"), "malicious caller policy\n");
+    vi.spyOn(process, "cwd").mockReturnValue(callerWorkspace);
+    let captured: DshProcessSpec | undefined;
+
+    await runDsh(request({ isolation: "docker", workspacePath: fixture.workspace }), {
+      temporaryDirectory: fixture.root,
+      environment: { PATH: process.env.PATH, GITHUB_ACTION_PATH: callerWorkspace },
+      startProxy: () => Promise.resolve(proxy),
+      executeProcess: (spec) => {
+        if (!spec.args.includes("install")) captured = spec;
+        return Promise.resolve({
+          stdout: spec.args.includes("install")
+            ? ""
+            : JSON.stringify({ operation: "review", summary: "Done.", findings: [] }),
+          stderr: "",
+          exitCode: 0,
+          signal: null,
+        });
+      },
+    });
+
+    const packagedPatch = fileURLToPath(
+      new URL("../assets/dsh/trusted-read.patch.yml", import.meta.url),
+    );
+    expect(captured?.args).toContain(`${packagedPatch}:/opt/dsh-action/policy.patch.yml:ro`);
+    expect(captured?.args.join(" ")).not.toContain(callerWorkspace);
   });
 });

@@ -58,6 +58,10 @@ versioning for published action releases.
 
 ### Security
 
+- Packaged DSH policy profiles are now resolved relative to the installed
+  JavaScript action rather than the caller workspace. Remote
+  `uses: owner/action@ref` consumers cannot substitute repository files for a
+  controller policy profile.
 - Progress starts only after the controller has resolved a PR/Issue target and
   allowed the operation. Only comments owned by the configured numeric bot ID
   are eligible for in-place updates.
