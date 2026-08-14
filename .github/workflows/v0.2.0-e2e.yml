@@ -1,0 +1,177 @@
+# Temporary pre-release harness. This workflow exists only on the disposable
+# stacked E2E PR and must never be merged into the product branch.
+name: v0.2.0 pre-release E2E
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  e2e:
+    if: >-
+      github.event.label.name == 'v0.2-e2e' &&
+      github.repository == 'Lixiaoyiao/deepseek-harness-action' &&
+      github.actor == 'Lixiaoyiao' &&
+      github.event.pull_request.user.login == 'Lixiaoyiao' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'agent/v0.2.0-progress-outputs' &&
+      github.head_ref == 'e2e/v0.2.0-pr6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out audited v0.2.0 action candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Lixiaoyiao/deepseek-harness-action
+          ref: 873eebdd9395e2455a00023c49a7b2eaba5d6ddd
+          path: .dsh-action
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Denied write is structured and fail-closed
+        id: denied
+        continue-on-error: true
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: policy-denial-does-not-call-the-model
+          command: fix
+          prompt: This request must be denied before worker startup.
+          allow-write: "false"
+
+      - name: Assert denied result envelope
+        shell: bash
+        env:
+          STEP_OUTCOME: ${{ steps.denied.outcome }}
+          ERROR_CODE: ${{ steps.denied.outputs.error-code }}
+          COMMENT_ID: ${{ steps.denied.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.denied.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (process.env.STEP_OUTCOME !== "failure") throw new Error("denied step did not fail");
+          if (process.env.ERROR_CODE !== "POLICY_DENIED") throw new Error("unexpected denied error code");
+          if (process.env.COMMENT_ID !== "") throw new Error("denial must happen before progress comment creation");
+          if (result.schemaVersion !== 1 || result.status !== "denied") throw new Error("invalid denied envelope");
+          if (result.operation !== "fix" || result.policy?.allowed !== false) throw new Error("invalid denied policy snapshot");
+          NODE
+
+      - name: Review with sticky progress
+        id: review
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: review
+          prompt: Review this disposable stacked E2E pull request. Report only concrete actionable findings.
+          allow-write: "false"
+          timeout-minutes: "20"
+
+      - name: Assert review result and sticky reuse
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ steps.review.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.review.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (result.schemaVersion !== 1 || result.status !== "success") throw new Error("invalid review envelope");
+          if (result.operation !== "review" || result.policy?.allowed !== true) throw new Error("invalid review policy snapshot");
+          if (result.validation?.status !== "not-applicable") throw new Error("invalid review validation status");
+          if (!Number.isInteger(result.commentId) || String(result.commentId) !== process.env.COMMENT_ID) {
+            throw new Error("review comment id mismatch");
+          }
+          NODE
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate > "$RUNNER_TEMP/review-comments.json"
+          jq --argjson id "$COMMENT_ID" -e '
+            map(select(.id == $id and .user.id == 41898282 and (.body | contains("<!-- dsh-action:v1 kind=summary -->")))) |
+            length == 1 and .[0].created_at != .[0].updated_at
+          ' "$RUNNER_TEMP/review-comments.json" >/dev/null
+
+      - name: Fix whose configured validation fails
+        id: validation_failure
+        continue-on-error: true
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: fix
+          prompt: Edit only e2e-fixture.txt and replace status=pending with status=validated. Make no other changes.
+          allow-write: "true"
+          run-tests: "true"
+          test-commands: '[["node","-e","process.exit(23)"]]'
+          timeout-minutes: "20"
+
+      - name: Assert validation failure and terminal sticky
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STEP_OUTCOME: ${{ steps.validation_failure.outcome }}
+          ERROR_CODE: ${{ steps.validation_failure.outputs.error-code }}
+          COMMENT_ID: ${{ steps.validation_failure.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.validation_failure.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (process.env.STEP_OUTCOME !== "failure") throw new Error("validation failure step did not fail");
+          if (process.env.ERROR_CODE !== "VALIDATION_FAILED") throw new Error("unexpected validation error code");
+          if (result.schemaVersion !== 1 || result.status !== "validation_failed") throw new Error("invalid validation envelope");
+          if (result.operation !== "fix" || result.validation?.status !== "failed") throw new Error("invalid validation snapshot");
+          if (!Number.isInteger(result.commentId) || String(result.commentId) !== process.env.COMMENT_ID) {
+            throw new Error("validation failure comment id mismatch");
+          }
+          NODE
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate > "$RUNNER_TEMP/failure-comments.json"
+          jq --argjson id "$COMMENT_ID" -e '
+            map(select(.id == $id and .user.id == 41898282 and (.body | contains("<!-- dsh-action:v1 kind=write -->")) and (.body | contains("VALIDATION_FAILED")))) |
+            length == 1 and .[0].created_at != .[0].updated_at
+          ' "$RUNNER_TEMP/failure-comments.json" >/dev/null
+          echo "FAILED_WRITE_COMMENT_ID=$COMMENT_ID" >> "$GITHUB_ENV"
+
+      - name: Fix with real controller validation
+        id: fix
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: fix
+          prompt: Edit only e2e-fixture.txt and replace status=pending with status=validated. Make no other changes.
+          allow-write: "true"
+          run-tests: "true"
+          test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
+          timeout-minutes: "20"
+
+      - name: Assert validated fix and sticky reuse
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ steps.fix.outputs.comment-id }}
+          COMMIT_SHA: ${{ steps.fix.outputs.commit-sha }}
+          RESULT_JSON: ${{ steps.fix.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (result.schemaVersion !== 1 || result.status !== "success") throw new Error("invalid fix envelope");
+          if (result.operation !== "fix" || result.policy?.trust !== "trusted-write") throw new Error("invalid fix trust snapshot");
+          if (result.validation?.status !== "passed" || result.validation?.commandCount !== 3) {
+            throw new Error("configured validation did not pass");
+          }
+          if (!/^[a-f0-9]{40}$/.test(process.env.COMMIT_SHA)) throw new Error("missing fix commit SHA");
+          if (result.write?.commitSha !== process.env.COMMIT_SHA) throw new Error("fix commit mismatch");
+          if (process.env.COMMENT_ID !== process.env.FAILED_WRITE_COMMENT_ID) throw new Error("write sticky was not reused");
+          NODE
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}" --jq .head.sha)" = "$COMMIT_SHA"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/contents/e2e-fixture.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)" = "status=validated"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate > "$RUNNER_TEMP/fix-comments.json"
+          jq --argjson id "$COMMENT_ID" --arg commit "$COMMIT_SHA" -e '
+            map(select(.id == $id and .user.id == 41898282 and (.body | contains("<!-- dsh-action:v1 kind=write -->")) and (.body | contains("Configured validation passed.")) and (.body | contains($commit)))) |
+            length == 1
+          ' "$RUNNER_TEMP/fix-comments.json" >/dev/null
