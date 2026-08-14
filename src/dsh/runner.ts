@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { assertSafeArgv } from "../security/argv.js";
 import {
@@ -299,10 +300,15 @@ export async function executeBoundedDshProcess(
   });
 }
 
-function defaultAssetsDirectory(environment: NodeJS.ProcessEnv): string {
-  const actionPath = environment.GITHUB_ACTION_PATH;
-  if (actionPath !== undefined && actionPath !== "") return join(actionPath, "assets", "dsh");
-  return resolve(process.cwd(), "assets", "dsh");
+function defaultAssetsDirectory(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  if (basename(moduleDirectory) === "dist") {
+    return resolve(moduleDirectory, "..", "assets", "dsh");
+  }
+  if (basename(moduleDirectory) === "dsh" && basename(dirname(moduleDirectory)) === "src") {
+    return resolve(moduleDirectory, "..", "..", "assets", "dsh");
+  }
+  throw new DshConfigurationError("Cannot locate packaged DSH assets from the action module");
 }
 
 async function assertDirectory(path: string, description: string): Promise<void> {
@@ -617,7 +623,7 @@ export async function runDsh(
   const workspace = resolve(request.workspacePath ?? process.cwd());
   await assertDirectory(workspace, "workspacePath");
 
-  const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory(environment);
+  const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory();
   const patchName =
     request.trust === "trusted-write"
       ? "trusted-write.patch.yml"
