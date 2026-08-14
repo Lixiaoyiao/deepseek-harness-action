@@ -51,6 +51,7 @@ var workspace = __webpack_require__(1670);
 
 
 async function finishFix(input) {
+    input.onPhase?.("validation");
     await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
     const changes = await (0,workspace/* inspectWorkspaceChanges */.$Z)(input.snapshot);
     if (changes.all.length === 0)
@@ -60,12 +61,10 @@ async function finishFix(input) {
     }
     const verified = input.inputs.runTests;
     if (verified) {
-        const tests = await (0,validate/* runValidationCommandsInDocker */.K)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage);
-        const failed = tests.find(({ result }) => result.exitCode !== 0 || result.timedOut);
-        if (failed !== undefined) {
-            throw new Error(`Validation failed: ${failed.argv.join(" ")}`);
-        }
+        const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage);
+        (0,validate/* assertValidationSucceeded */.Ph)(tests);
     }
+    input.onPhase?.("write");
     await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
     const created = await (0,github.createGitHubCommitFromWorkspace)(input.client, {
         owner: input.target.owner,

@@ -19,6 +19,7 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     testCommands: [],
     baseUrl: "https://api.deepseek.com",
     botUserId: 41898282,
+    progressComment: true,
     ...overrides,
   };
 }

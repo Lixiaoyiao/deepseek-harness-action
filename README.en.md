@@ -68,6 +68,8 @@ Open a non-draft pull request. The action reads the diff and repository context,
 
 See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
+> v0.2.0 is still under development. The Quick start above and the files in `examples/` intentionally remain pinned to the latest published v0.1.0 commit SHA until v0.2.0 is released. Features marked v0.2.0 below describe the current `main` branch. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
+
 ## What it does
 
 | Entry point                                      | Result                                                               |
@@ -86,6 +88,65 @@ The command must be on the first line of the comment. Ready-to-copy workflows ar
 
 Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"` and define validation commands. See [`action.yml`](action.yml) for all inputs.
 
+## Progress and structured outputs (v0.2.0, Unreleased)
+
+When an authorized operation resolves to a pull request or issue, the controller updates one sticky comment at three major stages: preparing bounded context, running DSH and validating its structured output, and publishing the result or applying the trusted write. It reuses the existing controller-owned v1 marker, so progress does not create a second status comment:
+
+| Operation           | Reused sticky marker |
+| ------------------- | -------------------- |
+| `review`            | `summary`            |
+| `diagnose`          | `diagnosis`          |
+| `fix` / `implement` | `write`              |
+
+On success, the detailed review, diagnosis, or write result replaces that same comment. On failure, it shows a stable error code, the failing phase, a redacted and bounded message, and an actionable next step. Only markers authored by the expected numeric bot ID are updated; user-forged markers are ignored. Lifecycle comment updates are best effort, so a temporary GitHub comments API failure does not hide the real agent, validation, or write outcome.
+
+`progress-comment` defaults to `true`. Disable intermediate lifecycle updates with:
+
+```yaml
+with:
+  progress-comment: "false"
+```
+
+This disables lifecycle updates only. It does not disable normal inline review comments, review summaries, CI diagnoses, or final fix status publication.
+
+Keep the job-level `timeout-minutes` a few minutes above the action input of the same name. This gives the internal DSH watchdog time to stop the worker and finalize failure outputs, the step summary, and the sticky comment.
+
+The action sets `result-json` on success, neutral, and failure paths. This is a `schemaVersion: 1` JSON envelope containing the applicable `status`, operation, summary, timing, policy/capabilities, actual isolation report, publication statistics, controller validation, write result, sticky comment ID, and error. `status` is one of `success`, `neutral`, `failed`, `timed_out`, `validation_failed`, or `denied`. `validation_failed` covers both invalid DSH structured output and controller validation failure; `error.code` distinguishes them. A failure object carries stable `code`, `phase`, `title`, `message`, `guidance`, and `retryable` fields.
+
+All scalar outputs are:
+
+| Output             | Meaning                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `conclusion`       | `success`, `neutral`, or `failure`                                               |
+| `operation`        | `review`, `diagnose`, `fix`, `implement`, or `none`                              |
+| `summary`          | Validated summary for any operation, or a safe failure summary                   |
+| `review-summary`   | Backward-compatible alias of `summary`                                           |
+| `findings-count`   | Selected review findings, or validated agent findings for other operations       |
+| `branch-name`      | Created DSH branch, empty when not applicable                                    |
+| `pull-request-url` | Created pull request URL, empty when not applicable                              |
+| `commit-sha`       | Commit created by a successful fix, empty when not applicable                    |
+| `trust`            | `untrusted`, `trusted-read`, `trusted-write`, or `none` before policy resolution |
+| `duration-ms`      | Total controller duration in milliseconds                                        |
+| `comment-id`       | Sticky progress/result comment ID when available                                 |
+| `error-code`       | Stable failure code; empty on success or neutral completion                      |
+| `error-message`    | Redacted and bounded failure message                                             |
+| `result-json`      | The versioned JSON envelope described above                                      |
+
+The v0.1.0 outputs `conclusion`, `operation`, `review-summary`, `findings-count`, `branch-name`, and `pull-request-url` remain available, so existing workflows do not need to be rewritten. Model-reported `verification` and controller-executed validation are different data; `result-json` exposes the latter separately under `validation`.
+
+A failed action step still writes its outputs first. Use `always()` in a later step and pass the value through an environment variable instead of interpolating model-derived text into a script:
+
+```yaml
+# First give the DeepSeek Harness step id: dsh
+- name: Inspect DSH result
+  if: ${{ always() && steps.dsh.outputs['result-json'] != '' }}
+  env:
+    DSH_RESULT_JSON: ${{ steps.dsh.outputs['result-json'] }}
+  run: printf '%s\n' "$DSH_RESULT_JSON" | jq .
+```
+
+Summaries, paths, and other model-derived strings inside `result-json` remain untrusted data. The envelope is observability/output data, not an authorization signal; do not splice its strings directly into shell commands.
+
 ## Write mode
 
 `allow-write` defaults to `false`. Writes are limited to trusted actors working in the same repository; fork pull requests are always review-only. Validation commands are argv arrays and are not expanded by a shell:
@@ -102,26 +163,38 @@ Write mode requires a complete Docker image digest. Docker must be available on 
 
 ## Security
 
-Repository files, diffs, CI logs, issues, pull requests, and comments are all treated as untrusted data.
+The security model has four separate layers so that a trusted actor is never confused with trusted repository content:
 
-- `GITHUB_TOKEN` stays in the action controller and is never passed to DSH.
-- The controller-side proxy injects the DeepSeek key; it never enters the workspace or validation commands.
-- Forks receive no filesystem or execution tools, and `pull_request_target` never checks out the PR head.
-- Before a write, the controller checks the actor, repository origin, bound commit, and actual changed files again.
-- Validation runs in a separate credential-free container.
+1. **Actor / control plane:** interactive `@dsh` commands require every originating actor to pass the write/maintain/admin check. Writes additionally require explicit `allow-write: "true"`. Workflow token scopes only determine which GitHub APIs the controller may call; they cannot bypass actor or policy gates.
+2. **Input data:** repository files, diffs, CI logs, README/AGENTS/CLAUDE files, issues, pull requests, and comments always remain untrusted. Model output receives no authority directly and must pass strict schema, path, size, and marker validation.
+3. **Worker:** `untrusted`, `trusted-read`, and `trusted-write` are execution profiles; they do not make repository content trusted. Forks receive no repository tools, the read profile gets read/search over an immutable copy, and the write profile gets read/search/edit over a `.git`-less copy without shell or direct GitHub access.
+4. **Controller / commit authority:** only the controller holds the GitHub client and real credentials. It rebinds SHA and issue/PR identity, runs credential-free validation, checks actual file changes, and finally comments, commits, pushes, or opens a pull request.
 
-See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.1.0 pins `@deepseek-ai/dsh@0.1.0-rc.6`; DSH is moving quickly, so review the configuration again before upgrading it.
+Workflow permissions used by the supplied templates are:
+
+| Scenario                              | Workflow token permissions                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Automatic or fork PR review           | `contents: read`, `pull-requests: write`                                                    |
+| CI diagnosis                          | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
+| Commands that support fix / implement | `contents: write`, `actions: read`, `checks: read`, `issues: write`, `pull-requests: write` |
+| CI auto-fix                           | Same as the preceding row                                                                   |
+
+Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH workspace or validation commands. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. The currently released v0.1.0 pins `@deepseek-ai/dsh@0.1.0-rc.6`; DSH is moving quickly, so review the configuration again before upgrading it.
 
 ## Architecture
 
 ```text
 GitHub event
     ↓
-Action controller: route → authorize → snapshot
+Action controller: route → resolve target → authorize
+    ↓
+Controller-owned sticky progress → bounded workspace / context
     ↓
 DSH worker in Docker
     ↓
-Action controller: validate → comment / commit / open PR
+Action controller: schema validation → publish / controller validation / write
+    ↓
+Action outputs: legacy scalars + versioned result-json
 ```
 
 The DSH worker does not hold a GitHub client. Model output must pass schema validation before the controller maps it to diff lines, updates tracking comments, or performs a trusted write.
@@ -145,3 +218,4 @@ The `dist/` bundle used by GitHub Marketplace is committed with each release. Se
 
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) provides the headless agent runtime used by this project.
 - The GitHub event routing, permission checks, and tracking model are adapted from the MIT-licensed [Claude Code Action](https://github.com/anthropics/claude-code-action). The exact upstream commit and license text are recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+- The structured-output and execution/publication permission separation also draw on the design of [Codex GitHub Action](https://learn.chatgpt.com/docs/github-action); this project retains its own controller/worker trust boundary and result protocol.

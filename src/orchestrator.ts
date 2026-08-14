@@ -24,19 +24,37 @@ import {
 import { parseGitHubContext, isWorkflowRunContext, type GitHubContext } from "./github/context.js";
 import { isFailedWorkflowRun, readEventPayload } from "./github/payload.js";
 import { checkActorPermissions } from "./github/permissions.js";
+import { StickyProgressReporter } from "./github/progress.js";
 import { revalidatePullRequestHead } from "./write/pr.js";
 import { materializeRepositoryAtSha } from "./github/repository.js";
 import { createWorkspaceSnapshot, type WorkspaceSnapshot } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
-import { redactSecrets, sanitizeUntrustedText } from "./security/redaction.js";
+import { sanitizeUntrustedText } from "./security/redaction.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
+import {
+  describeActionFailure,
+  type ActionPhase,
+  type AgentRunSummary,
+  type RunOutcome,
+  type ValidationSummary,
+} from "./result.js";
 
-export interface RunOutcome {
-  readonly conclusion: "success" | "neutral";
-  readonly operation?: RoutedCommand["operation"];
-  readonly summary: string;
-  readonly findingsCount: number;
+interface RunState {
+  phase: ActionPhase;
+  operation?: RoutedCommand["operation"];
+  policy?: SecurityPolicy;
+  progress?: StickyProgressReporter;
+  runUrl?: string;
+  agent?: AgentRunSummary;
+  validationCommandCount?: number;
+}
+
+interface WriteOutcome {
+  readonly writeStatus: "success" | "partial-success";
+  readonly commitSha?: string;
+  readonly changedPaths?: readonly string[];
   readonly branchName?: string;
+  readonly pullRequestNumber?: number;
   readonly pullRequestUrl?: string;
 }
 
@@ -209,7 +227,8 @@ async function executeWrite(
   workspaceCopy: WorkspaceSnapshot,
   boundWriteSha: string,
   agentResult: Awaited<ReturnType<typeof runAgentTask>>,
-): Promise<Pick<RunOutcome, "branchName" | "pullRequestUrl">> {
+  onPhase: (phase: "validation" | "write") => void,
+): Promise<WriteOutcome> {
   if (command.operation === "implement" && snapshot.kind === "issue") {
     const result = await finishImplementation({
       client,
@@ -224,13 +243,20 @@ async function executeWrite(
       operationKey: context.runId,
       result: agentResult,
       inputs,
+      onPhase,
     });
-    return { branchName: result.branch, pullRequestUrl: result.url };
+    return {
+      writeStatus: "success",
+      branchName: result.branch,
+      pullRequestNumber: result.pullNumber,
+      pullRequestUrl: result.url,
+    };
   }
   // Same-repository PR fixes are committed through the controller's GitHub API
   // after one final immutable-head check; DSH never receives that credential.
   if (snapshot.kind === "pull_request" && policy.capabilities.modifyWorkspace) {
     const { finishFix } = await import("./commands/fix.js");
+    onPhase("write");
     await revalidatePullRequestHead(
       client,
       context.repository.owner,
@@ -238,7 +264,7 @@ async function executeWrite(
       snapshot.number,
       snapshot.headSha,
     );
-    await finishFix({
+    const result = await finishFix({
       client,
       target: {
         owner: context.repository.owner,
@@ -258,25 +284,56 @@ async function executeWrite(
       result: agentResult,
       inputs,
       runUrl: runUrl(context),
+      onPhase,
     });
-    return {};
+    return {
+      writeStatus: result.status,
+      commitSha: result.commitSha,
+      changedPaths: result.paths,
+    };
   }
   throw new Error("The resolved entity does not support this write operation");
 }
 
+function outcomeContext(state: RunState, startedAt: number) {
+  return {
+    schemaVersion: 1 as const,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    ...(state.runUrl === undefined ? {} : { runUrl: state.runUrl }),
+    ...(state.policy === undefined ? {} : { policy: state.policy }),
+    ...(state.agent === undefined ? {} : { agent: state.agent }),
+    ...(state.progress?.commentId === undefined ? {} : { commentId: state.progress.commentId }),
+  };
+}
+
+function successfulValidation(inputs: ActionInputs): ValidationSummary {
+  return {
+    status: inputs.runTests ? "passed" : "skipped",
+    commandCount: inputs.testCommands.length,
+  };
+}
+
 /** Claude Action-style prepare -> route -> authorize -> run -> finalize orchestration. */
-export async function runAction(): Promise<RunOutcome> {
+async function runActionInternal(state: RunState, startedAt: number): Promise<RunOutcome> {
+  state.phase = "configuration";
   const inputs = loadInputs();
+  state.validationCommandCount = inputs.testCommands.length;
   core.setSecret(inputs.githubToken);
   core.setSecret(inputs.deepseekApiKey);
+
+  state.phase = "routing";
   const payload = await readEventPayload(process.env.GITHUB_EVENT_PATH);
   const context = parseGitHubContext(process.env, payload);
+  const currentRunUrl = runUrl(context);
+  state.runUrl = currentRunUrl;
   let command = routeCommand(context, inputs);
+  if (command !== null) state.operation = command.operation;
   if (
     command === null ||
     (context.rawEventName === "workflow_run" && !isFailedWorkflowRun(payload))
   ) {
     return {
+      ...outcomeContext(state, startedAt),
       conclusion: "neutral",
       summary: "No matching @dsh command or automatic event",
       findingsCount: 0,
@@ -288,6 +345,7 @@ export async function runAction(): Promise<RunOutcome> {
     context.pullRequest?.draft === true
   ) {
     return {
+      ...outcomeContext(state, startedAt),
       conclusion: "neutral",
       operation: command.operation,
       summary: "Draft pull requests are not reviewed automatically",
@@ -296,9 +354,12 @@ export async function runAction(): Promise<RunOutcome> {
   }
 
   const client = createGitHubClient(inputs.githubToken);
+  state.phase = "authorization";
   const permissions = await checkActorPermissions(client, context);
+  state.phase = "context";
   const pullRequest = await resolvePullRequest(client, context);
   command = finalizeWorkflowRunRoute(context, command, pullRequest !== undefined);
+  state.operation = command.operation;
   let snapshot: EntitySnapshot | undefined = pullRequest;
   if (snapshot === undefined && context.kind === "entity") {
     snapshot = await fetchEntitySnapshot(
@@ -309,6 +370,8 @@ export async function runAction(): Promise<RunOutcome> {
     );
   }
   assertOperationContext(command, context, snapshot);
+
+  state.phase = "authorization";
   const policy = evaluatePolicy({
     context,
     operation: command.operation,
@@ -321,8 +384,26 @@ export async function runAction(): Promise<RunOutcome> {
       pullRequest !== undefined,
     ...(pullRequest === undefined ? {} : { resolvedPullRequest: { isFork: pullRequest.isFork } }),
   });
+  state.policy = policy;
   if (!policy.allowed) throw new Error(policy.reason);
 
+  const issueNumber = snapshot?.number ?? pullRequest?.number;
+  if (inputs.progressComment && issueNumber !== undefined) {
+    state.progress = new StickyProgressReporter({
+      client,
+      target: { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
+      expectedAuthorId: inputs.botUserId,
+      operation: command.operation,
+      policy,
+      runUrl: currentRunUrl,
+    });
+    await state.progress.update(
+      "context",
+      "Permission checks passed. Preparing a bounded, immutable context snapshot.",
+    );
+  }
+
+  state.phase = "context";
   const workspace = requireWorkspace();
   let tempRoot: string | undefined;
   let workspaceCopy: WorkspaceSnapshot | undefined;
@@ -361,6 +442,12 @@ export async function runAction(): Promise<RunOutcome> {
       agentWorkspace = tempRoot;
     }
     const packet = await buildContextPacket(client, context, command, snapshot, inputs);
+
+    state.phase = "agent";
+    await state.progress?.update(
+      "agent",
+      "The isolated worker is running. Repository and event content remain untrusted data.",
+    );
     const agentResult = await runAgentTask(
       {
         operation: command.operation,
@@ -371,8 +458,17 @@ export async function runAction(): Promise<RunOutcome> {
       },
       inputs,
     );
+    state.agent = {
+      durationMs: agentResult.durationMs,
+      isolation: agentResult.isolationReport,
+    };
 
     if (command.operation === "review" && snapshot?.kind === "pull_request") {
+      state.phase = "publication";
+      await state.progress?.update(
+        "finalizing",
+        "Structured output passed validation. Mapping findings to the current diff and publishing.",
+      );
       await revalidatePullRequestHead(
         client,
         context.repository.owner,
@@ -387,40 +483,57 @@ export async function runAction(): Promise<RunOutcome> {
           repo: context.repository.repo,
           pullNumber: snapshot.number,
           expectedAuthorId: inputs.botUserId,
-          runUrl: runUrl(context),
+          runUrl: currentRunUrl,
         },
         snapshot,
         agentResult,
         inputs.maxFindings,
       );
       return {
+        ...outcomeContext(state, startedAt),
         conclusion: "success",
         operation: command.operation,
         summary: agentResult.output.summary,
         findingsCount: publication.selected,
+        publication,
+        validation: { status: "not-applicable", commandCount: 0 },
       };
     }
     if (command.operation === "diagnose") {
-      const issueNumber = snapshot?.number ?? pullRequest?.number;
+      state.phase = "publication";
+      await state.progress?.update(
+        "finalizing",
+        "Structured output passed validation. Publishing the bounded CI diagnosis.",
+      );
       if (issueNumber !== undefined) {
         await finishDiagnosis(
           client,
           { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
           inputs.botUserId,
           agentResult,
-          runUrl(context),
+          currentRunUrl,
         );
       }
       return {
+        ...outcomeContext(state, startedAt),
         conclusion: "success",
         operation: command.operation,
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
+        validation: { status: "not-applicable", commandCount: 0 },
       };
     }
     if (snapshot === undefined || workspaceCopy === undefined || boundWriteSha === undefined) {
       throw new Error("Write operation requires a trusted checked-out entity workspace");
     }
+
+    state.phase = "validation";
+    await state.progress?.update(
+      "finalizing",
+      inputs.runTests
+        ? "The structured change is ready. Running configured validation before any GitHub write."
+        : "The structured change is ready. Applying the explicitly unverified trusted write.",
+    );
     const write = await executeWrite(
       client,
       context,
@@ -431,20 +544,65 @@ export async function runAction(): Promise<RunOutcome> {
       workspaceCopy,
       boundWriteSha,
       agentResult,
+      (phase) => {
+        state.phase = phase;
+      },
     );
+    if (command.operation === "implement") {
+      await state.progress?.complete(
+        `Implementation completed and pull request ${write.pullRequestUrl ?? "was created"}.`,
+      );
+    } else if (write.writeStatus === "partial-success") {
+      await state.progress?.complete(
+        `Commit \`${write.commitSha ?? "unknown"}\` was pushed, but the detailed final status publication reported a partial success.`,
+      );
+    }
     return {
+      ...outcomeContext(state, startedAt),
       conclusion: "success",
       operation: command.operation,
       summary: agentResult.output.summary,
       findingsCount: agentResult.output.findings.length,
+      validation: successfulValidation(inputs),
       ...write,
     };
   } finally {
-    if (tempRoot !== undefined) await rm(tempRoot, { recursive: true, force: true });
+    if (tempRoot !== undefined) {
+      try {
+        await rm(tempRoot, { recursive: true, force: true });
+      } catch {
+        // Cleanup is secondary. It must not turn an already-published review or
+        // completed remote write into a failed run that may be retried.
+        core.warning("The temporary DeepSeek Harness workspace could not be removed.");
+      }
+    }
+  }
+}
+
+export async function runAction(): Promise<RunOutcome> {
+  const startedAt = Date.now();
+  const state: RunState = { phase: "configuration" };
+  try {
+    return await runActionInternal(state, startedAt);
+  } catch (error: unknown) {
+    const failure = describeActionFailure(error, state.phase);
+    await state.progress?.fail(failure);
+    const validation: ValidationSummary | undefined =
+      failure.phase === "validation"
+        ? { status: "failed", commandCount: state.validationCommandCount ?? 0 }
+        : undefined;
+    return {
+      ...outcomeContext(state, startedAt),
+      conclusion: "failure",
+      ...(state.operation === undefined ? {} : { operation: state.operation }),
+      summary: failure.title,
+      findingsCount: 0,
+      ...(validation === undefined ? {} : { validation }),
+      error: failure,
+    };
   }
 }
 
 export function reportFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return redactSecrets(message).slice(0, 4_000);
+  return describeActionFailure(error, "agent").message;
 }
