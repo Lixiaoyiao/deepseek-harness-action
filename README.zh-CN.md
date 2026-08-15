@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Lixiaoyiao/deepseek-harness-action?display_name=tag)](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/latest)
 [![MIT](https://img.shields.io/github/license/Lixiaoyiao/deepseek-harness-action)](LICENSE)
 
-[English](README.en.md)
+[English](README.md)
 
 让 GitHub 里的 PR、Issue 和失败 CI 直接调用 DeepSeek Harness。
 
