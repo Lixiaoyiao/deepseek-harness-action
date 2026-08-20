@@ -10,14 +10,15 @@ export async function publishStatusComment(
   title: string,
   message: string,
   runUrl: string,
+  trackingKind: "task" | "write" = "write",
 ): Promise<void> {
   const body = [
-    createTrackingMarker({ kind: "write" }),
+    createTrackingMarker({ kind: trackingKind }),
     `## ${title}`,
     "",
     sanitizeUntrustedText(message.replace(/<!--\s*dsh-action:[\s\S]*?-->/giu, "")).slice(0, 60_000),
     "",
     `<sub>[Workflow run](${runUrl}) · dsh-action</sub>`,
   ].join("\n");
-  await upsertTrackingComment(client, target, authorId, "write", body);
+  await upsertTrackingComment(client, target, authorId, trackingKind, body);
 }

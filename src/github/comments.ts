@@ -44,7 +44,9 @@ export async function upsertTrackingComment(
       ? index.summaries.at(-1)
       : kind === "diagnosis"
         ? index.diagnoses.at(-1)
-        : index.writes.at(-1);
+        : kind === "task"
+          ? index.tasks.at(-1)
+          : index.writes.at(-1);
   if (existing !== undefined) {
     const response = await client.rest.issues.updateComment({
       owner: target.owner,
@@ -71,7 +73,9 @@ export async function upsertTrackingComment(
         ? reconciled.summaries.at(-1)
         : kind === "diagnosis"
           ? reconciled.diagnoses.at(-1)
-          : reconciled.writes.at(-1);
+          : kind === "task"
+            ? reconciled.tasks.at(-1)
+            : reconciled.writes.at(-1);
     if (recovered !== undefined) return recovered.id;
     throw error;
   }

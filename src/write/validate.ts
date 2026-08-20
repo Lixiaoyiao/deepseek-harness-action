@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { assertPinnedContainerImage } from "../dsh/runner.js";
 import { runCommand, type CommandResult } from "../security/argv.js";
+import { isIgnoredGeneratedRootEntry } from "./workspace.js";
 
 const VALIDATION_ENV = [
   "PATH",
@@ -18,9 +20,37 @@ const VALIDATION_ENV = [
   "LC_ALL",
 ] as const;
 
+export type ValidationProcessRunner = (
+  options: Parameters<typeof runCommand>[0],
+) => Promise<CommandResult>;
+
 export interface ValidationResult {
   readonly argv: readonly string[];
   readonly result: CommandResult;
+}
+
+function validationDeadline(timeoutMs: number): number {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Validation timeout must be a positive integer");
+  }
+  return Date.now() + timeoutMs;
+}
+
+function deadlineExceededResult(): CommandResult {
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "Validation did not start because the overall validation deadline was exhausted.",
+    timedOut: true,
+    outputTruncated: false,
+  };
+}
+
+function includeInValidationCopy(workspaceRoot: string, source: string): boolean {
+  const path = relative(workspaceRoot, source);
+  if (path === "") return true;
+  const rootEntry = path.split(sep)[0];
+  return rootEntry !== undefined && !isIgnoredGeneratedRootEntry(rootEntry);
 }
 
 export class ValidationFailureError extends Error {
@@ -29,6 +59,7 @@ export class ValidationFailureError extends Error {
   public readonly exitCode: number;
   public readonly timedOut: boolean;
   public readonly outputTruncated: boolean;
+  public readonly result: CommandResult;
 
   public constructor(failure: ValidationResult) {
     const command = failure.argv.join(" ");
@@ -44,6 +75,7 @@ export class ValidationFailureError extends Error {
     this.exitCode = failure.result.exitCode;
     this.timedOut = failure.result.timedOut;
     this.outputTruncated = failure.result.outputTruncated;
+    this.result = failure.result;
   }
 }
 
@@ -64,6 +96,7 @@ export async function runValidationCommands(
   commands: readonly (readonly string[])[],
   timeoutMs = 10 * 60_000,
 ): Promise<readonly ValidationResult[]> {
+  const deadline = validationDeadline(timeoutMs);
   const env: NodeJS.ProcessEnv = {};
   for (const name of VALIDATION_ENV) {
     const value = process.env[name];
@@ -73,12 +106,17 @@ export async function runValidationCommands(
   for (const argv of commands) {
     const [command, ...args] = argv;
     if (command === undefined) throw new Error("Validation command must not be empty");
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      results.push({ argv, result: deadlineExceededResult() });
+      break;
+    }
     const result = await runCommand({
       command,
       args,
       cwd,
       env,
-      timeoutMs,
+      timeoutMs: remainingMs,
       maxOutputBytes: 2 * 1024 * 1024,
     });
     results.push({ argv, result });
@@ -92,20 +130,36 @@ export async function runValidationCommandsInDocker(
   commands: readonly (readonly string[])[],
   containerImage: string,
   timeoutMs = 10 * 60_000,
+  processRunner: ValidationProcessRunner = runCommand,
 ): Promise<readonly ValidationResult[]> {
   // Repeat the check at this boundary so future callers cannot run
   // trusted-write validation with a mutable image tag.
   assertPinnedContainerImage(containerImage);
+  const deadline = validationDeadline(timeoutMs);
   const validationParent = await mkdtemp(join(tmpdir(), "dsh-action-validation-"));
   const validationRoot = join(validationParent, "workspace");
   try {
-    await cp(cwd, validationRoot, { recursive: true, force: false, errorOnExist: true });
+    await cp(cwd, validationRoot, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      filter: (source) => includeInValidationCopy(cwd, source),
+    });
     const results: ValidationResult[] = [];
     for (const argv of commands) {
       if (argv.length === 0) throw new Error("Validation command must not be empty");
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        results.push({ argv, result: deadlineExceededResult() });
+        break;
+      }
+      const containerName = `dsh-action-validation-${randomUUID()}`;
       const dockerArgs = [
         "run",
         "--rm",
+        "--init",
+        "--name",
+        containerName,
         "--network",
         "bridge",
         "--read-only",
@@ -113,6 +167,12 @@ export async function runValidationCommandsInDocker(
         "ALL",
         "--security-opt",
         "no-new-privileges",
+        "--pids-limit",
+        "256",
+        "--memory",
+        "2g",
+        "--cpus",
+        "2",
         "--user",
         hostUserForContainer(),
         "--tmpfs",
@@ -132,14 +192,35 @@ export async function runValidationCommandsInDocker(
         containerImage,
         ...argv,
       ];
-      const result = await runCommand({
-        command: "docker",
-        args: dockerArgs,
-        cwd: validationRoot,
-        env: process.env.PATH === undefined ? {} : { PATH: process.env.PATH },
-        timeoutMs,
-        maxOutputBytes: 2 * 1024 * 1024,
-      });
+      const cleanup = async (): Promise<void> => {
+        try {
+          await processRunner({
+            command: "docker",
+            args: ["rm", "--force", containerName],
+            cwd: validationRoot,
+            env: process.env.PATH === undefined ? {} : { PATH: process.env.PATH },
+            timeoutMs: 10_000,
+            maxOutputBytes: 16 * 1024,
+          });
+        } catch {
+          // A named --rm container may already be gone. Cleanup is best effort.
+        }
+      };
+      let result: CommandResult;
+      try {
+        result = await processRunner({
+          command: "docker",
+          args: dockerArgs,
+          cwd: validationRoot,
+          env: process.env.PATH === undefined ? {} : { PATH: process.env.PATH },
+          timeoutMs: remainingMs,
+          maxOutputBytes: 2 * 1024 * 1024,
+        });
+      } catch (error: unknown) {
+        await cleanup();
+        throw error;
+      }
+      if (result.timedOut || result.exitCode !== 0) await cleanup();
       results.push({ argv, result });
       if (result.exitCode !== 0 || result.timedOut) break;
     }

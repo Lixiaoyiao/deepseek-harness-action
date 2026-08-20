@@ -8,7 +8,7 @@ import { redactSecrets, sanitizeUntrustedText } from "../security/redaction.js";
 import type { GitHubClient } from "./client.js";
 import { upsertTrackingComment, type CommentTarget } from "./comments.js";
 
-export type ProgressStage = "context" | "agent" | "finalizing" | "complete";
+export type ProgressStage = "context" | "agent" | "finalizing" | "complete" | "blocked";
 
 export interface ProgressReporterOptions {
   readonly client: GitHubClient;
@@ -29,7 +29,10 @@ interface ProgressView {
   readonly failure?: ActionFailure;
 }
 
-const stages: readonly { key: Exclude<ProgressStage, "complete">; label: string }[] = [
+const stages: readonly {
+  key: Exclude<ProgressStage, "complete" | "blocked">;
+  label: string;
+}[] = [
   { key: "context", label: "Route, authorize, and build immutable context" },
   { key: "agent", label: "Run DeepSeek Harness and validate its structured output" },
   { key: "finalizing", label: "Publish the result or apply the trusted write" },
@@ -38,6 +41,7 @@ const stages: readonly { key: Exclude<ProgressStage, "complete">; label: string 
 function trackingKind(operation: Operation): Exclude<TrackingKind, "finding"> {
   if (operation === "review") return "summary";
   if (operation === "diagnose") return "diagnosis";
+  if (operation === "task") return "task";
   return "write";
 }
 
@@ -59,7 +63,7 @@ function githubAccess(policy: SecurityPolicy): string {
 
 function executionAccess(policy: SecurityPolicy): string {
   return policy.capabilities.executeRepositoryCode
-    ? "operator-configured validation only"
+    ? "maintainer-defined fixed-argv tools and final validation"
     : "disabled";
 }
 
@@ -78,9 +82,14 @@ function safeTableCell(value: string): string {
 
 export function renderProgressComment(view: ProgressView): string {
   const current =
-    view.stage === "complete" ? stages.length : stages.findIndex(({ key }) => key === view.stage);
+    view.stage === "complete"
+      ? stages.length
+      : view.stage === "blocked"
+        ? stages.length - 1
+        : stages.findIndex(({ key }) => key === view.stage);
   const checklist = stages.map(({ label }, index) => {
     if (view.failure !== undefined && index === current) return `- [ ] ❌ ${label}`;
+    if (view.stage === "blocked" && index === current) return `- [ ] ⚠️ ${label}`;
     if (index < current || view.stage === "complete") return `- [x] ${label}`;
     if (index === current) return `- [ ] ⏳ ${label}`;
     return `- [ ] ${label}`;
@@ -89,7 +98,9 @@ export function renderProgressComment(view: ProgressView): string {
     view.failure === undefined
       ? view.stage === "complete"
         ? "✅ Completed"
-        : "⏳ In progress"
+        : view.stage === "blocked"
+          ? "⚠️ Blocked"
+          : "⏳ In progress"
       : `❌ ${safeText(view.failure.title)}`;
   const body = [
     createTrackingMarker({ kind: trackingKind(view.operation) }),
@@ -141,6 +152,11 @@ export class StickyProgressReporter {
   public async complete(message: string): Promise<void> {
     this.stage = "complete";
     await this.publish({ stage: "complete", message });
+  }
+
+  public async blocked(message: string): Promise<void> {
+    this.stage = "blocked";
+    await this.publish({ stage: "blocked", message });
   }
 
   public async fail(failure: ActionFailure): Promise<void> {

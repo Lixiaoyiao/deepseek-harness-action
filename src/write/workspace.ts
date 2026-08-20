@@ -9,6 +9,10 @@ const MAX_SNAPSHOT_FILES = 50_000;
 const MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
 const IGNORED_GENERATED_DIRECTORIES = new Set([".git", "node_modules"]);
 
+export function isIgnoredGeneratedRootEntry(name: string): boolean {
+  return IGNORED_GENERATED_DIRECTORIES.has(name);
+}
+
 interface FileState {
   readonly kind: "file";
   readonly digest: string;
@@ -92,7 +96,7 @@ async function repositoryPaths(root: string): Promise<readonly string[]> {
       if (current === undefined) break;
       const absolute = current === "" ? root : join(root, ...current.split("/"));
       for (const entry of await readdir(absolute, { withFileTypes: true })) {
-        if (current === "" && IGNORED_GENERATED_DIRECTORIES.has(entry.name)) continue;
+        if (current === "" && isIgnoredGeneratedRootEntry(entry.name)) continue;
         const path = normalizeRelativePath(
           current === "" ? entry.name : `${current}/${entry.name}`,
         );
@@ -149,7 +153,7 @@ async function walkFiles(root: string, directory = ""): Promise<Map<string, File
     const absolute = current === "" ? root : join(root, ...current.split("/"));
     for (const entry of await readdir(absolute, { withFileTypes: true })) {
       if (entry.name === "." || entry.name === "..") throw new Error("Invalid directory entry");
-      if (current === "" && IGNORED_GENERATED_DIRECTORIES.has(entry.name)) continue;
+      if (current === "" && isIgnoredGeneratedRootEntry(entry.name)) continue;
       const path = normalizeRelativePath(current === "" ? entry.name : `${current}/${entry.name}`);
       const candidate = join(root, ...path.split("/"));
       if (entry.isDirectory()) {
@@ -194,6 +198,23 @@ export async function inspectWorkspaceChanges(
     deleted: sort(deleted),
     all: sort([...added, ...modified, ...deleted]),
   };
+}
+
+/** Stable content revision used to distinguish repair progress from a retry loop. */
+export async function fingerprintWorkspace(root: string): Promise<string> {
+  const current = await walkFiles(root);
+  const digest = createHash("sha256");
+  for (const [path, state] of [...current.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    digest.update(path, "utf8");
+    digest.update("\0", "utf8");
+    digest.update(state.digest, "utf8");
+    digest.update("\0", "utf8");
+    digest.update(String(state.mode), "utf8");
+    digest.update("\0", "utf8");
+  }
+  return digest.digest("hex");
 }
 
 /** Apply an already inspected change set to the real checkout. */

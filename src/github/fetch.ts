@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { GitHubClient } from "./client.js";
 import type { GitHubContext } from "./context.js";
+import { issueContentFingerprint } from "./issue-identity.js";
 
 const MAX_FILE_CONTEXT_BYTES = 64 * 1024;
 const MAX_TOTAL_CONTEXT_BYTES = 512 * 1024;
@@ -132,6 +133,7 @@ export interface IssueSnapshot {
   readonly author: string;
   readonly state: string;
   readonly updatedAt: string;
+  readonly contentFingerprint: string;
   readonly comments: readonly RepositoryComment[];
 }
 
@@ -148,9 +150,27 @@ function originalEntityText(
   if (entity === undefined) return {};
   return {
     ...(entity.title === null || entity.title === undefined ? {} : { title: entity.title }),
-    ...(entity.body === null || entity.body === undefined ? {} : { body: entity.body }),
+    ...(entity.body === undefined ? {} : { body: entity.body ?? "" }),
     ...(entity.user?.login === undefined ? {} : { author: entity.user.login }),
   };
+}
+
+function assertIssueTextMatchesTrigger(
+  original: ReturnType<typeof originalEntityText>,
+  issue: {
+    readonly title: string;
+    readonly body?: string | null;
+    readonly user?: { login: string } | null;
+  },
+): void {
+  if (
+    (original.title !== undefined && original.title !== issue.title) ||
+    (original.body !== undefined && original.body !== (issue.body ?? "")) ||
+    (original.author !== undefined &&
+      original.author.toLowerCase() !== (issue.user?.login ?? "").toLowerCase())
+  ) {
+    throw new Error("Issue content changed after the triggering event");
+  }
 }
 
 function triggerTime(context: GitHubContext): number | null {
@@ -521,16 +541,30 @@ export async function fetchIssueSnapshot(
 ): Promise<IssueSnapshot> {
   const { owner, repo } = context.repository;
   const issue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
+  const original = originalEntityText(context, "issue");
+  assertIssueTextMatchesTrigger(original, issue.data);
+  const fingerprint = issueContentFingerprint({
+    number: issue.data.number,
+    title: issue.data.title,
+    body: issue.data.body,
+    authorId: issue.data.user?.id,
+  });
   const comments = await listExistingComments(client, owner, repo, issueNumber, context);
   const verifiedIssue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
   if (
     issue.data.number !== verifiedIssue.data.number ||
     issue.data.updated_at !== verifiedIssue.data.updated_at ||
-    issue.data.state !== verifiedIssue.data.state
+    issue.data.state !== verifiedIssue.data.state ||
+    fingerprint !==
+      issueContentFingerprint({
+        number: verifiedIssue.data.number,
+        title: verifiedIssue.data.title,
+        body: verifiedIssue.data.body,
+        authorId: verifiedIssue.data.user?.id,
+      })
   ) {
     throw new Error("Issue changed while its snapshot was being collected");
   }
-  const original = originalEntityText(context, "issue");
   return {
     kind: "issue",
     number: issue.data.number,
@@ -539,6 +573,7 @@ export async function fetchIssueSnapshot(
     author: original.author ?? issue.data.user?.login ?? "ghost",
     state: issue.data.state,
     updatedAt: issue.data.updated_at,
+    contentFingerprint: fingerprint,
     comments,
   };
 }

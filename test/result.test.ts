@@ -24,6 +24,7 @@ const policy: SecurityPolicy = {
     readCi: true,
     publishComments: true,
     executeRepositoryCode: true,
+    accessNetwork: true,
     modifyWorkspace: true,
     commit: true,
     push: true,
@@ -57,6 +58,17 @@ describe("versioned action results", () => {
       policy,
       agent: {
         durationMs: 3_100,
+        turns: 3,
+        toolCalls: 1,
+        validationRetries: 1,
+        toolReceipts: [
+          {
+            callId: `call-${"a".repeat(40)}`,
+            id: "command.test",
+            ok: true,
+            durationMs: 120,
+          },
+        ],
         isolation: {
           backend: "docker",
           credentialMediated: true,
@@ -93,6 +105,12 @@ describe("versioned action results", () => {
       conclusion: "success",
       operation: "fix",
       timing: { durationMs: 4_200, agentDurationMs: 3_100 },
+      loop: {
+        turns: 3,
+        toolCalls: 1,
+        validationRetries: 1,
+        toolReceipts: [{ id: "command.test", ok: true }],
+      },
       policy: { trust: "trusted-write", allowed: true },
       validation: { status: "passed", commandCount: 2 },
       write: {

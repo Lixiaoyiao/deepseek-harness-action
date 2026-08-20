@@ -1,5 +1,5 @@
 name: "DeepSeek Harness for GitHub"
-description: "AI Code Review · CI Diagnosis · Auto Fix · Issue → PR"
+description: "DeepSeek coding tasks, review, diagnosis, repair loops, and safe GitHub automation"
 author: "Lixiaoyiao"
 branding:
   icon: "code"
@@ -14,15 +14,19 @@ inputs:
     required: false
     default: ${{ github.token }}
   allow-write:
-    description: "Allow trusted same-repository fix/implement operations after all trust gates pass."
+    description: "Allow trusted same-repository task/fix/implement writes after all trust gates pass."
     required: false
     default: "false"
   command:
-    description: "Optional explicit operation: review, diagnose, fix, implement, or auto."
+    description: "Optional explicit operation: task, review, diagnose, fix, implement, or auto."
     required: false
     default: "auto"
+  task-access:
+    description: "Capability requested by an explicit task: read or write. Write still requires allow-write and every policy gate."
+    required: false
+    default: "read"
   prompt:
-    description: "Additional trusted operator instructions. Repository/event content is always treated as untrusted data."
+    description: "Trusted task prompt. With command=auto on dispatch/schedule events, a non-empty prompt selects generic task mode."
     required: false
     default: ""
   dsh-version:
@@ -42,7 +46,7 @@ inputs:
     required: false
     default: "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
   timeout-minutes:
-    description: "Overall DSH worker timeout in minutes."
+    description: "Overall controller loop timeout shared by DSH turns, command tools, and validation."
     required: false
     default: "20"
   max-findings:
@@ -54,7 +58,7 @@ inputs:
     required: false
     default: "true"
   test-commands:
-    description: 'JSON array of argv arrays for trusted validation, e.g. [["npm","test"]].'
+    description: 'JSON array of credential-free argv arrays for trusted validation, e.g. [["npm","test"]]. Controller credentials in argv are rejected.'
     required: false
     default: "[]"
   base-url:
@@ -69,11 +73,23 @@ inputs:
     description: "Create or update one controller-owned sticky comment at major lifecycle stages, reusing the operation's result marker."
     required: false
     default: "true"
+  max-turns:
+    description: "Maximum fresh DSH turns across tool requests and validation repair attempts."
+    required: false
+    default: "3"
+  allowed-tools:
+    description: "JSON allowlist of workspace.read, workspace.search, workspace.edit, and configured command.<name> IDs."
+    required: false
+    default: '["workspace.read","workspace.search","workspace.edit"]'
+  tool-config:
+    description: "Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv and controller credentials in argv are rejected; common direct shell executables are also denied."
+    required: false
+    default: '{"schemaVersion":1,"commands":[]}'
 outputs:
   conclusion:
     description: "success, neutral, or failure"
   operation:
-    description: "Resolved operation"
+    description: "Resolved operation: task, review, diagnose, fix, implement, or none"
   summary:
     description: "Validated final summary for any operation, or a safe failure summary"
   review-summary:

@@ -32,6 +32,7 @@ export interface FinishImplementationInput {
   readonly operationKey: string;
   readonly result: DshRunResult;
   readonly inputs: ActionInputs;
+  readonly validationTimeoutMs?: number;
   readonly onPhase?: (phase: "validation" | "write") => void;
 }
 
@@ -44,7 +45,7 @@ export async function finishImplementation(
     repo: input.repo,
     issueNumber: input.issueNumber,
     issueState: input.issueIdentity.state,
-    issueUpdatedAt: input.issueIdentity.updatedAt,
+    issueContentFingerprint: input.issueIdentity.contentFingerprint,
     baseSha: input.boundHeadSha,
     runIdentity: input.operationKey,
   });
@@ -56,6 +57,7 @@ export async function finishImplementation(
     input.owner,
     input.repo,
     operation.branch,
+    input.baseBranch,
     operation.key,
   );
   if (completed !== null) {
@@ -90,6 +92,7 @@ export async function finishImplementation(
       input.snapshot.workerRoot,
       input.inputs.testCommands,
       input.inputs.containerImage,
+      input.validationTimeoutMs,
     );
     assertValidationSucceeded(tests);
   }

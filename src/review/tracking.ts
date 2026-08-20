@@ -1,6 +1,6 @@
 export const TRACKING_MARKER_PREFIX = "<!-- dsh-action:v1";
 
-export type TrackingKind = "summary" | "finding" | "diagnosis" | "write";
+export type TrackingKind = "summary" | "finding" | "diagnosis" | "task" | "write";
 
 export type TrackingMarker =
   { kind: "finding"; fingerprint: string } | { kind: Exclude<TrackingKind, "finding"> };
@@ -18,12 +18,13 @@ export interface TrackableComment {
 export interface TrackingIndex<T extends TrackableComment> {
   summaries: T[];
   diagnoses: T[];
+  tasks: T[];
   writes: T[];
   findings: Map<string, T>;
 }
 
 const MARKER_PATTERN =
-  /<!-- dsh-action:v1 kind=(summary|diagnosis|write|finding)(?: fingerprint=([a-f0-9]{64}))? -->/gu;
+  /<!-- dsh-action:v1 kind=(summary|diagnosis|task|write|finding)(?: fingerprint=([a-f0-9]{64}))? -->/gu;
 const RESERVED_MARKER_PATTERN = /<!--\s*dsh-action\s*:[\s\S]*?-->/giu;
 
 export function createTrackingMarker(marker: TrackingMarker): string {
@@ -67,6 +68,7 @@ export function indexTrackingComments<T extends TrackableComment>(
   const result: TrackingIndex<T> = {
     summaries: [],
     diagnoses: [],
+    tasks: [],
     writes: [],
     findings: new Map<string, T>(),
   };
@@ -86,6 +88,9 @@ export function indexTrackingComments<T extends TrackableComment>(
           break;
         case "diagnosis":
           result.diagnoses.push(comment);
+          break;
+        case "task":
+          result.tasks.push(comment);
           break;
         case "write":
           result.writes.push(comment);

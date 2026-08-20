@@ -1,4 +1,5 @@
 import type { Operation } from "../commands/parse.js";
+import type { RequestedAccess } from "../commands/parse.js";
 import type { CommandSource } from "../commands/router.js";
 import type { GitHubContext } from "../github/context.js";
 import type { PermissionCheck } from "../github/permissions.js";
@@ -8,6 +9,7 @@ export interface Capabilities {
   readonly readCi: boolean;
   readonly publishComments: boolean;
   readonly executeRepositoryCode: boolean;
+  readonly accessNetwork: boolean;
   readonly modifyWorkspace: boolean;
   readonly commit: boolean;
   readonly push: boolean;
@@ -26,6 +28,8 @@ export interface PolicyInput {
   readonly operation: Operation;
   readonly allowWrite: boolean;
   readonly permissions: PermissionCheck;
+  /** Controller-resolved intent. A model response can never upgrade this value. */
+  readonly requestedAccess?: RequestedAccess;
   /** How the operation was selected. Mentions are privileged control-plane input. */
   readonly commandSource?: CommandSource["kind"];
   /** Controller-resolved PR metadata for issue_comment events on a PR. */
@@ -39,6 +43,7 @@ const noCapabilities: Capabilities = {
   readCi: false,
   publishComments: false,
   executeRepositoryCode: false,
+  accessNetwork: false,
   modifyWorkspace: false,
   commit: false,
   push: false,
@@ -64,7 +69,9 @@ export function evaluatePolicy(input: PolicyInput): SecurityPolicy {
   const { context, operation, allowWrite, permissions } = input;
   const repositoryState = sameRepositoryState(context, input.resolvedPullRequest);
   const sameRepository = repositoryState === "same";
-  const writeRequested = operation === "fix" || operation === "implement";
+  const writeRequested =
+    input.requestedAccess === "write" ||
+    (input.requestedAccess === undefined && (operation === "fix" || operation === "implement"));
   const actorCanWrite = permissions.allActorsAllowedForWrite;
   const targetEvent = context.isPullRequestTarget;
 
@@ -148,10 +155,13 @@ export function evaluatePolicy(input: PolicyInput): SecurityPolicy {
       readCi: operation === "fix",
       publishComments: true,
       executeRepositoryCode: true,
+      accessNetwork: true,
       modifyWorkspace: true,
       commit: true,
       push: true,
-      createPullRequest: operation === "implement",
+      createPullRequest:
+        operation === "implement" ||
+        (operation === "task" && !(context.kind === "entity" && context.isPullRequest)),
     },
   };
 }

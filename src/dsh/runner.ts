@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,14 +31,18 @@ import { startDeepSeekProxy } from "./proxy.js";
 import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "./proxy.js";
 import { parseDshOutput } from "./schema.js";
 import type { DshOperation, DshOutput } from "./schema.js";
+import type { AgentToolManifest } from "../agent/contracts.js";
+import type { WorkspaceToolId } from "../tools/schema.js";
 
 const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/u;
+export const SUPPORTED_DSH_VERSIONS = ["0.1.0-rc.6"] as const;
 const PINNED_CONTAINER_IMAGE_PATTERN = /^[^\s@\0]+@sha256:[a-f0-9]{64}$/u;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const MAX_STDERR_BYTES = 2 * 1024 * 1024;
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_DSH_HOME = "/dsh-home";
 const CONTAINER_PATCH = "/opt/dsh-action/policy.patch.yml";
+const CONTAINER_TOOL_POLICY = "/opt/dsh-action/tool-policy.patch.yml";
 const CONTAINER_PACKAGE_ROOT = "/opt/dsh-action/package";
 const CONTAINER_DSH_BIN = `${CONTAINER_PACKAGE_ROOT}/node_modules/@deepseek-ai/dsh/lib/bin.js`;
 
@@ -67,7 +71,17 @@ export interface DshRunRequest {
   /** Absolute path to @deepseek-ai/dsh/lib/bin.js for isolation=none. */
   readonly dshExecutable?: string;
   readonly containerImage: string;
+  readonly toolCatalog?: readonly AgentToolManifest[];
+  readonly workspaceTools?: readonly WorkspaceToolId[];
   readonly signal?: AbortSignal;
+}
+
+/** Run-scoped installation/home reused across fresh headless turns. */
+export interface DshRuntime {
+  readonly root: string;
+  readonly dshHome: string;
+  readonly packageRoot: string;
+  installedVersion?: string;
 }
 
 export interface DshIsolationReport {
@@ -123,6 +137,32 @@ export interface DshRunDependencies {
   readonly temporaryDirectory?: string;
   readonly platform?: NodeJS.Platform;
   readonly now?: () => number;
+  readonly runtime?: DshRuntime;
+}
+
+export async function createDshRuntime(temporaryDirectory = tmpdir()): Promise<DshRuntime> {
+  const root = await mkdtemp(join(temporaryDirectory, "dsh-action-"));
+  const dshHome = join(root, "home");
+  const packageRoot = join(root, "package");
+  await mkdir(dshHome, { recursive: true });
+  await mkdir(packageRoot, { recursive: true });
+  return { root, dshHome, packageRoot };
+}
+
+export async function disposeDshRuntime(runtime: DshRuntime): Promise<void> {
+  await rm(runtime.root, { force: true, recursive: true });
+}
+
+/** Bind policy patches to DSH versions whose complete native tool surface was audited. */
+export function assertSupportedDshVersion(version: string): void {
+  if (!DSH_VERSION_PATTERN.test(version)) {
+    throw new DshConfigurationError("dshVersion must be an exact semver, not a tag or range");
+  }
+  if (!(SUPPORTED_DSH_VERSIONS as readonly string[]).includes(version)) {
+    throw new DshConfigurationError(
+      `dshVersion ${version} has no audited dsh-action policy profile; supported: ${SUPPORTED_DSH_VERSIONS.join(", ")}`,
+    );
+  }
 }
 
 /** Require an immutable OCI/Docker image reference for code-writing processes. */
@@ -386,6 +426,7 @@ function dockerSpec(
   dshHome: string,
   packageRoot: string,
   patchPath: string,
+  toolPolicyPath: string,
   prompt: string,
   environment: NodeJS.ProcessEnv,
   workerEnvironment: NodeJS.ProcessEnv,
@@ -394,9 +435,7 @@ function dockerSpec(
   if (request.containerImage.trim() === "" || request.containerImage.includes("\0")) {
     throw new DshConfigurationError("containerImage must be non-empty and contain no NUL bytes");
   }
-  if (!DSH_VERSION_PATTERN.test(request.dshVersion)) {
-    throw new DshConfigurationError("dshVersion must be an exact semver, not a tag or range");
-  }
+  assertSupportedDshVersion(request.dshVersion);
   if (request.dshExecutable !== undefined && request.dshExecutable !== "") {
     throw new DshConfigurationError(
       "dshExecutable is host-only and cannot be used with Docker isolation",
@@ -435,6 +474,8 @@ function dockerSpec(
     "--volume",
     `${patchPath}:${CONTAINER_PATCH}:ro`,
     "--volume",
+    `${toolPolicyPath}:${CONTAINER_TOOL_POLICY}:ro`,
+    "--volume",
     `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:ro`,
     "--workdir",
     CONTAINER_WORKSPACE,
@@ -451,6 +492,8 @@ function dockerSpec(
     "headless",
     "--patch",
     CONTAINER_PATCH,
+    "--patch",
+    CONTAINER_TOOL_POLICY,
     prompt,
   );
 
@@ -498,7 +541,7 @@ function dockerInstallSpec(
       "--pids-limit",
       "256",
       "--memory",
-      "2g",
+      "4g",
       "--cpus",
       "2",
       "--network",
@@ -515,6 +558,8 @@ function dockerInstallSpec(
       "HOME=/tmp",
       "--env",
       "npm_config_cache=/tmp/npm-cache",
+      "--env",
+      "NODE_OPTIONS=--max-old-space-size=3072",
       request.containerImage,
       "npm",
       "install",
@@ -540,6 +585,7 @@ function localSpec(
   request: DshRunRequest,
   workspace: string,
   patchPath: string,
+  toolPolicyPath: string,
   prompt: string,
   workerEnvironment: NodeJS.ProcessEnv,
 ): DshProcessSpec {
@@ -552,16 +598,24 @@ function localSpec(
   }
   return {
     command: process.execPath,
-    args: ["--expose-internals", executable, "--profile", "headless", "--patch", patchPath, prompt],
+    args: [
+      "--expose-internals",
+      executable,
+      "--profile",
+      "headless",
+      "--patch",
+      patchPath,
+      "--patch",
+      toolPolicyPath,
+      prompt,
+    ],
     cwd: workspace,
     env: workerEnvironment,
   };
 }
 
 function isolationReport(request: DshRunRequest): DshIsolationReport {
-  const repoToolsEnabled =
-    request.trust === "trusted-write" ||
-    (request.trust === "trusted-read" && request.isolation === "docker");
+  const repoToolsEnabled = effectiveWorkspaceTools(request).length > 0;
   if (request.isolation === "docker") {
     return {
       backend: "docker",
@@ -591,6 +645,41 @@ function isolationReport(request: DshRunRequest): DshIsolationReport {
   };
 }
 
+function defaultWorkspaceTools(request: DshRunRequest): readonly WorkspaceToolId[] {
+  if (request.trust === "trusted-write") {
+    return ["workspace.read", "workspace.search", "workspace.edit"];
+  }
+  if (request.trust === "trusted-read" && request.isolation === "docker") {
+    return ["workspace.read", "workspace.search"];
+  }
+  return [];
+}
+
+function effectiveWorkspaceTools(request: DshRunRequest): readonly WorkspaceToolId[] {
+  const requested = request.workspaceTools ?? defaultWorkspaceTools(request);
+  if (request.trust === "untrusted") return [];
+  if (request.trust === "trusted-read" && request.isolation !== "docker") return [];
+  return requested.filter((tool) => tool !== "workspace.edit" || request.trust === "trusted-write");
+}
+
+async function writeToolPolicy(runtime: DshRuntime, request: DshRunRequest): Promise<string> {
+  const enabled = new Set(effectiveWorkspaceTools(request));
+  const rows: string[] = [];
+  for (const [tool, row] of [
+    ["workspace.read", "tool-fs"],
+    ["workspace.search", "tool-fs-search"],
+    ["workspace.edit", "tool-str-replace-editor"],
+  ] as const) {
+    if (!enabled.has(tool)) rows.push(`- id: ${row}\n  disabled: true`);
+  }
+  const path = join(runtime.root, `tool-policy-${randomUUID()}.patch.yml`);
+  await writeFile(path, rows.length === 0 ? "[]\n" : `${rows.join("\n\n")}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  return path;
+}
+
 function controllerSecrets(
   request: DshRunRequest,
   environment: NodeJS.ProcessEnv,
@@ -605,6 +694,7 @@ export async function runDsh(
   request: DshRunRequest,
   dependencies: DshRunDependencies = {},
 ): Promise<DshRunResult> {
+  assertSupportedDshVersion(request.dshVersion);
   positiveInteger(request.timeoutMs, "timeoutMs");
   positiveInteger(request.maxOutputBytes, "maxOutputBytes");
   if (request.apiKey.trim() === "") throw new DshConfigurationError("apiKey must be non-empty");
@@ -640,10 +730,16 @@ export async function runDsh(
       ? {}
       : { trustedInstructions: request.trustedInstructions }),
     trust: request.trust,
+    toolCatalog: request.toolCatalog ?? [],
     maxBytes: platform === "win32" ? WINDOWS_MAX_PROMPT_BYTES : DEFAULT_MAX_PROMPT_BYTES,
   });
 
-  const tempRoot = await mkdtemp(join(dependencies.temporaryDirectory ?? tmpdir(), "dsh-action-"));
+  const ownsRuntime = dependencies.runtime === undefined;
+  const runtime =
+    dependencies.runtime ?? (await createDshRuntime(dependencies.temporaryDirectory ?? tmpdir()));
+  if (runtime.installedVersion !== undefined && runtime.installedVersion !== request.dshVersion) {
+    throw new DshConfigurationError("A reused DSH runtime cannot change dshVersion");
+  }
   let proxy: DeepSeekProxyHandle | undefined;
   const secrets = controllerSecrets(request, environment);
   try {
@@ -658,10 +754,9 @@ export async function runDsh(
       maxResponseBytes: request.maxOutputBytes,
     });
 
-    const localDshHome = join(tempRoot, "home");
-    const packageRoot = join(tempRoot, "package");
-    await mkdir(localDshHome, { recursive: true });
-    await mkdir(packageRoot, { recursive: true });
+    const localDshHome = runtime.dshHome;
+    const packageRoot = runtime.packageRoot;
+    const toolPolicyPath = await writeToolPolicy(runtime, request);
     const workerEnvironment = buildDshWorkerEnvironment({
       source: environment,
       dshHome: localDshHome,
@@ -675,7 +770,7 @@ export async function runDsh(
     const execute =
       dependencies.executeProcess ??
       ((processSpec, limits) => executeBoundedDshProcess(processSpec, limits, platform));
-    if (docker) {
+    if (docker && runtime.installedVersion === undefined) {
       const elapsedBeforeInstall = Math.max(0, now() - startedAt);
       const installRemainingMs = request.timeoutMs - elapsedBeforeInstall;
       if (installRemainingMs <= 0) throw new DshTimeoutError(request.timeoutMs);
@@ -704,6 +799,7 @@ export async function runDsh(
           redactKnownSecrets(installResult.stderr.trim(), secrets),
         );
       }
+      runtime.installedVersion = request.dshVersion;
     }
 
     const spec = docker
@@ -713,12 +809,13 @@ export async function runDsh(
           localDshHome,
           packageRoot,
           patchPath,
+          toolPolicyPath,
           prompt,
           environment,
           workerEnvironment,
           proxy,
         )
-      : localSpec(request, workspace, patchPath, prompt, workerEnvironment);
+      : localSpec(request, workspace, patchPath, toolPolicyPath, prompt, workerEnvironment);
     assertSecretAbsent(spec.env, request.apiKey, "real DeepSeek API key");
     if (spec.args.some((argument) => argument.includes(request.apiKey))) {
       throw new DshConfigurationError("Real DeepSeek API key was found in DSH argv");
@@ -765,7 +862,7 @@ export async function runDsh(
     try {
       await proxy?.close();
     } finally {
-      await rm(tempRoot, { force: true, recursive: true });
+      if (ownsRuntime) await disposeDshRuntime(runtime);
     }
   }
 }

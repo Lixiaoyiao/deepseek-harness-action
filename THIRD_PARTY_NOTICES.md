@@ -4,6 +4,11 @@ Parts of the GitHub integration architecture and selected utility code are
 derived from [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action)
 at commit `dc33e8a15b19e2109ac3fa8329058842f63780dc`.
 
+The v0.3 controller-loop and future-extension design was also reviewed against
+upstream commit `d721746d683d812e669ce117cebe55a85fbd9c3e`. No Claude SDK,
+MCP server, plugin runtime or session token implementation is bundled by that
+reference.
+
 ## Claude Code Action
 
 MIT License

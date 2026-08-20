@@ -114,11 +114,11 @@ export async function findPullRequestByOperation(
   validateRefName(head);
   validateRefName(base);
   if (
-    !/^<!-- dsh-action:implement:v1 operation=[a-f0-9]{24} snapshot=[a-f0-9]{24} -->$/u.test(
+    !/^<!-- dsh-action:(?:implement|task):v1 operation=[a-f0-9]{24} snapshot=[a-f0-9]{24} -->$/u.test(
       reconciliationMarker,
     )
   ) {
-    throw new Error("Invalid implementation reconciliation marker");
+    throw new Error("Invalid pull request reconciliation marker");
   }
   const response = await client.rest.pulls.list({
     owner,
@@ -152,14 +152,17 @@ export async function findPullRequestByOperationKey(
   owner: string,
   repo: string,
   head: string,
+  base: string,
   operationKey: string,
 ): Promise<ReconciledPullRequest | null> {
   validateRefName(head);
+  validateRefName(base);
   if (!/^[a-f0-9]{24}$/u.test(operationKey)) throw new Error("Invalid operation key");
   const response = await client.rest.pulls.list({
     owner,
     repo,
     head: `${owner}:${head}`,
+    base,
     state: "all",
     per_page: 100,
   });
@@ -169,7 +172,59 @@ export async function findPullRequestByOperationKey(
     "u",
   );
   for (const candidate of response.data) {
-    if (candidate.head.ref !== head || candidate.head.repo.full_name.toLowerCase() !== fullName) {
+    if (
+      candidate.head.ref !== head ||
+      candidate.base.ref !== base ||
+      candidate.head.repo.full_name.toLowerCase() !== fullName ||
+      candidate.base.repo.full_name.toLowerCase() !== fullName
+    ) {
+      continue;
+    }
+    const snapshotFingerprint = marker.exec(candidate.body ?? "")?.[1];
+    if (snapshotFingerprint !== undefined) {
+      return {
+        number: candidate.number,
+        url: candidate.html_url,
+        headSha: validateCommitSha(candidate.head.sha),
+        snapshotFingerprint,
+      };
+    }
+  }
+  return null;
+}
+
+/** Reconcile a completed generic automation task by stable run/task identity. */
+export async function findTaskPullRequestByOperationKey(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+  operationKey: string,
+): Promise<ReconciledPullRequest | null> {
+  validateRefName(head);
+  validateRefName(base);
+  if (!/^[a-f0-9]{24}$/u.test(operationKey)) throw new Error("Invalid operation key");
+  const response = await client.rest.pulls.list({
+    owner,
+    repo,
+    head: `${owner}:${head}`,
+    base,
+    state: "all",
+    per_page: 100,
+  });
+  const fullName = `${owner}/${repo}`.toLowerCase();
+  const marker = new RegExp(
+    `<!-- dsh-action:task:v1 operation=${operationKey} snapshot=([a-f0-9]{24}) -->`,
+    "u",
+  );
+  for (const candidate of response.data) {
+    if (
+      candidate.head.ref !== head ||
+      candidate.base.ref !== base ||
+      candidate.head.repo.full_name.toLowerCase() !== fullName ||
+      candidate.base.repo.full_name.toLowerCase() !== fullName
+    ) {
       continue;
     }
     const snapshotFingerprint = marker.exec(candidate.body ?? "")?.[1];

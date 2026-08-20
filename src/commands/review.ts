@@ -16,12 +16,15 @@ export async function finishReview(
   result: DshRunResult,
   maxFindings: number,
 ): Promise<PublicationResult> {
+  if (result.output.operation !== "review") {
+    throw new Error(`Review finalizer received ${result.output.operation} output`);
+  }
   return publishPullRequestReview(
     client,
     target,
     snapshot,
     {
-      operation: result.output.operation,
+      operation: "review",
       summary: result.output.summary,
       findings: result.output.findings,
       ...(result.output.diagnosis === undefined ? {} : { diagnosis: result.output.diagnosis }),

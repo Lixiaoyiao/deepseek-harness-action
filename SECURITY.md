@@ -16,8 +16,11 @@ GitHub. A trusted actor never makes repository content trusted.
 
 The checked-in workflow configuration and explicit action inputs are trusted
 control-plane configuration. An interactive command is recognized only from
-the first line of the triggering comment or review; its parsed remainder is
-treated as operator instruction only after authorization.
+the first line of the triggering comment or review. After authorization, the
+parsed first-line remainder and all subsequent command-body lines are treated
+as operator instructions. An authorized operator must not paste untrusted
+Issue text, logs or third-party output into that command body without accepting
+that control-plane promotion.
 
 - Interactive `@dsh` commands require every originating actor to have
   write/maintain/admin repository permission. Permission lookup failures deny
@@ -35,6 +38,27 @@ treated as operator instruction only after authorization.
 The controller creates a lifecycle comment only after the operation is allowed
 and a pull request or issue target has been resolved. A denied request therefore
 cannot use progress tracking to generate bot comment spam.
+
+#### Explicit prompts are trusted control-plane input
+
+The `prompt` action input is deliberately treated as maintainer-authored
+instruction. GitHub evaluates `${{ ... }}` expressions before the action starts,
+so the action cannot recover the provenance of an interpolated value. Do not put
+event-controlled data into `prompt`, for example:
+
+```yaml
+with:
+  command: task
+  prompt: ${{ github.event.issue.body }} # unsafe: issue text becomes instruction
+```
+
+The same rule applies to capability-bearing inputs such as `command`,
+`task-access`, `allow-write`, `allowed-tools`, `tool-config`, `run-tests` and
+`test-commands`: keep them literal or derive them only from trusted workflow
+configuration. In particular, do not interpolate pull request titles/bodies,
+comments, CI output, repository files or a serialized event into those inputs.
+Let the action fetch event and repository context itself; it will place those
+bytes in the bounded untrusted-data channel.
 
 ### 2. Input and data trust
 
@@ -54,17 +78,21 @@ controller instructions.
 - Failure messages exposed in comments, step summaries and outputs are redacted
   and bounded. The versioned `result-json` envelope is observability data, not
   an authorization input.
+- A successful controller tool does not make its stdout or stderr trustworthy.
+  Tool results are redacted, byte-bounded, labelled by the controller and fed
+  back only as untrusted repair evidence. Repository code may print prompt
+  injection text even when the configured command itself is trusted.
 
 ### 3. Worker trust and execution profiles
 
 `untrusted`, `trusted-read` and `trusted-write` name effective execution
 profiles. They do not classify repository bytes as trustworthy.
 
-| Profile         | Repository access                                       | Worker tools                                                            | Repository code execution                                               | GitHub authority |
-| --------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------- |
-| `untrusted`     | None                                                    | No filesystem, shell, web, skills, repository instructions or subagents | Disabled                                                                | None             |
-| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Read/search only                                                        | Disabled                                                                | None             |
-| `trusted-write` | Read/write `.git`-less copy                             | Read/search/edit only; shell and web remain disabled                    | Disabled in DSH; only configured controller validation may execute code | None             |
+| Profile         | Repository access                                       | Worker tools                                                            | Repository code execution                                                                    | GitHub authority |
+| --------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------- |
+| `untrusted`     | None                                                    | No filesystem, shell, web, skills, repository instructions or subagents | Disabled                                                                                     | None             |
+| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Read/search only                                                        | Disabled                                                                                     | None             |
+| `trusted-write` | Read/write `.git`-less copy                             | Read/search/edit only; shell and web remain disabled                    | Disabled in DSH; fixed-argv tools and final validation run in separate controller containers | None             |
 
 Fork and other untrusted runs require Docker isolation. Trusted writes also
 require Docker and a full `name@sha256:<64 lowercase hex>` image reference. The
@@ -75,6 +103,33 @@ DSH receives an ephemeral proxy token. A controller-side proxy injects the real
 DeepSeek key only while forwarding the fixed chat-completions endpoint. The
 actual backend, workspace access and known limitations are recorded in the
 structured isolation report rather than inferred from the requested profile.
+
+#### Maintainer-defined controller tools
+
+v0.3 command tools are fixed-argv controller capabilities. A maintainer defines
+the executable and every argument in versioned `tool-config`, then separately
+allowlists the resulting `command.<name>` ID. The model may select an advertised
+ID and give a reason, but the v0.3 command provider rejects model-supplied
+arguments and never gives DSH a shell. Direct shell interpreters are rejected at
+configuration parsing as an additional guard; the primary boundary is that all
+argv bytes are trusted workflow configuration, not model output.
+
+Each command tool runs in a named, hardened, credential-free container with a
+read-only container root, dropped capabilities, `no-new-privileges`, resource
+limits and bounded output. The effective tool set is the intersection of the
+maintainer configuration, `allowed-tools` and the controller policy:
+
+- `workspaceAccess` defaults to `read`, which mounts the `.git`-less worker copy
+  read-only. `write` must be explicit and is unavailable without the
+  `modifyWorkspace` capability.
+- `network` defaults to `none`. `bridge` must be explicit and is unavailable
+  without the controller's network capability. Bridge networking is not a
+  destination allowlist and may expose repository contents to arbitrary egress
+  destinations permitted by the runner network.
+- The real GitHub token and DeepSeek key are never placed in the command
+  container. Input validation rejects either controller credential if a trusted
+  workflow interpolates it into command-tool or validation argv. Command output
+  remains untrusted even though the argv is trusted.
 
 ### 4. Controller and commit authority
 
@@ -88,8 +143,17 @@ mutation.
 - Validation commands are fixed workflow argv arrays, never model-provided
   shell text. They run only after all trusted-write gates in a disposable,
   credential-free container. A validation failure or timeout prevents the
-  branch update or pull request creation.
-- The controller owns the `summary`, `diagnosis` and `write` sticky markers.
+  branch update or pull request creation. The validation copy excludes the
+  root `.git` and `node_modules` directories because those generated paths are
+  also excluded from the publishable change set.
+- Entity-free automation and issue-backed `task` writes never push directly to
+  the repository default branch. They bind the default-branch head as an
+  immutable base, then create a controller-owned task branch and pull request.
+  A task attached to an existing pull request follows the separately authorized
+  same-repository PR-head fix path, which rejects a head ref equal to the
+  repository default branch. Merging a task PR into the default branch remains
+  a separate repository action.
+- The controller owns the `summary`, `diagnosis`, `write` and `task` sticky markers.
   Progress reuses the applicable final-result marker and updates it in place;
   `progress-comment=false` disables lifecycle updates without weakening any
   authorization or validation gate.
@@ -128,19 +192,32 @@ eligible trusted-read operation, no operating-system process boundary exists;
 use that mode only on a dedicated trusted runner. Untrusted and trusted-write
 profiles still require Docker.
 
-The credential-free validation container has network access for dependency
-installation. Use immutable lockfiles and pin package registries and container
-images where the threat model requires reproducible dependencies.
+The credential-free validation container uses Docker bridge networking for
+dependency installation. That is unrestricted destination egress from the
+container, not merely registry access, and validation executes untrusted
+repository code. Use immutable lockfiles, pinned registries/images and a runner
+egress policy when source confidentiality or reproducibility requires it.
+
+Each validation command receives a random container name and `--rm`. On a
+launch error or timeout the controller also attempts `docker rm --force`, and
+the temporary validation workspace is removed in a `finally` block. Cleanup is
+best effort: a hard runner termination or unavailable Docker daemon can leave a
+named `dsh-action-validation-*` or `dsh-action-tool-*` container for the runner
+operator to reap. Cleanup failure never grants write authority and must not hide
+the primary task result.
 
 The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard is deferred beyond this v0.2.0 slice.
+A marker-level freshness guard is deferred beyond this v0.3.0 release.
 
-`@deepseek-ai/dsh` is installed at the exact configured version inside an
-ephemeral container that has no repository mount and no credentials. Its
-audited native dependency requires install scripts on Linux, and its transitive
-npm dependency graph is currently resolved at run time. Production users should
-mirror the package in a trusted registry or prebuild and pin a reviewed
-container image when supply-chain reproducibility is required.
+v0.3 binds its policy patches to the exact DSH version whose complete native
+tool surface was audited. It currently accepts only `@deepseek-ai/dsh`
+`0.1.0-rc.6`; another tag, range or exact version is rejected until a matching
+profile is reviewed and shipped. DSH is installed inside an ephemeral container
+that has no repository mount and no controller credentials. Its audited native
+dependency requires install scripts on Linux, and its transitive npm dependency
+graph is currently resolved at run time. Production users should mirror the
+package in a trusted registry or prebuild and pin a reviewed container image
+when supply-chain reproducibility is required.
