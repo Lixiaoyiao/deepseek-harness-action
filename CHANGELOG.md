@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-08-21
 
 ### Added
 
@@ -46,15 +46,17 @@ versioning for published action releases.
 
 ### Compatibility
 
-- All v0.2 inputs remain valid. `command: auto` keeps the established automatic
-  review and `workflow_run` diagnose/fix routing; the new task inputs have
-  conservative defaults (`task-access: read`, `max-turns: 3`, and no configured
-  command tools).
+- The v0.2 input names and defaults remain compatible. `command: auto` keeps
+  the established automatic review and `workflow_run` diagnose/fix routing;
+  the new task inputs have conservative defaults (`task-access: read`,
+  `max-turns: 3`, and no configured command tools).
 - The v0.2 scalar outputs and schema-v1 `result-json` envelope remain available.
   `task` is an additional `operation` value, and loop metadata is additive.
-- Existing released examples remain pinned to the immutable v0.2.0 action SHA.
-  The new task-automation example is marked as a planned v0.3 interface and
-  must be pinned to the immutable v0.3 release SHA after publication.
+- The Quick start and all current examples are pinned to the immutable v0.3.0
+  runtime commit exercised by the release checks.
+- Configurations that embed controller credentials in configured argv, or
+  depend on generated root `.git`/`node_modules` content entering validation,
+  now fail closed.
 
 ### Security
 
@@ -66,8 +68,14 @@ versioning for published action releases.
   credential-free hardened container, and exposed only when both policy and
   `allowed-tools` permit it. Tool output is untrusted feedback and is redacted
   and bounded before another model turn.
+- Controller credentials are rejected if a maintainer embeds them in command
+  tool or validation argv. Validation also excludes generated root `.git` and
+  `node_modules` content that cannot be included in the published change.
 - Generic task automation rebinding checks the default-branch head before
   validation, commit, branch creation and pull-request creation.
+- Issue-backed writes bind the issue's trusted content and state while allowing
+  controller-owned sticky-comment updates; specification edits still fail
+  closed before publication.
 
 ### Deferred
 
@@ -161,6 +169,6 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
-[0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.1.0

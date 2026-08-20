@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+const RELEASE_RUNTIME_SHA = "8eaaa7777a4756c5e519e791b6613b302fc0a92e";
+
 describe("Marketplace action metadata", () => {
   it("uses the supported Node 24 runtime and ships the declared bundle", async () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
@@ -58,26 +60,28 @@ describe("Marketplace action metadata", () => {
       "container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
     );
     for (const relativePath of [
+      "../README.md",
+      "../README.zh-CN.md",
       "../examples/fork-review.yml",
       "../examples/commands.yml",
       "../examples/ci-diagnose.yml",
       "../examples/ci-auto-fix.yml",
+      "../examples/task-automation.yml",
     ]) {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
-      expect(example).not.toContain("uses: ./");
-      expect(example).toContain(
-        "uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b",
-      );
+      expect(example).toContain(`uses: Lixiaoyiao/deepseek-harness-action@${RELEASE_RUNTIME_SHA}`);
     }
   });
 
   it("ships release examples without reference placeholders", async () => {
     for (const relativePath of [
       "../README.md",
+      "../README.zh-CN.md",
       "../examples/fork-review.yml",
       "../examples/commands.yml",
       "../examples/ci-diagnose.yml",
       "../examples/ci-auto-fix.yml",
+      "../examples/task-automation.yml",
     ]) {
       const document = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(document).not.toMatch(
@@ -86,17 +90,19 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("marks the v0.3 task example as pre-release and exercises the new inputs", async () => {
+  it("ships the v0.3.0 task example with a pinned runtime and safe named tool", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
     );
-    expect(example).toContain("deepseek-harness-action@v0.3");
-    expect(example).toContain("exact immutable action commit SHA");
+    expect(example).toContain(`deepseek-harness-action@${RELEASE_RUNTIME_SHA}`);
+    expect(example).not.toMatch(/planned|@v0\.3(?:\s|$)/iu);
     expect(example).toContain("task-access:");
     expect(example).toContain("max-turns:");
     expect(example).toContain("allowed-tools:");
     expect(example).toContain("tool-config:");
+    expect(example).toContain("command.bundle-syntax");
+    expect(example).toContain('"argv": ["node", "--check", "dist/index.js"]');
     expect(example).toContain('"workspaceAccess": "read"');
     expect(example).toContain('"network": "none"');
   });

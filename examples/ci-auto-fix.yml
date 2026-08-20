@@ -1,5 +1,5 @@
 # Copy this file to .github/workflows/dsh-ci-auto-fix.yml. The action and
-# validation image are pinned to the v0.2.0 audited release inputs.
+# validation image are pinned to the v0.3.0 audited release inputs.
 name: DSH trusted CI auto-fix
 
 on:
@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b
+      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "true"

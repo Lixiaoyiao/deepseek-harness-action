@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b # v0.2.0
+      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +68,7 @@ Open a non-draft pull request. The action reads the diff and repository context,
 
 See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
-> v0.2.0 is released. The Quick start above and the existing v0.2 templates remain pinned to the immutable runtime commit exercised by the real E2E release checks; that SHA does not include the v0.3 features described below. The new [`examples/task-automation.yml`](examples/task-automation.yml) is explicitly marked as a planned v0.3 interface. Replace its tag with the immutable release commit after publication. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
+> v0.3.0 is released. The Quick start above and all current templates are pinned to the immutable v0.3.0 runtime commit exercised by the release checks. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
 
 ## What it does
 
@@ -88,11 +88,11 @@ The command must be on the first line of the comment. Ready-to-copy workflows ar
 - [`examples/commands.yml`](examples/commands.yml) for `@dsh` commands, fixes, and Issue → PR
 - [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml) for failed CI diagnosis
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml) for trusted CI auto-fix
-- [`examples/task-automation.yml`](examples/task-automation.yml) for the planned v0.3 explicit-prompt automation interface
+- [`examples/task-automation.yml`](examples/task-automation.yml) for v0.3 explicit-prompt automation
 
 Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"` and define validation commands. See [`action.yml`](action.yml) for all inputs.
 
-## General tasks and explicit automation (v0.3.0 development preview)
+## General tasks and explicit automation
 
 `task` is not limited to the review, diagnose, fix, or implement templates. It can answer natural-language questions, inspect a repository, or carry out a coding task:
 
@@ -112,7 +112,7 @@ with:
   task-access: read
 ```
 
-`prompt` is trusted control-plane configuration. Populate it only from a maintainer-authored workflow or a trusted dispatch input; do not silently promote issue bodies, pull-request content, logs, or other untrusted data into `prompt`. See [`examples/task-automation.yml`](examples/task-automation.yml) for a complete read/write dispatch template. It uses a planned `@v0.3` interface placeholder and must be pinned to an immutable commit SHA after the release.
+`prompt` is trusted control-plane configuration. Populate it only from a maintainer-authored workflow or a trusted dispatch input; do not silently promote issue bodies, pull-request content, logs, or other untrusted data into `prompt`. See [`examples/task-automation.yml`](examples/task-automation.yml) for a complete read/write dispatch template pinned to the immutable v0.3.0 runtime commit.
 
 A read-only automation task without an issue or pull-request entity returns its answer through the step summary and outputs. A write task with no entity, or one targeting an issue, creates a dedicated `dsh/task-*` branch and pull request; the controller never pushes general automation changes directly to the default branch. An authorized task on a same-repository pull request can affect only the target branch that the controller bound and revalidated.
 
@@ -136,14 +136,14 @@ The model cannot assemble arbitrary shell commands. A maintainer defines the com
 
 ```yaml
 with:
-  allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.unit-tests"]'
+  allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.bundle-syntax"]'
   tool-config: |
     {
       "schemaVersion": 1,
       "commands": [{
-        "name": "unit-tests",
-        "description": "Run the repository unit-test command",
-        "argv": ["npm", "test"],
+        "name": "bundle-syntax",
+        "description": "Check the bundled JavaScript syntax without installing dependencies",
+        "argv": ["node", "--check", "dist/index.js"],
         "timeoutMinutes": 10,
         "maxOutputBytes": 131072,
         "maxCalls": 2,
@@ -163,7 +163,7 @@ These are extension seams only: **v0.3.0 does not enable real MCP servers, plugi
 
 See [`docs/extension-contracts.md`](docs/extension-contracts.md) for protocol versioning, tool routing, session binding, and the security responsibilities future providers must satisfy.
 
-Existing v0.2 inputs, scalar outputs, and the schema-v1 `result-json` envelope remain valid. `command: auto` preserves automatic review and `workflow_run` diagnose/fix routing. v0.3 only adds the `task` operation and optional loop metadata; `task-access: read`, `max-turns: 3`, and an empty command manifest are the defaults, so existing workflows do not need to opt into the new capabilities. The v0.2.0 SHA shown above still represents v0.2.0 only.
+Existing v0.2 input names and defaults, scalar outputs, and the schema-v1 `result-json` envelope remain compatible. `command: auto` preserves automatic review and `workflow_run` diagnose/fix routing. v0.3 only adds the `task` operation and optional loop metadata; `task-access: read`, `max-turns: 3`, and an empty command manifest are the defaults, so existing workflows do not need to opt into the new capabilities. Configurations that embed controller credentials in configured argv, or depend on generated root `.git`/`node_modules` content entering validation, now fail closed. The current Quick start and examples are pinned to the immutable v0.3.0 runtime commit.
 
 ## Progress and structured outputs
 

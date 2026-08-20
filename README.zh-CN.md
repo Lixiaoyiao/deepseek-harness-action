@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@50580590de152abcc3bd81c07b26dd632b76360b # v0.2.0
+      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +68,7 @@ jobs:
 
 完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
 
-> v0.2.0 已发布。上面的 Quick start 和现有 v0.2 模板仍固定到本次真实 E2E 验证过的不可变 runtime commit SHA，不代表该 SHA 已包含下述 v0.3 功能。新增的 [`examples/task-automation.yml`](examples/task-automation.yml) 明确标记为拟发布 v0.3 接口；发布后应把 tag 换成不可变 commit SHA。完整 release notes 见 [`CHANGELOG.md`](CHANGELOG.md)。
+> v0.3.0 已发布。上面的 Quick start 和所有当前模板均固定到 release checks 所验证的不可变 v0.3.0 runtime commit。完整 release notes 见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 能做什么
 
@@ -88,11 +88,11 @@ jobs:
 - [`examples/commands.yml`](examples/commands.yml)：`@dsh` 命令、修复和 Issue → PR
 - [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml)：CI 失败诊断
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml)：受信任的 CI 自动修复
-- [`examples/task-automation.yml`](examples/task-automation.yml)：拟发布 v0.3 的显式 prompt 通用自动化
+- [`examples/task-automation.yml`](examples/task-automation.yml)：v0.3 显式 prompt 通用自动化
 
 `fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`，并配置测试命令。详细输入见 [`action.yml`](action.yml)。
 
-## 通用 task 与显式自动化（v0.3.0 开发预览）
+## 通用 task 与显式自动化
 
 `task` 不把工作限制在 review、diagnose、fix 或 implement 模板内。它既能回答自然语言问题，也能阅读仓库或执行编码任务：
 
@@ -112,7 +112,7 @@ with:
   task-access: read
 ```
 
-`prompt` 属于受信任 control-plane 配置，只应来自维护者写入的 workflow 或受信任的 dispatch 输入；不要把 Issue 正文、PR 内容、日志或其他不可信数据未经区分地提升为 `prompt`。完整的读/写 dispatch 模板见 [`examples/task-automation.yml`](examples/task-automation.yml)。该模板使用拟发布的 `@v0.3` 接口占位，正式发布后必须固定到不可变 commit SHA。
+`prompt` 属于受信任 control-plane 配置，只应来自维护者写入的 workflow 或受信任的 dispatch 输入；不要把 Issue 正文、PR 内容、日志或其他不可信数据未经区分地提升为 `prompt`。固定到不可变 v0.3.0 runtime commit 的完整读/写 dispatch 模板见 [`examples/task-automation.yml`](examples/task-automation.yml)。
 
 无 Issue/PR 实体的只读自动化会通过 step summary 和 outputs 返回回答。无实体或以 Issue 为目标的写 task 会创建独立 `dsh/task-*` 分支和 PR；controller 不会把通用自动化改动直接推到默认分支。PR 上获准的同仓库写 task 仍只作用于 controller 绑定并重新校验过的目标分支。
 
@@ -136,14 +136,14 @@ DSH 不能直接运行 shell，也不持有 GitHub 或 DeepSeek 凭据。control
 
 ```yaml
 with:
-  allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.unit-tests"]'
+  allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.bundle-syntax"]'
   tool-config: |
     {
       "schemaVersion": 1,
       "commands": [{
-        "name": "unit-tests",
-        "description": "Run the repository unit-test command",
-        "argv": ["npm", "test"],
+        "name": "bundle-syntax",
+        "description": "Check the bundled JavaScript syntax without installing dependencies",
+        "argv": ["node", "--check", "dist/index.js"],
         "timeoutMinutes": 10,
         "maxOutputBytes": 131072,
         "maxCalls": 2,
@@ -163,7 +163,7 @@ v0.3 在 controller 内部固定了 protocol v1 的 `AgentEngine`、`ToolProvide
 
 协议版本、tool routing、session binding 与未来 provider 必须满足的安全责任见 [`docs/extension-contracts.md`](docs/extension-contracts.md)。
 
-v0.2 的既有 inputs、scalar outputs 和 schema-v1 `result-json` envelope 继续有效；`command: auto` 保持原来的自动 review 与 `workflow_run` diagnose/fix 路由。v0.3 只新增 `task` operation 和可选 loop metadata，默认 `task-access: read`、`max-turns: 3`，且 command manifest 为空，因此现有 workflow 不需要为新能力改写。上面的 v0.2.0 SHA 示例仍然只代表 v0.2.0。
+v0.2 的 input 名称和默认值、scalar outputs 与 schema-v1 `result-json` envelope 保持兼容；`command: auto` 保持原来的自动 review 与 `workflow_run` diagnose/fix 路由。v0.3 只新增 `task` operation 和可选 loop metadata，默认 `task-access: read`、`max-turns: 3`，且 command manifest 为空，因此现有 workflow 不需要为新能力改写。把 controller 凭据嵌入已配置 argv，或依赖根目录生成的 `.git`/`node_modules` 内容进入验证的配置现在会 fail closed。当前 Quick start 和 examples 均固定到不可变 v0.3.0 runtime commit。
 
 ## 运行进度与结构化输出
 
