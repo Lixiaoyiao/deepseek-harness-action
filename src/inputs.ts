@@ -37,8 +37,8 @@ const argvListInput = z.string().transform((value, context): readonly (readonly 
 });
 
 const actionInputsSchema = z.object({
-  deepseekApiKey: z.string().min(1, "deepseek-api-key is required"),
-  githubToken: z.string().min(1, "github-token is required"),
+  deepseekApiKey: z.string().min(8, "deepseek-api-key must be at least 8 characters"),
+  githubToken: z.string().min(8, "github-token must be at least 8 characters"),
   allowWrite: booleanInput,
   command: z.enum(["auto", "task", "review", "diagnose", "fix", "implement"]),
   taskAccess: z.enum(["read", "write"]),
@@ -111,9 +111,7 @@ function optionalInput(reader: InputReader, name: string, fallback: string): str
 }
 
 function assertControllerSecretsAbsentFromArgv(inputs: ActionInputs): void {
-  const secrets = [inputs.deepseekApiKey, inputs.githubToken].filter(
-    (secret) => Buffer.byteLength(secret, "utf8") >= 8,
-  );
+  const secrets = [inputs.deepseekApiKey, inputs.githubToken];
   const configuredArgv = [
     ...inputs.testCommands,
     ...inputs.toolConfig.commands.map(({ argv }) => argv),

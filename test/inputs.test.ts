@@ -9,8 +9,8 @@ describe("loadInputs", () => {
   it("applies defaults and decodes argv without shell parsing", () => {
     const result = loadInputs(
       reader({
-        "deepseek-api-key": "key",
-        "github-token": "gh",
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
         "test-commands": '[["npm","test"],["node","script with spaces.js"]]',
       }),
     );
@@ -41,18 +41,30 @@ describe("loadInputs", () => {
     ["allowed-tools", '["command.missing"]'],
   ])("rejects invalid %s", (name, value) => {
     expect(() =>
-      loadInputs(reader({ "deepseek-api-key": "key", "github-token": "gh", [name]: value })),
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          [name]: value,
+        }),
+      ),
     ).toThrow(/Invalid action inputs/u);
   });
 
   it("requires an explicit prompt for command=task and cross-validates command tools", () => {
     expect(() =>
-      loadInputs(reader({ "deepseek-api-key": "key", "github-token": "gh", command: "task" })),
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          command: "task",
+        }),
+      ),
     ).toThrow(/prompt is required/u);
     const result = loadInputs(
       reader({
-        "deepseek-api-key": "key",
-        "github-token": "gh",
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
         command: "task",
         prompt: "run the checks",
         "task-access": "write",
@@ -75,10 +87,14 @@ describe("loadInputs", () => {
         reader({
           "deepseek-api-key": deepseekKey,
           "github-token": githubToken,
-          "test-commands": JSON.stringify([["node", "check.js", githubToken]]),
+          "test-commands": JSON.stringify([["node", "check.js", `--token=${githubToken}`]]),
         }),
       ),
     ).toThrow(/credentials must not appear/u);
+
+    expect(() =>
+      loadInputs(reader({ "deepseek-api-key": "short", "github-token": "also-short" })),
+    ).toThrow(/at least 8 characters/u);
 
     expect(() =>
       loadInputs(
