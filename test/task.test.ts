@@ -94,7 +94,14 @@ const taskInput = () => ({
   testCommands: [["npm", "test"]] as const,
   containerImage: `node@sha256:${"f".repeat(64)}`,
   validationTimeoutMs: 30_000,
-  relatedIssue: { number: 7, identity: { state: "open", updatedAt: "2026-08-15" } },
+  relatedIssue: {
+    number: 7,
+    identity: {
+      state: "open",
+      updatedAt: "2026-08-15",
+      contentFingerprint: "f".repeat(64),
+    },
+  },
 });
 
 beforeEach(() => {

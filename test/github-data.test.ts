@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { GitHubClient } from "../src/github/client.js";
+import { issueContentFingerprint } from "../src/github/issue-identity.js";
 import {
   fetchIssueSnapshot,
   fetchPullRequestSnapshot,
@@ -197,7 +198,7 @@ describe("GitHub data snapshotting", () => {
           number: 7,
           title: "Issue",
           body: "body",
-          user: { login: "alice" },
+          user: { id: 1, login: "alice" },
           state: "open",
           updated_at: "2026-08-14T01:00:00Z",
         },
@@ -207,9 +208,9 @@ describe("GitHub data snapshotting", () => {
           number: 7,
           title: "Issue",
           body: "changed",
-          user: { login: "alice" },
+          user: { id: 1, login: "alice" },
           state: "open",
-          updated_at: "2026-08-14T01:00:01Z",
+          updated_at: "2026-08-14T01:00:00Z",
         },
       });
     const client = {
@@ -223,8 +224,70 @@ describe("GitHub data snapshotting", () => {
     const context = pullRequestContext({
       isPullRequest: false,
       pullRequest: undefined,
-      payload: { issue: { updated_at: "2026-08-14T01:00:00Z" } },
+      payload: {
+        issue: {
+          title: "Issue",
+          body: "body",
+          user: { login: "alice" },
+          updated_at: "2026-08-14T01:00:00Z",
+        },
+      },
     });
     await expect(fetchIssueSnapshot(client, context, 7)).rejects.toThrow("Issue changed");
+  });
+
+  it("binds issue content to the trigger while excluding comment-only timestamp drift", async () => {
+    const issue = {
+      number: 7,
+      title: "Issue",
+      body: "body",
+      user: { id: 1, login: "alice" },
+      state: "open",
+      updated_at: "2026-08-14T01:00:01Z",
+    };
+    const client = {
+      rest: {
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: issue }),
+          listComments: vi.fn().mockResolvedValue({ data: [], headers: {} }),
+        },
+      },
+    } as unknown as GitHubClient;
+    const context = pullRequestContext({
+      isPullRequest: false,
+      pullRequest: undefined,
+      payload: {
+        issue: {
+          title: "Issue",
+          body: "body",
+          user: { login: "alice" },
+          updated_at: "2026-08-14T01:00:00Z",
+        },
+      },
+    });
+    await expect(fetchIssueSnapshot(client, context, 7)).resolves.toMatchObject({
+      contentFingerprint: issueContentFingerprint({
+        number: 7,
+        title: "Issue",
+        body: "body",
+        authorId: 1,
+      }),
+    });
+
+    const changedBeforeStart = {
+      ...issue,
+      title: "Issue edited after trigger",
+    };
+    const changedClient = {
+      rest: {
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: changedBeforeStart }),
+          listComments: vi.fn(),
+        },
+      },
+    } as unknown as GitHubClient;
+    await expect(fetchIssueSnapshot(changedClient, context, 7)).rejects.toThrow(
+      "changed after the triggering event",
+    );
   });
 });

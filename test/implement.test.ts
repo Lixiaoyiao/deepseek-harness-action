@@ -67,6 +67,11 @@ const snapshot: WorkspaceSnapshot = {
   workerRoot: "worker",
   baseline: new Map(),
 };
+const issueIdentity = {
+  state: "open",
+  updatedAt: "2026-08-14T00:00:00Z",
+  contentFingerprint: "f".repeat(64),
+} as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -100,7 +105,7 @@ describe("finishImplementation validation gate", () => {
         repo: "repo",
         issueNumber: 7,
         issueTitle: "Add a safe parser",
-        issueIdentity: { state: "open", updatedAt: "2026-08-14T00:00:00Z" },
+        issueIdentity,
         baseBranch: "main",
         snapshot,
         boundHeadSha: "a".repeat(40),
@@ -125,7 +130,7 @@ describe("finishImplementation validation gate", () => {
       repo: "repo",
       issueNumber: 7,
       issueTitle: "Add a safe parser",
-      issueIdentity: { state: "open", updatedAt: "2026-08-14T00:00:00Z" },
+      issueIdentity,
       baseBranch: "main",
       snapshot,
       boundHeadSha: "a".repeat(40),
@@ -169,7 +174,7 @@ describe("finishImplementation validation gate", () => {
       repo: "repo",
       issueNumber: 7,
       issueTitle: "unsafe\r\n@team ![pixel](https://tracker.invalid)",
-      issueIdentity: { state: "open", updatedAt: "2026-08-14T00:00:00Z" },
+      issueIdentity,
       baseBranch: "main",
       snapshot,
       boundHeadSha: "a".repeat(40),
@@ -204,7 +209,7 @@ describe("finishImplementation validation gate", () => {
       repo: "repo",
       issueNumber: 7,
       issueTitle: "Add a safe parser",
-      issueIdentity: { state: "open", updatedAt: "2026-08-14T00:00:00Z" },
+      issueIdentity,
       baseBranch: "main",
       snapshot,
       boundHeadSha: "a".repeat(40),
@@ -241,7 +246,7 @@ describe("finishImplementation validation gate", () => {
         repo: "repo",
         issueNumber: 7,
         issueTitle: "Add a safe parser",
-        issueIdentity: { state: "open", updatedAt: "2026-08-14T00:00:00Z" },
+        issueIdentity,
         baseBranch: "main",
         snapshot,
         boundHeadSha: "a".repeat(40),

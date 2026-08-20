@@ -45,7 +45,7 @@ export async function finishImplementation(
     repo: input.repo,
     issueNumber: input.issueNumber,
     issueState: input.issueIdentity.state,
-    issueUpdatedAt: input.issueIdentity.updatedAt,
+    issueContentFingerprint: input.issueIdentity.contentFingerprint,
     baseSha: input.boundHeadSha,
     runIdentity: input.operationKey,
   });

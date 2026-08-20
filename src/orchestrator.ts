@@ -97,7 +97,7 @@ function issueTaskIdentity(
   snapshot: Extract<EntitySnapshot, { kind: "issue" }>,
 ): string {
   return createHash("sha256")
-    .update([baseIdentity, snapshot.state, snapshot.updatedAt].join("\0"), "utf8")
+    .update([baseIdentity, snapshot.state, snapshot.contentFingerprint].join("\0"), "utf8")
     .digest("hex");
 }
 
@@ -118,29 +118,32 @@ export function assertOperationContext(
   context: GitHubContext,
   snapshot: EntitySnapshot | undefined,
 ): void {
-  if (
-    (command.operation === "task" || command.operation === "fix") &&
-    command.requestedAccess === "write" &&
-    snapshot?.kind === "pull_request"
-  ) {
+  const assertTrustedWriteTarget = (): void => {
     const defaultBranch = context.repository.defaultBranch;
     if (defaultBranch === undefined) {
-      throw new Error("Cannot authorize a pull-request write without the default branch identity");
+      throw new Error("Cannot authorize a trusted write without the default branch identity");
     }
-    if (snapshot.headRef === defaultBranch) {
+    if (snapshot?.kind === "pull_request" && snapshot.headRef === defaultBranch) {
       throw new Error("Refusing to update the repository default branch from a pull-request write");
     }
+  };
+  if (command.operation === "task") {
+    if (command.requestedAccess === "write") assertTrustedWriteTarget();
+    return;
   }
-  if (command.operation === "task") return;
   if (command.operation === "implement") {
     if (snapshot?.kind !== "issue") {
       throw new Error("@dsh implement is supported only on issues");
     }
+    if (command.requestedAccess === "write") assertTrustedWriteTarget();
     return;
   }
   if (command.operation === "review" || command.operation === "fix") {
     if (snapshot?.kind !== "pull_request") {
       throw new Error(`@dsh ${command.operation} is supported only on pull requests`);
+    }
+    if (command.operation === "fix" && command.requestedAccess === "write") {
+      assertTrustedWriteTarget();
     }
     return;
   }
@@ -294,7 +297,11 @@ async function executeWrite(
       repo: context.repository.repo,
       issueNumber: snapshot.number,
       issueTitle: snapshot.title,
-      issueIdentity: { state: snapshot.state, updatedAt: snapshot.updatedAt },
+      issueIdentity: {
+        state: snapshot.state,
+        updatedAt: snapshot.updatedAt,
+        contentFingerprint: snapshot.contentFingerprint,
+      },
       baseBranch: context.repository.defaultBranch ?? "main",
       snapshot: workspaceCopy,
       boundHeadSha: boundWriteSha,
@@ -333,7 +340,11 @@ async function executeWrite(
       validationTimeoutMs,
       relatedIssue: {
         number: snapshot.number,
-        identity: { state: snapshot.state, updatedAt: snapshot.updatedAt },
+        identity: {
+          state: snapshot.state,
+          updatedAt: snapshot.updatedAt,
+          contentFingerprint: snapshot.contentFingerprint,
+        },
       },
       onPhase,
     });

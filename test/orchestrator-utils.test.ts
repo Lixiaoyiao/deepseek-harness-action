@@ -125,4 +125,50 @@ describe("orchestrator bounds and failure reporting", () => {
       ),
     ).not.toThrow();
   });
+
+  it("fails closed before every trusted write when the default branch is absent", () => {
+    const automation = {
+      kind: "automation",
+      rawEventName: "workflow_dispatch",
+      eventName: "workflow_dispatch",
+      runId: "1",
+      actor: "maintainer",
+      repository: { id: 1, owner: "o", repo: "r", fullName: "o/r" },
+      payload: {},
+      isPullRequestTarget: false,
+    } satisfies GitHubContext;
+    expect(() =>
+      assertOperationContext(
+        {
+          operation: "task",
+          source: "explicit-prompt",
+          instructions: "change the code",
+          requestedAccess: "write",
+        },
+        automation,
+        undefined,
+      ),
+    ).toThrow("default branch identity");
+
+    const issueContext = {
+      ...automation,
+      kind: "entity",
+      rawEventName: "issues",
+      eventName: "issues",
+      entityNumber: 7,
+      isPullRequest: false,
+    } satisfies GitHubContext;
+    expect(() =>
+      assertOperationContext(
+        {
+          operation: "implement",
+          source: "mention",
+          instructions: "implement it",
+          requestedAccess: "write",
+        },
+        issueContext,
+        { kind: "issue" } as EntitySnapshot,
+      ),
+    ).toThrow("default branch identity");
+  });
 });

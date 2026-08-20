@@ -18,7 +18,7 @@ interface BuildImplementationOperationInput {
   readonly repo: string;
   readonly issueNumber: number;
   readonly issueState: string;
-  readonly issueUpdatedAt: string;
+  readonly issueContentFingerprint: string;
   readonly baseSha: string;
   /** GITHUB_RUN_ID: stable across attempts of the same workflow run. */
   readonly runIdentity: string;
@@ -36,6 +36,9 @@ export function buildImplementationOperation(
   if (input.runIdentity.trim() === "" || input.runIdentity.includes("\0")) {
     throw new Error("A stable GitHub run identity is required for Issue -> PR");
   }
+  if (!/^[a-f0-9]{64}$/u.test(input.issueContentFingerprint)) {
+    throw new Error("A valid issue content fingerprint is required for Issue -> PR");
+  }
   const key = fingerprint(
     [
       input.owner.toLowerCase(),
@@ -45,7 +48,10 @@ export function buildImplementationOperation(
     ],
     24,
   );
-  const snapshotFingerprint = fingerprint([input.issueState, input.issueUpdatedAt, baseSha], 24);
+  const snapshotFingerprint = fingerprint(
+    [input.issueState, input.issueContentFingerprint, baseSha],
+    24,
+  );
   const commitMessage = [
     `feat: implement #${String(input.issueNumber)}`,
     "",
