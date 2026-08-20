@@ -1,0 +1,408 @@
+# Temporary pre-release harness. This workflow exists only on the disposable
+# stacked E2E PR and must never be merged into a product branch.
+name: v0.3.0 pre-release E2E
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: v0.3-e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    if: >-
+      github.event.label.name == 'v0.3-e2e' &&
+      github.repository == 'Lixiaoyiao/deepseek-harness-action' &&
+      github.actor == 'Lixiaoyiao' &&
+      github.event.sender.login == 'Lixiaoyiao' &&
+      github.event.pull_request.user.login == 'Lixiaoyiao' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'e2e/v0.3.0-pr8' &&
+      github.event.pull_request.base.ref == 'agent/v0.3.0-core' &&
+      github.head_ref == 'e2e/v0.3.0-pr8' &&
+      github.base_ref == 'agent/v0.3.0-core'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out audited v0.3.0 action candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Lixiaoyiao/deepseek-harness-action
+          ref: e880b895a170f245acdc257f56637ec0541418cb
+          path: .dsh-action
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert audited candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .dsh-action rev-parse HEAD)" = "e880b895a170f245acdc257f56637ec0541418cb"
+
+      - name: Deny a write task without explicit write authorization
+        id: denied
+        continue-on-error: true
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: policy-denial-does-not-call-the-model
+          command: task
+          task-access: write
+          prompt: This request must be denied before worker startup or any GitHub comment.
+          allow-write: "false"
+
+      - name: Assert fail-closed policy result
+        shell: bash
+        env:
+          STEP_OUTCOME: ${{ steps.denied.outcome }}
+          ERROR_CODE: ${{ steps.denied.outputs.error-code }}
+          COMMENT_ID: ${{ steps.denied.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.denied.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (process.env.STEP_OUTCOME !== "failure") throw new Error("denied task did not fail");
+          if (process.env.ERROR_CODE !== "POLICY_DENIED") throw new Error("unexpected denial code");
+          if (process.env.COMMENT_ID !== "") throw new Error("denial created a progress comment");
+          if (result.schemaVersion !== 1 || result.status !== "denied") {
+            throw new Error("invalid denied result envelope");
+          }
+          if (result.conclusion !== "failure" || result.operation !== "task") {
+            throw new Error("invalid denied operation result");
+          }
+          if (result.policy?.allowed !== false || result.error?.phase !== "authorization") {
+            throw new Error("write denial was not enforced by policy");
+          }
+          NODE
+
+      - name: Reject a controller credential embedded in fixed argv
+        id: credential_argv
+        continue-on-error: true
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: task
+          task-access: write
+          prompt: This request must fail during input validation and must never reach the model.
+          allow-write: "true"
+          allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.leak-probe"]'
+          tool-config: |
+            {
+              "schemaVersion": 1,
+              "commands": [{
+                "name": "leak-probe",
+                "description": "This deliberately invalid fixture must be rejected",
+                "argv": ["node", "-e", "process.exit(0)", "${{ secrets.DEEPSEEK_API_KEY }}"],
+                "network": "none",
+                "workspaceAccess": "read"
+              }]
+            }
+
+      - name: Assert credential-in-argv configuration rejection
+        shell: bash
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          STEP_OUTCOME: ${{ steps.credential_argv.outcome }}
+          ERROR_CODE: ${{ steps.credential_argv.outputs.error-code }}
+          COMMENT_ID: ${{ steps.credential_argv.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.credential_argv.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          const secret = process.env.DEEPSEEK_API_KEY ?? "";
+          if (secret.length < 8) throw new Error("DEEPSEEK_API_KEY is unavailable to the E2E job");
+          if (process.env.STEP_OUTCOME !== "failure") throw new Error("credential argv was accepted");
+          if (process.env.ERROR_CODE !== "ACTION_CONFIGURATION") {
+            throw new Error("unexpected credential-argv error code");
+          }
+          if (process.env.COMMENT_ID !== "") throw new Error("configuration failure created a comment");
+          if (result.schemaVersion !== 1 || result.status !== "failed") {
+            throw new Error("invalid configuration failure envelope");
+          }
+          if (result.operation !== "none" || result.error?.phase !== "configuration") {
+            throw new Error("credential argv was not rejected during configuration");
+          }
+          if (!String(result.error?.message).includes("controller credentials must not appear")) {
+            throw new Error("credential rejection reason was not preserved");
+          }
+          if (JSON.stringify(result).includes(secret)) throw new Error("credential leaked into outputs");
+          NODE
+
+      - name: Run a tool-mediated multi-turn repair task
+        id: task
+        uses: ./.dsh-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: task
+          task-access: write
+          allow-write: "true"
+          max-turns: "5"
+          timeout-minutes: "50"
+          prompt: |
+            This is a controlled pre-release E2E task. Follow these stages exactly.
+
+            1. On the first turn, do not edit any file. Request the controller tool
+               command.e2e-probe exactly once with an empty object and return state
+               needs_tool.
+            2. After the successful tool receipt containing E2E_TOOL_PROBE_OK, edit
+               only e2e-fixture.txt. Replace phase=pending with phase=broken, then
+               return state final. Do not repair phase=broken before controller
+               validation runs; the first validation failure is intentional.
+            3. On the next fresh turn, after the controller returns validation
+               feedback containing E2E_EXPECTED_PHASE_REPAIRED, edit only
+               e2e-fixture.txt again. Replace phase=broken with phase=repaired and
+               return state final.
+
+            Never edit workflows, configuration, dependencies, or any other file.
+            The final workspace must contain exactly phase=repaired followed by a
+            newline in e2e-fixture.txt.
+          allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.e2e-probe"]'
+          tool-config: |
+            {
+              "schemaVersion": 1,
+              "commands": [{
+                "name": "e2e-probe",
+                "description": "Emit the fixed E2E probe receipt before editing",
+                "argv": ["node", "-e", "process.stdout.write('E2E_TOOL_PROBE_OK\\n')"],
+                "timeoutMinutes": 2,
+                "maxOutputBytes": 4096,
+                "maxCalls": 1,
+                "network": "none",
+                "workspaceAccess": "read"
+              }]
+            }
+          run-tests: "true"
+          test-commands: >-
+            [["node","-e","const fs=require('node:fs');const value=fs.readFileSync('e2e-fixture.txt','utf8').trim();if(value!=='phase=repaired'){console.error('E2E_EXPECTED_PHASE_REPAIRED actual='+JSON.stringify(value));process.exit(23)}"]]
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert loop, structured output, PR write, and sticky task comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION_CONCLUSION: ${{ steps.task.outputs.conclusion }}
+          ACTION_OPERATION: ${{ steps.task.outputs.operation }}
+          ACTION_TRUST: ${{ steps.task.outputs.trust }}
+          COMMENT_ID: ${{ steps.task.outputs.comment-id }}
+          COMMIT_SHA: ${{ steps.task.outputs.commit-sha }}
+          RESULT_JSON: ${{ steps.task.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (process.env.ACTION_CONCLUSION !== "success") throw new Error("task did not succeed");
+          if (process.env.ACTION_OPERATION !== "task") throw new Error("task operation output mismatch");
+          if (process.env.ACTION_TRUST !== "trusted-write") throw new Error("task trust output mismatch");
+          if (result.schemaVersion !== 1 || result.status !== "success" || result.conclusion !== "success") {
+            throw new Error("invalid successful task envelope");
+          }
+          if (result.operation !== "task" || result.policy?.trust !== "trusted-write") {
+            throw new Error("invalid task policy snapshot");
+          }
+          if (result.policy?.allowed !== true || result.policy?.capabilities?.modifyWorkspace !== true) {
+            throw new Error("task did not receive the expected bounded write capability");
+          }
+          if (result.loop?.turns < 3 || result.loop.turns > 5) {
+            throw new Error("multi-turn repair did not use the expected turn range");
+          }
+          if (result.loop?.toolCalls !== 1 || result.loop?.validationRetries !== 1) {
+            throw new Error("tool or validation retry count mismatch");
+          }
+          if (!Array.isArray(result.loop?.toolReceipts) || result.loop.toolReceipts.length !== 1) {
+            throw new Error("missing exact tool receipt");
+          }
+          const receipt = result.loop.toolReceipts[0];
+          if (receipt.id !== "command.e2e-probe" || receipt.ok !== true) {
+            throw new Error("unexpected tool receipt result");
+          }
+          if (!/^call-[a-f0-9]{40}$/.test(receipt.callId) || !Number.isFinite(receipt.durationMs)) {
+            throw new Error("invalid controller-generated tool receipt metadata");
+          }
+          if (result.validation?.status !== "passed" || result.validation?.commandCount !== 1) {
+            throw new Error("final configured validation did not pass");
+          }
+          if (result.write?.status !== "success") throw new Error("task write was not fully published");
+          if (!/^[a-f0-9]{40}$/.test(process.env.COMMIT_SHA ?? "")) {
+            throw new Error("missing task commit SHA");
+          }
+          if (result.write?.commitSha !== process.env.COMMIT_SHA) {
+            throw new Error("structured and scalar commit outputs differ");
+          }
+          if (JSON.stringify(result.write?.changedPaths) !== JSON.stringify(["e2e-fixture.txt"])) {
+            throw new Error("task changed an unexpected path");
+          }
+          if (!Number.isInteger(result.commentId) || String(result.commentId) !== process.env.COMMENT_ID) {
+            throw new Error("structured and scalar sticky comment IDs differ");
+          }
+          NODE
+
+          observed_head=""
+          for attempt in {1..30}; do
+            observed_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}" --jq .head.sha 2>/dev/null || true)"
+            test "$observed_head" = "$COMMIT_SHA" && break
+            sleep 2
+          done
+          test "$observed_head" = "$COMMIT_SHA"
+
+          observed_fixture=""
+          for attempt in {1..30}; do
+            observed_fixture="$(gh api "repos/${GITHUB_REPOSITORY}/contents/e2e-fixture.txt?ref=${{ github.head_ref }}" --jq .content 2>/dev/null | tr -d '\n' | base64 --decode 2>/dev/null || true)"
+            test "$observed_fixture" = "phase=repaired" && break
+            sleep 2
+          done
+          test "$observed_fixture" = "phase=repaired"
+
+          task_comment_matches=false
+          for attempt in {1..30}; do
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments?per_page=100" --paginate > "$RUNNER_TEMP/task-comments.json"
+            if jq --argjson id "$COMMENT_ID" --arg commit "$COMMIT_SHA" -e '
+              map(select(
+                .user.id == 41898282 and
+                (.body | contains("<!-- dsh-action:v1 kind=task -->"))
+              )) |
+              length == 1 and
+              .[0].id == $id and
+              .[0].created_at != .[0].updated_at and
+              (.[0].body | contains("DeepSeek Harness task prepared")) and
+              (.[0].body | contains("Configured validation passed.")) and
+              (.[0].body | contains($commit))
+            ' "$RUNNER_TEMP/task-comments.json" >/dev/null; then
+              task_comment_matches=true
+              break
+            fi
+            sleep 2
+          done
+          test "$task_comment_matches" = true
+
+  automation:
+    if: >-
+      github.event.label.name == 'v0.3-e2e' &&
+      github.repository == 'Lixiaoyiao/deepseek-harness-action' &&
+      github.actor == 'Lixiaoyiao' &&
+      github.event.sender.login == 'Lixiaoyiao' &&
+      github.event.pull_request.user.login == 'Lixiaoyiao' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'e2e/v0.3.0-pr8' &&
+      github.event.pull_request.base.ref == 'agent/v0.3.0-core' &&
+      github.head_ref == 'e2e/v0.3.0-pr8' &&
+      github.base_ref == 'agent/v0.3.0-core'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Check out audited v0.3.0 action candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Lixiaoyiao/deepseek-harness-action
+          ref: e880b895a170f245acdc257f56637ec0541418cb
+          path: .dsh-action
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run explicit-prompt automation against a synthetic workflow_dispatch event
+        id: automation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -euo pipefail
+          synthetic_event="$RUNNER_TEMP/workflow-dispatch.json"
+          jq '{repository: .repository, sender: .sender}' "$GITHUB_EVENT_PATH" > "$synthetic_event"
+          validation_script="const fs=require('node:fs');const value=fs.readFileSync('v0.3-automation-e2e.txt','utf8');if(value!=='automation=ok\\n'){console.error('E2E_AUTOMATION_CONTENT_MISMATCH '+JSON.stringify(value));process.exit(29)}"
+          test_commands="$(jq -cn --arg script "$validation_script" '[["node","-e",$script]]')"
+          task_prompt='Create exactly one new file named v0.3-automation-e2e.txt containing automation=ok followed by one newline. Use workspace.edit, change no other path, and return state final.'
+
+          env \
+            GITHUB_EVENT_NAME=workflow_dispatch \
+            GITHUB_EVENT_PATH="$synthetic_event" \
+            "INPUT_DEEPSEEK-API-KEY=$DEEPSEEK_API_KEY" \
+            "INPUT_GITHUB-TOKEN=$GH_TOKEN" \
+            INPUT_COMMAND=auto \
+            "INPUT_PROMPT=$task_prompt" \
+            INPUT_TASK-ACCESS=write \
+            INPUT_ALLOW-WRITE=true \
+            INPUT_MAX-TURNS=4 \
+            INPUT_TIMEOUT-MINUTES=45 \
+            INPUT_PROGRESS-COMMENT=false \
+            'INPUT_ALLOWED-TOOLS=["workspace.read","workspace.search","workspace.edit"]' \
+            INPUT_RUN-TESTS=true \
+            "INPUT_TEST-COMMANDS=$test_commands" \
+            INPUT_CONTAINER-IMAGE=docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
+            node .dsh-action/dist/index.js
+
+      - name: Assert automation task PR and structured output
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION_CONCLUSION: ${{ steps.automation.outputs.conclusion }}
+          ACTION_OPERATION: ${{ steps.automation.outputs.operation }}
+          ACTION_TRUST: ${{ steps.automation.outputs.trust }}
+          BRANCH_NAME: ${{ steps.automation.outputs.branch-name }}
+          PULL_REQUEST_URL: ${{ steps.automation.outputs.pull-request-url }}
+          COMMENT_ID: ${{ steps.automation.outputs.comment-id }}
+          RESULT_JSON: ${{ steps.automation.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const result = JSON.parse(process.env.RESULT_JSON);
+          if (process.env.ACTION_CONCLUSION !== "success") throw new Error("automation failed");
+          if (process.env.ACTION_OPERATION !== "task") throw new Error("automation did not route to task");
+          if (process.env.ACTION_TRUST !== "trusted-write") throw new Error("automation trust mismatch");
+          if (process.env.COMMENT_ID !== "") throw new Error("entity-free task published a comment");
+          if (!/^dsh\/task-[a-f0-9]{24}$/.test(process.env.BRANCH_NAME ?? "")) {
+            throw new Error("automation branch name is not controller-owned");
+          }
+          if (!/^https:\/\/github\.com\/Lixiaoyiao\/deepseek-harness-action\/pull\/\d+$/.test(process.env.PULL_REQUEST_URL ?? "")) {
+            throw new Error("automation pull request URL is missing");
+          }
+          if (result.schemaVersion !== 1 || result.status !== "success" || result.operation !== "task") {
+            throw new Error("invalid automation result envelope");
+          }
+          if (result.policy?.trust !== "trusted-write" || result.policy?.capabilities?.createPullRequest !== true) {
+            throw new Error("automation create-PR capability mismatch");
+          }
+          if (result.validation?.status !== "passed" || result.validation?.commandCount !== 1) {
+            throw new Error("automation validation did not pass");
+          }
+          if (result.write?.branchName !== process.env.BRANCH_NAME || result.write?.pullRequestUrl !== process.env.PULL_REQUEST_URL) {
+            throw new Error("automation scalar and structured outputs differ");
+          }
+          NODE
+
+          pull_number="$(gh pr view "$PULL_REQUEST_URL" --repo "$GITHUB_REPOSITORY" --json number --jq .number)"
+          matched=false
+          for attempt in {1..30}; do
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${pull_number}" > "$RUNNER_TEMP/automation-pr.json"
+            if jq --arg branch "$BRANCH_NAME" --arg repo "$GITHUB_REPOSITORY" -e '
+              .state == "open" and
+              .head.ref == $branch and
+              .head.repo.full_name == $repo and
+              .base.ref == "main" and
+              (.body | contains("<!-- dsh-action:task:v1"))
+            ' "$RUNNER_TEMP/automation-pr.json" >/dev/null; then
+              matched=true
+              break
+            fi
+            sleep 2
+          done
+          test "$matched" = true
+
+          observed_fixture=""
+          for attempt in {1..30}; do
+            observed_fixture="$(gh api "repos/${GITHUB_REPOSITORY}/contents/v0.3-automation-e2e.txt?ref=${BRANCH_NAME}" --jq .content 2>/dev/null | tr -d '\n' | base64 --decode 2>/dev/null || true)"
+            test "$observed_fixture" = "automation=ok" && break
+            sleep 2
+          done
+          test "$observed_fixture" = "automation=ok"
