@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Lixiaoyiao/deepseek-harness-action
-          ref: 8dad9aa55e9a17abbf286f8125e8f0e09cf5b903
+          ref: 8eaaa7777a4756c5e519e791b6613b302fc0a92e
           path: .dsh-action
           persist-credentials: false
           fetch-depth: 1
@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C .dsh-action rev-parse HEAD)" = "8dad9aa55e9a17abbf286f8125e8f0e09cf5b903"
+          test "$(git -C .dsh-action rev-parse HEAD)" = "8eaaa7777a4756c5e519e791b6613b302fc0a92e"
 
       - name: Deny a write task without explicit write authorization
         id: denied
@@ -305,7 +305,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Lixiaoyiao/deepseek-harness-action
-          ref: 8dad9aa55e9a17abbf286f8125e8f0e09cf5b903
+          ref: 8eaaa7777a4756c5e519e791b6613b302fc0a92e
           path: .dsh-action
           persist-credentials: false
           fetch-depth: 1
