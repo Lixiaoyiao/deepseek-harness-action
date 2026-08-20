@@ -18,6 +18,7 @@ const policy: SecurityPolicy = {
     readCi: false,
     publishComments: true,
     executeRepositoryCode: false,
+    accessNetwork: false,
     modifyWorkspace: false,
     commit: false,
     push: false,
@@ -43,6 +44,7 @@ describe("controller-owned sticky progress", () => {
   it.each([
     ["review", "summary"],
     ["diagnose", "diagnosis"],
+    ["task", "task"],
     ["fix", "write"],
     ["implement", "write"],
   ] as const)("reuses the existing %s result marker (%s)", (operation, kind) => {
@@ -136,6 +138,23 @@ describe("controller-owned sticky progress", () => {
       expect.stringContaining("**Failure code:** `DSH_TIMEOUT`"),
     );
     expect(reporter.commentId).toBe(42);
+  });
+
+  it("renders blocked as neutral rather than a successful completion", async () => {
+    const reporter = new StickyProgressReporter({
+      client: {} as GitHubClient,
+      target: { owner: "octo", repo: "repo", issueNumber: 7 },
+      expectedAuthorId: 41898282,
+      operation: "task",
+      policy,
+      runUrl: "https://github.com/octo/repo/actions/runs/10",
+    });
+    await reporter.update("agent", "Running");
+    await reporter.blocked("A required dependency is unavailable");
+    const body = String(mocks.upsert.mock.calls.at(-1)?.[4]);
+    expect(body).toContain("⚠️ Blocked");
+    expect(body).not.toContain("✅ Completed");
+    expect(body).toContain("kind=task");
   });
 
   it("treats comment API failures as secondary and retries a later stage", async () => {

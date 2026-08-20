@@ -24,6 +24,7 @@ export interface FinishFixInput {
   readonly result: DshRunResult;
   readonly inputs: ActionInputs;
   readonly runUrl: string;
+  readonly validationTimeoutMs?: number;
   readonly onPhase?: (phase: "validation" | "write") => void;
 }
 
@@ -32,6 +33,8 @@ export async function finishFix(input: FinishFixInput): Promise<{
   paths: readonly string[];
   status: "success" | "partial-success";
 }> {
+  const task = input.result.output.operation === "task";
+  const label = task ? "task" : "fix";
   input.onPhase?.("validation");
   await revalidatePullRequestIdentity(
     input.client,
@@ -41,7 +44,9 @@ export async function finishFix(input: FinishFixInput): Promise<{
     input.identity,
   );
   const changes = await inspectWorkspaceChanges(input.snapshot);
-  if (changes.all.length === 0) throw new Error("DSH reported a fix but produced no file changes");
+  if (changes.all.length === 0) {
+    throw new Error(`DSH reported a ${label} but produced no file changes`);
+  }
 
   if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
     throw new Error(
@@ -54,6 +59,7 @@ export async function finishFix(input: FinishFixInput): Promise<{
       input.snapshot.workerRoot,
       input.inputs.testCommands,
       input.inputs.containerImage,
+      input.validationTimeoutMs,
     );
     assertValidationSucceeded(tests);
   }
@@ -72,7 +78,7 @@ export async function finishFix(input: FinishFixInput): Promise<{
       owner: input.target.owner,
       repo: input.target.repo,
       baseSha: input.boundHeadSha,
-      message: "fix: apply DeepSeek Harness fix",
+      message: task ? "feat: apply DeepSeek Harness task" : "fix: apply DeepSeek Harness fix",
     },
     input.snapshot,
   );
@@ -102,22 +108,25 @@ export async function finishFix(input: FinishFixInput): Promise<{
       input.client,
       input.target,
       input.expectedAuthorId,
-      verified ? "DeepSeek Harness fix prepared" : "DeepSeek Harness fix prepared (unverified)",
+      verified
+        ? `DeepSeek Harness ${label} prepared`
+        : `DeepSeek Harness ${label} prepared (unverified)`,
       `${input.result.output.summary}\n\n${verified ? "Configured validation passed." : "No validation commands were configured; this change is unverified."}\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`,
       input.runUrl,
+      task ? "task" : "write",
     );
     return { commitSha: created.sha, paths: created.paths, status: "success" };
   } catch {
     // The branch update is the authoritative write. A later comment failure
     // must not turn an already-pushed fix into a failed/retried mutation.
     core.warning(
-      `Partial success: fix commit ${created.sha} was pushed, but its GitHub status comment could not be published.`,
+      `Partial success: ${label} commit ${created.sha} was pushed, but its GitHub status comment could not be published.`,
     );
     try {
       await core.summary
-        .addHeading("DeepSeek Harness fix: partial success", 2)
+        .addHeading(`DeepSeek Harness ${label}: partial success`, 2)
         .addRaw(
-          `Fix commit \`${created.sha}\` was pushed, but the status comment could not be published.`,
+          `${task ? "Task" : "Fix"} commit \`${created.sha}\` was pushed, but the status comment could not be published.`,
         )
         .write();
     } catch {

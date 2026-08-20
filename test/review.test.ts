@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { fingerprintFinding } from "../src/review/fingerprint.js";
 import { filterHighPrecisionFindings } from "../src/review/precision.js";
+import { partitionDshToolPlanes } from "../src/review/run.js";
 import {
   REVIEW_LIMITS,
   parseReviewResult,
@@ -29,6 +30,32 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     ...overrides,
   };
 }
+
+describe("DSH tool planes", () => {
+  it("keeps native workspace tools out of the controller request catalog", () => {
+    const workspace = {
+      id: "workspace.edit",
+      description: "Edit the workspace",
+      provider: "builtin" as const,
+      permissions: ["write" as const],
+      inputSchema: {},
+    };
+    const command = {
+      id: "command.test",
+      description: "Run tests",
+      provider: "command" as const,
+      permissions: ["execute" as const],
+      inputSchema: {},
+    };
+    expect(partitionDshToolPlanes([workspace, command])).toEqual({
+      workspaceTools: ["workspace.edit"],
+      controllerTools: [command],
+    });
+    expect(() => partitionDshToolPlanes([{ ...workspace, id: "workspace.shell" }])).toThrow(
+      "Unsupported native DSH tool id",
+    );
+  });
+});
 
 describe("reviewResultSchema", () => {
   it("accepts the bounded common result and optional operation fields", () => {
@@ -229,6 +256,7 @@ describe("tracking markers", () => {
     expect(parseTrackingMarker(createTrackingMarker({ kind: "summary" }))).toEqual({
       kind: "summary",
     });
+    expect(parseTrackingMarker(createTrackingMarker({ kind: "task" }))).toEqual({ kind: "task" });
     expect(parseTrackingMarker(createTrackingMarker({ kind: "finding", fingerprint }))).toEqual({
       kind: "finding",
       fingerprint,
@@ -252,12 +280,14 @@ describe("tracking markers", () => {
   it("indexes only bot-authored markers and deduplicates by fingerprint", () => {
     const marker = createTrackingMarker({ kind: "finding", fingerprint });
     const summary = createTrackingMarker({ kind: "summary" });
+    const task = createTrackingMarker({ kind: "task" });
     const comments = [
       { id: 1, user: { id: 7 }, body: marker },
       { id: 2, user: { id: 99 }, body: marker },
       { id: 3, user: { id: 7 }, body: `${marker}\nlatest` },
       { id: 4, user: { id: 7 }, body: summary },
       { id: 5, user: null, body: summary },
+      { id: 6, user: { id: 7 }, body: task },
     ];
 
     const index = indexTrackingComments(comments, 7);
@@ -265,6 +295,7 @@ describe("tracking markers", () => {
     expect(index.findings.size).toBe(1);
     expect(index.summaries.map((comment) => comment.id)).toEqual([4]);
     expect(index.diagnoses).toEqual([]);
+    expect(index.tasks.map((comment) => comment.id)).toEqual([6]);
   });
 
   it("strips valid and malformed reserved markers from publishable prose", () => {

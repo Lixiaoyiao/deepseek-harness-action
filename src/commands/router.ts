@@ -1,10 +1,10 @@
 import type { ActionInputs } from "../inputs.js";
 import type { GitHubContext } from "../github/context.js";
 import { isAutomaticReviewAction } from "../github/events.js";
-import { parseCommand, type Operation } from "./parse.js";
+import { parseCommand, type Operation, type RequestedAccess } from "./parse.js";
 
 export interface CommandSource {
-  readonly kind: "explicit-input" | "mention" | "automatic-event";
+  readonly kind: "explicit-input" | "explicit-prompt" | "mention" | "automatic-event";
   readonly body?: string;
 }
 
@@ -12,6 +12,7 @@ export interface RoutedCommand {
   readonly operation: Operation;
   readonly source: CommandSource["kind"];
   readonly instructions: string;
+  readonly requestedAccess: RequestedAccess;
 }
 
 /**
@@ -30,7 +31,7 @@ export function finalizeWorkflowRunRoute(
     command.operation === "fix" &&
     !hasResolvedPullRequest
   ) {
-    return { ...command, operation: "diagnose" };
+    return { ...command, operation: "diagnose", requestedAccess: "read" };
   }
   return command;
 }
@@ -61,7 +62,17 @@ function mentionBody(context: GitHubContext): string | undefined {
 /** Route only trusted action input or the triggering comment/review body. */
 export function routeCommand(context: GitHubContext, inputs: ActionInputs): RoutedCommand | null {
   if (inputs.command !== "auto") {
-    return { operation: inputs.command, source: "explicit-input", instructions: inputs.prompt };
+    return {
+      operation: inputs.command,
+      source: "explicit-input",
+      instructions: inputs.prompt,
+      requestedAccess:
+        inputs.command === "task"
+          ? inputs.taskAccess
+          : inputs.command === "fix" || inputs.command === "implement"
+            ? "write"
+            : "read",
+    };
   }
 
   const body = mentionBody(context);
@@ -75,7 +86,12 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     context.kind === "entity" &&
     isAutomaticReviewAction(context.eventAction)
   ) {
-    return { operation: "review", source: "automatic-event", instructions: inputs.prompt };
+    return {
+      operation: "review",
+      source: "automatic-event",
+      instructions: inputs.prompt,
+      requestedAccess: "read",
+    };
   }
 
   if (context.rawEventName === "workflow_run" && context.eventAction === "completed") {
@@ -83,6 +99,16 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
       operation: inputs.allowWrite ? "fix" : "diagnose",
       source: "automatic-event",
       instructions: inputs.prompt,
+      requestedAccess: inputs.allowWrite ? "write" : "read",
+    };
+  }
+
+  if (context.kind === "automation" && inputs.prompt.trim() !== "") {
+    return {
+      operation: "task",
+      source: "explicit-prompt",
+      instructions: inputs.prompt,
+      requestedAccess: inputs.taskAccess,
     };
   }
 

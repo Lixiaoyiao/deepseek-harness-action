@@ -1,4 +1,10 @@
 import type { Operation } from "./commands/parse.js";
+import {
+  AgentDeadlineError,
+  AgentLoopLimitError,
+  AgentNoProgressError,
+  type AgentToolReceipt,
+} from "./agent/loop.js";
 import { DshError } from "./dsh/errors.js";
 import type { DshIsolationReport } from "./dsh/runner.js";
 import type { PublicationResult } from "./review/publisher.js";
@@ -32,6 +38,10 @@ export interface ActionFailure {
 export interface AgentRunSummary {
   readonly durationMs: number;
   readonly isolation: DshIsolationReport;
+  readonly turns?: number;
+  readonly toolCalls?: number;
+  readonly validationRetries?: number;
+  readonly toolReceipts?: readonly AgentToolReceipt[];
 }
 
 export interface ValidationSummary {
@@ -184,6 +194,32 @@ const phaseMetadata: Readonly<
 };
 
 export function describeActionFailure(error: unknown, phase: ActionPhase): ActionFailure {
+  if (error instanceof AgentDeadlineError) {
+    return {
+      code: error.code,
+      phase: "agent",
+      title: "Agent loop timed out",
+      message: safeMessage(error),
+      guidance: "Increase timeout-minutes or reduce the task and validation scope.",
+      retryable: true,
+    };
+  }
+  if (error instanceof AgentNoProgressError || error instanceof AgentLoopLimitError) {
+    return {
+      code: error.code,
+      phase: "agent",
+      title:
+        error instanceof AgentNoProgressError
+          ? "Agent repair loop made no progress"
+          : "Agent turn limit reached",
+      message: safeMessage(error),
+      guidance:
+        error instanceof AgentNoProgressError
+          ? "Inspect the repeated validation failure and adjust the task, tools, or repository setup."
+          : "Increase max-turns or reduce the task scope, then rerun.",
+      retryable: false,
+    };
+  }
   if (error instanceof ValidationFailureError) {
     return {
       code: error.code,
@@ -251,7 +287,23 @@ function structuredResult(outcome: RunOutcome): Record<string, unknown> {
             capabilities: outcome.policy.capabilities,
           },
         }),
-    ...(outcome.agent === undefined ? {} : { isolation: outcome.agent.isolation }),
+    ...(outcome.agent === undefined
+      ? {}
+      : {
+          isolation: outcome.agent.isolation,
+          loop: {
+            ...(outcome.agent.turns === undefined ? {} : { turns: outcome.agent.turns }),
+            ...(outcome.agent.toolCalls === undefined
+              ? {}
+              : { toolCalls: outcome.agent.toolCalls }),
+            ...(outcome.agent.validationRetries === undefined
+              ? {}
+              : { validationRetries: outcome.agent.validationRetries }),
+            ...(outcome.agent.toolReceipts === undefined
+              ? {}
+              : { toolReceipts: outcome.agent.toolReceipts }),
+          },
+        }),
     ...(outcome.publication === undefined ? {} : { publication: outcome.publication }),
     ...(outcome.validation === undefined ? {} : { validation: outcome.validation }),
     ...(Object.keys(write).length === 0 ? {} : { write }),
@@ -262,7 +314,9 @@ function structuredResult(outcome: RunOutcome): Record<string, unknown> {
 
 export function actionStatus(outcome: RunOutcome): ActionStatus {
   if (outcome.conclusion !== "failure") return outcome.conclusion;
-  if (outcome.error?.code === "DSH_TIMEOUT") return "timed_out";
+  if (outcome.error?.code === "DSH_TIMEOUT" || outcome.error?.code === "AGENT_TIMEOUT") {
+    return "timed_out";
+  }
   if (
     outcome.error?.phase === "validation" ||
     outcome.error?.code === "DSH_MALFORMED_OUTPUT" ||

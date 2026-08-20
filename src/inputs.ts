@@ -1,6 +1,12 @@
 import * as core from "@actions/core";
 import { z } from "zod";
 
+import {
+  parseAllowedTools,
+  parseToolConfiguration,
+  validateAllowedToolReferences,
+} from "./tools/schema.js";
+
 const booleanInput = z.enum(["true", "false"]).transform((value) => value === "true");
 
 const integerInput = (minimum: number, maximum: number) =>
@@ -34,7 +40,8 @@ const actionInputsSchema = z.object({
   deepseekApiKey: z.string().min(1, "deepseek-api-key is required"),
   githubToken: z.string().min(1, "github-token is required"),
   allowWrite: booleanInput,
-  command: z.enum(["auto", "review", "diagnose", "fix", "implement"]),
+  command: z.enum(["auto", "task", "review", "diagnose", "fix", "implement"]),
+  taskAccess: z.enum(["read", "write"]),
   prompt: z.string(),
   dshVersion: z.string().min(1),
   dshExecutable: z.string(),
@@ -47,6 +54,29 @@ const actionInputsSchema = z.object({
   baseUrl: z.url(),
   botUserId: integerInput(1, 2_147_483_647),
   progressComment: booleanInput,
+  maxTurns: integerInput(1, 10),
+  allowedTools: z.string().transform((value, context) => {
+    try {
+      return parseAllowedTools(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  }),
+  toolConfig: z.string().transform((value, context) => {
+    try {
+      return parseToolConfiguration(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  }),
 });
 
 export type ActionInputs = z.infer<typeof actionInputsSchema>;
@@ -56,6 +86,7 @@ export type InputReader = (name: string, options?: { required?: boolean }) => st
 const defaults = {
   allowWrite: "false",
   command: "auto",
+  taskAccess: "read",
   prompt: "",
   dshVersion: "0.1.0-rc.6",
   dshExecutable: "",
@@ -69,6 +100,9 @@ const defaults = {
   baseUrl: "https://api.deepseek.com",
   botUserId: "41898282",
   progressComment: "true",
+  maxTurns: "3",
+  allowedTools: '["workspace.read","workspace.search","workspace.edit"]',
+  toolConfig: '{"schemaVersion":1,"commands":[]}',
 } as const;
 
 function optionalInput(reader: InputReader, name: string, fallback: string): string {
@@ -83,6 +117,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     githubToken: reader("github-token", { required: true }),
     allowWrite: optionalInput(reader, "allow-write", defaults.allowWrite),
     command: optionalInput(reader, "command", defaults.command),
+    taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
     prompt: optionalInput(reader, "prompt", defaults.prompt),
     dshVersion: optionalInput(reader, "dsh-version", defaults.dshVersion),
     dshExecutable: optionalInput(reader, "dsh-executable", defaults.dshExecutable),
@@ -95,10 +130,24 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     baseUrl: optionalInput(reader, "base-url", defaults.baseUrl),
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
     progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
+    maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
+    allowedTools: optionalInput(reader, "allowed-tools", defaults.allowedTools),
+    toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
   });
 
   if (!parsed.success) {
     throw new Error(`Invalid action inputs: ${z.prettifyError(parsed.error)}`);
+  }
+  try {
+    validateAllowedToolReferences(parsed.data.allowedTools, parsed.data.toolConfig);
+  } catch (error: unknown) {
+    throw new Error(
+      `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
+    throw new Error("Invalid action inputs: prompt is required when command is task");
   }
   return parsed.data;
 }

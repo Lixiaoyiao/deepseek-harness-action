@@ -95,4 +95,24 @@ describe("safe command execution", () => {
     });
     expect(result).toMatchObject({ exitCode: 0, stdout: "; echo injected", timedOut: false });
   });
+
+  it("preserves bounded heads and error tails without stdout starving stderr", async () => {
+    const result = await runCommand({
+      command: process.execPath,
+      args: [
+        "-e",
+        'process.stdout.write("OUT_HEAD" + "x".repeat(4000) + "OUT_TAIL"); process.stderr.write("ERR_HEAD" + "y".repeat(4000) + "ERR_TAIL")',
+      ],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH },
+      timeoutMs: 5_000,
+      maxOutputBytes: 1_024,
+    });
+    expect(result.outputTruncated).toBe(true);
+    expect(result.stdout).toMatch(/^OUT_HEAD[\s\S]*OUT_TAIL$/u);
+    expect(result.stderr).toMatch(/^ERR_HEAD[\s\S]*ERR_TAIL$/u);
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(
+      1_024,
+    );
+  });
 });

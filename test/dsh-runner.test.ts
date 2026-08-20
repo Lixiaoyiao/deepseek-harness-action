@@ -11,7 +11,7 @@ import {
   DshTimeoutError,
 } from "../src/dsh/errors.js";
 import type { DeepSeekProxyHandle } from "../src/dsh/proxy.js";
-import { executeBoundedDshProcess, runDsh } from "../src/dsh/runner.js";
+import { assertSupportedDshVersion, executeBoundedDshProcess, runDsh } from "../src/dsh/runner.js";
 import type { DshProcessLimits, DshProcessSpec, DshRunRequest } from "../src/dsh/runner.js";
 
 const temporaryPaths: string[] = [];
@@ -124,11 +124,23 @@ describe("executeBoundedDshProcess", () => {
 });
 
 describe("runDsh", () => {
+  it("binds policy patches to the audited DSH version", () => {
+    expect(() => assertSupportedDshVersion("0.1.0-rc.6")).not.toThrow();
+    expect(() => assertSupportedDshVersion("latest")).toThrow(/exact semver/u);
+    expect(() => assertSupportedDshVersion("0.1.0-rc.7")).toThrow(/no audited/u);
+  });
+
   it("adapts the orchestrator seam, parses output, and keeps controller secrets out of worker env/argv", async () => {
     const fixture = await fixtures();
     const proxy = fakeProxy();
     let captured: DshProcessSpec | undefined;
-    const output = { operation: "review", summary: "Looks sound.", findings: [] };
+    const output = {
+      protocolVersion: 1,
+      operation: "review",
+      state: "final",
+      summary: "Looks sound.",
+      findings: [],
+    };
     const result = await runDsh(
       request({ workspacePath: fixture.workspace, dshExecutable: fixture.executable }),
       {
@@ -199,7 +211,13 @@ describe("runDsh", () => {
         executeProcess: (spec) => {
           captured = spec;
           return Promise.resolve({
-            stdout: JSON.stringify({ operation: "review", summary: "Done.", findings: [] }),
+            stdout: JSON.stringify({
+              protocolVersion: 1,
+              operation: "review",
+              state: "final",
+              summary: "Done.",
+              findings: [],
+            }),
             stderr: "",
             exitCode: 0,
             signal: null,
@@ -274,7 +292,13 @@ describe("runDsh", () => {
         executeProcess: (_spec, limits) => {
           limitsSeen = limits;
           return Promise.resolve({
-            stdout: JSON.stringify({ operation: "review", summary: "Done.", findings: [] }),
+            stdout: JSON.stringify({
+              protocolVersion: 1,
+              operation: "review",
+              state: "final",
+              summary: "Done.",
+              findings: [],
+            }),
             stderr: "",
             exitCode: 0,
             signal: null,
@@ -296,7 +320,9 @@ describe("runDsh", () => {
         executeProcess: () =>
           Promise.resolve({
             stdout: JSON.stringify({
+              protocolVersion: 1,
               operation: "review",
+              state: "final",
               summary: "controller-real-key",
               findings: [],
             }),
@@ -336,7 +362,13 @@ describe("runDsh", () => {
             return Promise.resolve({ stdout: "", stderr: "", exitCode: 0, signal: null });
           }
           return Promise.resolve({
-            stdout: JSON.stringify({ operation: "fix", summary: "Fixed.", findings: [] }),
+            stdout: JSON.stringify({
+              protocolVersion: 1,
+              operation: "fix",
+              state: "final",
+              summary: "Fixed.",
+              findings: [],
+            }),
             stderr: "",
             exitCode: 0,
             signal: null,
@@ -395,7 +427,13 @@ describe("runDsh", () => {
           return Promise.resolve({
             stdout: spec.args.includes("install")
               ? ""
-              : JSON.stringify({ operation: "review", summary: "Done.", findings: [] }),
+              : JSON.stringify({
+                  protocolVersion: 1,
+                  operation: "review",
+                  state: "final",
+                  summary: "Done.",
+                  findings: [],
+                }),
             stderr: "",
             exitCode: 0,
             signal: null,
@@ -430,7 +468,13 @@ describe("runDsh", () => {
         return Promise.resolve({
           stdout: spec.args.includes("install")
             ? ""
-            : JSON.stringify({ operation: "review", summary: "Done.", findings: [] }),
+            : JSON.stringify({
+                protocolVersion: 1,
+                operation: "review",
+                state: "final",
+                summary: "Done.",
+                findings: [],
+              }),
           stderr: "",
           exitCode: 0,
           signal: null,

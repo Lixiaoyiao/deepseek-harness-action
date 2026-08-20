@@ -1,0 +1,90 @@
+# Planned v0.3 interface. After v0.3.0 is released, replace @v0.3 below with
+# the exact immutable action commit SHA before using this workflow in production.
+name: DSH general task (planned v0.3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Trusted natural-language question or coding task
+        required: true
+        type: string
+      access:
+        description: Requested task capability (write still passes every controller gate)
+        required: true
+        default: read
+        type: choice
+        options:
+          - read
+          - write
+
+# This single example supports its optional write path. For a permanently
+# read-only workflow, reduce contents to read and remove pull-requests: write.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Serialize tasks that bind the same default-branch head.
+  group: dsh-task-${{ github.repository }}-${{ github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+jobs:
+  task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      # @v0.3 is intentionally a pre-release documentation placeholder here.
+      # Pin the immutable v0.3.0 release commit SHA after publication.
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.3
+        id: dsh
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: auto
+          prompt: ${{ inputs.task }}
+          task-access: ${{ inputs.access }}
+          allow-write: ${{ inputs.access == 'write' && 'true' || 'false' }}
+          max-turns: "5"
+
+          # Adapt both the fixed command tool and final validation argv to your
+          # repository. The model can request command.unit-tests, but cannot
+          # add, remove, or replace any argv element.
+          allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.unit-tests"]'
+          tool-config: |
+            {
+              "schemaVersion": 1,
+              "commands": [{
+                "name": "unit-tests",
+                "description": "Run the repository unit tests without network access",
+                "argv": ["npm", "test"],
+                "timeoutMinutes": 10,
+                "maxOutputBytes": 131072,
+                "maxCalls": 2,
+                "network": "none",
+                "workspaceAccess": "read"
+              }]
+            }
+          run-tests: "true"
+          test-commands: >-
+            [
+              ["npm","ci","--ignore-scripts"],
+              ["npm","test"],
+              ["npm","run","typecheck"]
+            ]
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Inspect the versioned result
+        if: ${{ always() && steps.dsh.outputs['result-json'] != '' }}
+        env:
+          DSH_RESULT_JSON: ${{ steps.dsh.outputs['result-json'] }}
+        run: printf '%s\n' "$DSH_RESULT_JSON" | jq .
+
+# Write tasks materialize changes on a controller-owned dsh/task-* branch and
+# open a pull request. They never push the generated change to the default
+# branch directly.

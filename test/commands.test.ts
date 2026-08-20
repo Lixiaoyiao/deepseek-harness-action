@@ -8,6 +8,7 @@ describe("parseCommand", () => {
     expect(parseCommand(`@dsh ${operation} check carefully`)).toEqual({
       operation,
       instructions: "check carefully",
+      requestedAccess: operation === "fix" || operation === "implement" ? "write" : "read",
     });
   });
 
@@ -19,8 +20,24 @@ describe("parseCommand", () => {
   it("normalizes CRLF and accepts case-insensitive commands", () => {
     expect(parseCommand("  @DSH REVIEW focus on races\r\nordinary context")).toEqual({
       operation: "review",
-      instructions: "focus on races",
+      instructions: "focus on races\nordinary context",
+      requestedAccess: "read",
     });
+  });
+
+  it("parses generic task intent with explicit access and multiline instructions", () => {
+    expect(parseCommand("@dsh task explain the cache")).toEqual({
+      operation: "task",
+      instructions: "explain the cache",
+      requestedAccess: "read",
+    });
+    expect(parseCommand("@dsh task --write repair the cache\nthen update its test")).toEqual({
+      operation: "task",
+      instructions: "repair the cache\nthen update its test",
+      requestedAccess: "write",
+    });
+    expect(parseCommand("@dsh task --unknown do it")).toBeNull();
+    expect(parseCommand("@dsh task")).toBeNull();
   });
 });
 
@@ -42,6 +59,7 @@ describe("routeCommand", () => {
       operation: "diagnose",
       source: "mention",
       instructions: "now",
+      requestedAccess: "read",
     });
   });
 
@@ -82,7 +100,12 @@ describe("routeCommand", () => {
     expect(
       finalizeWorkflowRunRoute(
         context,
-        { operation: "review", source: "explicit-input", instructions: "" },
+        {
+          operation: "review",
+          source: "explicit-input",
+          instructions: "",
+          requestedAccess: "read",
+        },
         false,
       ),
     ).toMatchObject({ operation: "review" });
@@ -91,7 +114,34 @@ describe("routeCommand", () => {
   it("lets explicit trusted inputs select an operation", () => {
     expect(
       routeCommand(pullRequestContext(), inputs({ command: "fix", prompt: "repair" })),
-    ).toEqual({ operation: "fix", source: "explicit-input", instructions: "repair" });
+    ).toEqual({
+      operation: "fix",
+      source: "explicit-input",
+      instructions: "repair",
+      requestedAccess: "write",
+    });
+  });
+
+  it("routes a non-empty automation prompt into generic task mode", () => {
+    const base = pullRequestContext();
+    const context = {
+      ...base,
+      kind: "automation" as const,
+      rawEventName: "workflow_dispatch" as const,
+      eventName: "workflow_dispatch" as const,
+      eventAction: "requested",
+    };
+    expect(
+      routeCommand(
+        context,
+        inputs({ command: "auto", prompt: "upgrade dependencies", taskAccess: "write" }),
+      ),
+    ).toEqual({
+      operation: "task",
+      source: "explicit-prompt",
+      instructions: "upgrade dependencies",
+      requestedAccess: "write",
+    });
   });
 
   it("routes a failed workflow run to opt-in auto-fix when write is enabled", () => {

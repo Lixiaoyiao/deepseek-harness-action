@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness for GitHub - AI Code Review, CI Diagnosis, Auto Fix, and Issue to PR",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness for GitHub - general coding tasks, repair loops, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {
     "type": "git",

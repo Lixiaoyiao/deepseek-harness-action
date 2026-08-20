@@ -8,6 +8,7 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     githubToken: "token",
     allowWrite: false,
     command: "auto",
+    taskAccess: "read",
     prompt: "",
     dshVersion: "0.1.0-rc.6",
     dshExecutable: "",
@@ -20,6 +21,9 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     baseUrl: "https://api.deepseek.com",
     botUserId: 41898282,
     progressComment: true,
+    maxTurns: 3,
+    allowedTools: ["workspace.read", "workspace.search", "workspace.edit"],
+    toolConfig: { schemaVersion: 1, commands: [] },
     ...overrides,
   };
 }

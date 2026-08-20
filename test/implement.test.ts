@@ -44,7 +44,13 @@ vi.mock("../src/write/validate.js", () => ({
 import { finishImplementation } from "../src/commands/implement.js";
 
 const result: DshRunResult = {
-  output: { operation: "implement", summary: "Implemented the issue", findings: [] },
+  output: {
+    protocolVersion: 1,
+    operation: "implement",
+    state: "final",
+    summary: "Implemented the issue",
+    findings: [],
+  },
   durationMs: 1,
   isolationReport: {
     backend: "docker",

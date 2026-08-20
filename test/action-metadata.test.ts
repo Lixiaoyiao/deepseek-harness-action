@@ -18,6 +18,10 @@ describe("Marketplace action metadata", () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
     expect(metadata).toMatch(/allow-write:[\s\S]*?default: "false"/u);
     expect(metadata).toMatch(/progress-comment:[\s\S]*?default: "true"/u);
+    expect(metadata).toMatch(/task-access:[\s\S]*?default: "read"/u);
+    expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
+    expect(metadata).toMatch(/allowed-tools:[\s\S]*?workspace\.read/u);
+    expect(metadata).toMatch(/tool-config:[\s\S]*?schemaVersion/u);
     expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
     expect(metadata).toContain('default: "0.1.0-rc.6"');
     expect(metadata).toContain("Trusted-write requires a full name@sha256 digest");
@@ -80,6 +84,21 @@ describe("Marketplace action metadata", () => {
         /your-org|@0{40}|sha256:0{64}|immutable-reference placeholders|replace (?:the zero|both)/iu,
       );
     }
+  });
+
+  it("marks the v0.3 task example as pre-release and exercises the new inputs", async () => {
+    const example = await readFile(
+      new URL("../examples/task-automation.yml", import.meta.url),
+      "utf8",
+    );
+    expect(example).toContain("deepseek-harness-action@v0.3");
+    expect(example).toContain("exact immutable action commit SHA");
+    expect(example).toContain("task-access:");
+    expect(example).toContain("max-turns:");
+    expect(example).toContain("allowed-tools:");
+    expect(example).toContain("tool-config:");
+    expect(example).toContain('"workspaceAccess": "read"');
+    expect(example).toContain('"network": "none"');
   });
 
   it("keeps active command and diagnosis workflows on trusted action code", async () => {

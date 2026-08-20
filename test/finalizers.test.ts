@@ -24,7 +24,9 @@ import { inputs } from "./helpers.js";
 
 const result: DshRunResult = {
   output: {
+    protocolVersion: 1,
     operation: "diagnose",
+    state: "final",
     summary: "Summary @team ![pixel](https://tracker.invalid/x)",
     diagnosis: "Root cause<!-- dsh-action:summary:v1 -->",
     findings: [
@@ -119,6 +121,7 @@ describe("operation finalizers", () => {
         readCi: false,
         publishComments: true,
         executeRepositoryCode: false,
+        accessNetwork: false,
         modifyWorkspace: false,
         commit: false,
         push: false,
@@ -128,10 +131,12 @@ describe("operation finalizers", () => {
     await runAgentTask(
       {
         operation: "review",
+        requestedAccess: "read",
         policy,
         contextPacket: { repository: "o/r", data: "untrusted" },
         instructions: "focus on security",
         workspacePath: "workspace",
+        tools: { workspace: [], manifests: [], commands: [] },
       },
       inputs({ dshExecutable: "C:/dsh/lib/bin.js", timeoutMinutes: 2 }),
     );
@@ -144,6 +149,7 @@ describe("operation finalizers", () => {
         timeoutMs: 120_000,
         dshExecutable: "C:/dsh/lib/bin.js",
       }),
+      {},
     );
   });
 

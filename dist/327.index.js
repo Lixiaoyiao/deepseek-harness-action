@@ -23,16 +23,16 @@ var redaction = __webpack_require__(5275);
 
 
 
-async function publishStatusComment(client, target, authorId, title, message, runUrl) {
+async function publishStatusComment(client, target, authorId, title, message, runUrl, trackingKind = "write") {
     const body = [
-        (0,tracking/* createTrackingMarker */.ky)({ kind: "write" }),
+        (0,tracking/* createTrackingMarker */.ky)({ kind: trackingKind }),
         `## ${title}`,
         "",
         (0,redaction/* sanitizeUntrustedText */.Ti)(message.replace(/<!--\s*dsh-action:[\s\S]*?-->/giu, "")).slice(0, 60_000),
         "",
         `<sub>[Workflow run](${runUrl}) · dsh-action</sub>`,
     ].join("\n");
-    await (0,comments/* upsertTrackingComment */.k)(client, target, authorId, "write", body);
+    await (0,comments/* upsertTrackingComment */.k)(client, target, authorId, trackingKind, body);
 }
 
 // EXTERNAL MODULE: ./src/write/pr.ts
@@ -51,17 +51,20 @@ var workspace = __webpack_require__(1670);
 
 
 async function finishFix(input) {
+    const task = input.result.output.operation === "task";
+    const label = task ? "task" : "fix";
     input.onPhase?.("validation");
     await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
     const changes = await (0,workspace/* inspectWorkspaceChanges */.$Z)(input.snapshot);
-    if (changes.all.length === 0)
-        throw new Error("DSH reported a fix but produced no file changes");
+    if (changes.all.length === 0) {
+        throw new Error(`DSH reported a ${label} but produced no file changes`);
+    }
     if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
         throw new Error("run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write");
     }
     const verified = input.inputs.runTests;
     if (verified) {
-        const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage);
+        const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, input.validationTimeoutMs);
         (0,validate/* assertValidationSucceeded */.Ph)(tests);
     }
     input.onPhase?.("write");
@@ -70,23 +73,25 @@ async function finishFix(input) {
         owner: input.target.owner,
         repo: input.target.repo,
         baseSha: input.boundHeadSha,
-        message: "fix: apply DeepSeek Harness fix",
+        message: task ? "feat: apply DeepSeek Harness task" : "fix: apply DeepSeek Harness fix",
     }, input.snapshot);
     await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
     await (0,github.assertRemoteBranchHead)(input.client, input.target.owner, input.target.repo, input.headBranch, input.boundHeadSha);
     await (0,github.updateRemoteBranch)(input.client, input.target.owner, input.target.repo, input.headBranch, created.sha);
     try {
-        await publishStatusComment(input.client, input.target, input.expectedAuthorId, verified ? "DeepSeek Harness fix prepared" : "DeepSeek Harness fix prepared (unverified)", `${input.result.output.summary}\n\n${verified ? "Configured validation passed." : "No validation commands were configured; this change is unverified."}\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl);
+        await publishStatusComment(input.client, input.target, input.expectedAuthorId, verified
+            ? `DeepSeek Harness ${label} prepared`
+            : `DeepSeek Harness ${label} prepared (unverified)`, `${input.result.output.summary}\n\n${verified ? "Configured validation passed." : "No validation commands were configured; this change is unverified."}\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl, task ? "task" : "write");
         return { commitSha: created.sha, paths: created.paths, status: "success" };
     }
     catch {
         // The branch update is the authoritative write. A later comment failure
         // must not turn an already-pushed fix into a failed/retried mutation.
-        core/* warning */.$e(`Partial success: fix commit ${created.sha} was pushed, but its GitHub status comment could not be published.`);
+        core/* warning */.$e(`Partial success: ${label} commit ${created.sha} was pushed, but its GitHub status comment could not be published.`);
         try {
             await core/* summary */.z
-                .addHeading("DeepSeek Harness fix: partial success", 2)
-                .addRaw(`Fix commit \`${created.sha}\` was pushed, but the status comment could not be published.`)
+                .addHeading(`DeepSeek Harness ${label}: partial success`, 2)
+                .addRaw(`${task ? "Task" : "Fix"} commit \`${created.sha}\` was pushed, but the status comment could not be published.`)
                 .write();
         }
         catch {

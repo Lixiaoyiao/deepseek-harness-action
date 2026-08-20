@@ -3,6 +3,79 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.3.0] - Unreleased
+
+### Added
+
+- A general `task` operation for natural-language questions, repository
+  analysis, and coding work. Interactive commands use `@dsh task --read ...`
+  or `@dsh task --write ...`; `--read` is the default when the access flag is
+  omitted.
+- Explicit-prompt automation for `workflow_dispatch`, `repository_dispatch`
+  and `schedule` contexts. With `command: auto`, a non-empty trusted `prompt`
+  selects `task`; `command: task` remains available when callers want an
+  explicit route.
+- A controller-owned multi-turn loop. Fresh DSH turns can request an allowed
+  tool, receive bounded/redacted tool output, or repair a change after
+  controller validation returns bounded stdout/stderr. `max-turns`, the
+  overall deadline, per-tool call limits and no-progress detection bound the
+  loop.
+- Maintainer-defined command tools through the versioned `tool-config`
+  manifest and `allowed-tools` allowlist. Each command has fixed argv,
+  timeout, output, call-count, network and workspace-access limits; command
+  tools accept no model-provided argv, and common direct shell executables are
+  rejected as an additional guard.
+- Provider-neutral internal contracts for agent engines, tool providers,
+  extension providers and session stores, including repository/head/policy/
+  task/toolset bindings for any future resume implementation.
+- Loop observability in `result-json`, including turn, tool-call and validation
+  retry counts plus bounded tool receipts.
+
+### Changed
+
+- The DSH structured-output protocol is now explicitly versioned and carries a
+  terminal state of `final`, `needs_tool` or `blocked`. Tool execution and
+  repository validation remain controller-owned; DSH itself still receives no
+  shell or GitHub credentials.
+- A write-capable generic automation task creates a dedicated `dsh/task-*`
+  branch and pull request after controller validation. It does not push
+  directly to the default branch.
+- `task` has its own controller-owned sticky marker when an Issue or pull
+  request supplies a comment target. A read task with no entity target returns
+  its answer through the action summary and outputs.
+
+### Compatibility
+
+- All v0.2 inputs remain valid. `command: auto` keeps the established automatic
+  review and `workflow_run` diagnose/fix routing; the new task inputs have
+  conservative defaults (`task-access: read`, `max-turns: 3`, and no configured
+  command tools).
+- The v0.2 scalar outputs and schema-v1 `result-json` envelope remain available.
+  `task` is an additional `operation` value, and loop metadata is additive.
+- Existing released examples remain pinned to the immutable v0.2.0 action SHA.
+  The new task-automation example is marked as a planned v0.3 interface and
+  must be pinned to the immutable v0.3 release SHA after publication.
+
+### Security
+
+- `--write` and `task-access: write` request a capability; they do not grant it.
+  The controller still requires `allow-write: "true"`, a same-repository
+  non-`pull_request_target` context, trusted originating actors, and the
+  applicable workspace/tool allowlists before any write is possible.
+- Fixed command argv is authored by the workflow maintainer, executed in a
+  credential-free hardened container, and exposed only when both policy and
+  `allowed-tools` permit it. Tool output is untrusted feedback and is redacted
+  and bounded before another model turn.
+- Generic task automation rebinding checks the default-branch head before
+  validation, commit, branch creation and pull-request creation.
+
+### Deferred
+
+- Real MCP server connections, plugin discovery/installation/execution, and
+  cross-run session persistence or resume are **not enabled in v0.3.0**. The
+  provider/session interfaces are extension seams only; this release adds no
+  public MCP, plugin or resume inputs and emits no reusable session token.
+
 ## [0.2.0] - 2026-08-15
 
 ### Added
@@ -88,5 +161,6 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.1.0

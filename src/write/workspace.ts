@@ -196,6 +196,23 @@ export async function inspectWorkspaceChanges(
   };
 }
 
+/** Stable content revision used to distinguish repair progress from a retry loop. */
+export async function fingerprintWorkspace(root: string): Promise<string> {
+  const current = await walkFiles(root);
+  const digest = createHash("sha256");
+  for (const [path, state] of [...current.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    digest.update(path, "utf8");
+    digest.update("\0", "utf8");
+    digest.update(state.digest, "utf8");
+    digest.update("\0", "utf8");
+    digest.update(String(state.mode), "utf8");
+    digest.update("\0", "utf8");
+  }
+  return digest.digest("hex");
+}
+
 /** Apply an already inspected change set to the real checkout. */
 export async function applyWorkspaceChanges(
   snapshot: WorkspaceSnapshot,

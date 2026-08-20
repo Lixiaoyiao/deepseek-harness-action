@@ -5,7 +5,9 @@ import { buildDshPrompt, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
 import { parseDshOutput } from "../src/dsh/schema.js";
 
 const validOutput = {
+  protocolVersion: 1,
   operation: "review",
+  state: "final",
   summary: "No high-confidence defects found.",
   findings: [],
 } as const;
@@ -60,6 +62,39 @@ describe("parseDshOutput", () => {
       ),
     ).toThrow(DshMalformedOutputError);
   });
+
+  it("enforces the versioned turn state machine while keeping tool IDs provider-neutral", () => {
+    const request = parseDshOutput(
+      JSON.stringify({
+        ...validOutput,
+        state: "needs_tool",
+        toolRequest: { id: "plugin.run-check", input: { suite: "unit" } },
+      }),
+    );
+    expect(request.toolRequest).toEqual({
+      id: "plugin.run-check",
+      input: { suite: "unit" },
+    });
+    expect(() => parseDshOutput(JSON.stringify({ ...validOutput, state: "needs_tool" }))).toThrow(
+      /required when state is needs_tool/u,
+    );
+    expect(() =>
+      parseDshOutput(
+        JSON.stringify({
+          ...validOutput,
+          state: "final",
+          toolRequest: { id: "command.test" },
+        }),
+      ),
+    ).toThrow(/must be omitted when state is final/u);
+    const legacy = {
+      operation: validOutput.operation,
+      state: validOutput.state,
+      summary: validOutput.summary,
+      findings: validOutput.findings,
+    };
+    expect(() => parseDshOutput(JSON.stringify(legacy))).toThrow(/protocolVersion/u);
+  });
 });
 
 describe("buildDshPrompt", () => {
@@ -84,7 +119,8 @@ describe("buildDshPrompt", () => {
       trust: "trusted-write",
     });
     expect(prompt).toContain("edit the checked-out workspace");
-    expect(prompt).toContain("Do not use shell, execute repository code");
+    expect(prompt).toContain("cannot invoke shell or execute repository code directly");
+    expect(prompt).toContain("maintainer-defined fixed argv");
     expect(prompt).toContain("separate credential-free container");
     expect(prompt).toContain("access the web");
   });

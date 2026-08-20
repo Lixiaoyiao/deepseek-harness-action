@@ -56,7 +56,13 @@ import { finishFix } from "../src/commands/fix.js";
 
 const commitSha = "c".repeat(40);
 const result: DshRunResult = {
-  output: { operation: "fix", summary: "Fixed the root cause", findings: [] },
+  output: {
+    protocolVersion: 1,
+    operation: "fix",
+    state: "final",
+    summary: "Fixed the root cause",
+    findings: [],
+  },
   durationMs: 1,
   isolationReport: {
     backend: "docker",
@@ -148,5 +154,42 @@ describe("finishFix recovery", () => {
     expect(mocks.warning).toHaveBeenCalledWith(expect.stringContaining("Partial success"));
     expect(mocks.summaryHeading).toHaveBeenCalledWith("DeepSeek Harness fix: partial success", 2);
     expect(onPhase.mock.calls).toEqual([["validation"], ["write"]]);
+  });
+
+  it("keeps generic PR tasks on the task marker and commit vocabulary", async () => {
+    await finishFix({
+      client: {} as GitHubClient,
+      target: { owner: "octo", repo: "repo", issueNumber: 7 },
+      expectedAuthorId: 1,
+      snapshot,
+      boundHeadSha: "a".repeat(40),
+      headBranch: "feature",
+      identity: {
+        headSha: "a".repeat(40),
+        headRef: "feature",
+        headRepositoryId: 1,
+        baseRepositoryId: 1,
+      },
+      result: {
+        ...result,
+        output: { ...result.output, operation: "task", summary: "Updated the cache" },
+      },
+      inputs: inputs({ runTests: false }),
+      runUrl: "https://github.com/octo/repo/actions/runs/1",
+    });
+    expect(mocks.createCommit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ message: "feat: apply DeepSeek Harness task" }),
+      snapshot,
+    );
+    expect(mocks.publishStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      1,
+      expect.stringContaining("task prepared"),
+      expect.any(String),
+      expect.any(String),
+      "task",
+    );
   });
 });

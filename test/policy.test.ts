@@ -101,6 +101,52 @@ describe("evaluatePolicy", () => {
     });
   });
 
+  it("keeps task access controller-owned and grants PR creation only to trusted writes", () => {
+    const base = pullRequestContext();
+    const automation = {
+      ...base,
+      kind: "automation" as const,
+      rawEventName: "workflow_dispatch" as const,
+      eventName: "workflow_dispatch" as const,
+    };
+    const read = evaluatePolicy({
+      context: automation,
+      operation: "task",
+      requestedAccess: "read",
+      allowWrite: false,
+      permissions: permissions(true),
+      commandSource: "explicit-prompt",
+    });
+    const write = evaluatePolicy({
+      context: automation,
+      operation: "task",
+      requestedAccess: "write",
+      allowWrite: true,
+      permissions: permissions(true),
+      commandSource: "explicit-prompt",
+    });
+    const deniedTarget = evaluatePolicy({
+      context: {
+        ...pullRequestContext(),
+        rawEventName: "pull_request_target",
+        isPullRequestTarget: true,
+      },
+      operation: "task",
+      requestedAccess: "write",
+      allowWrite: true,
+      permissions: permissions(true),
+    });
+    expect(read).toMatchObject({ allowed: true, trust: "trusted-read" });
+    expect(read.capabilities.modifyWorkspace).toBe(false);
+    expect(write).toMatchObject({ allowed: true, trust: "trusted-write" });
+    expect(write.capabilities).toMatchObject({
+      modifyWorkspace: true,
+      createPullRequest: true,
+      accessNetwork: true,
+    });
+    expect(deniedTarget).toMatchObject({ allowed: false, trust: "untrusted" });
+  });
+
   it("fails closed for a PR conversation comment until PR origin is resolved", () => {
     const context = pullRequestContext({
       rawEventName: "issue_comment",
