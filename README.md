@@ -4,38 +4,38 @@
 [![Release](https://img.shields.io/github/v/release/Lixiaoyiao/deepseek-harness-action?display_name=tag)](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/latest)
 [![MIT](https://img.shields.io/github/license/Lixiaoyiao/deepseek-harness-action)](LICENSE)
 
-[English](README.en.md)
+[中文](README.md)
 
-让 GitHub 里的 PR、Issue 和失败 CI 直接调用 DeepSeek Harness。
+Run DeepSeek Harness directly from GitHub pull requests, issues, and failed CI jobs.
 
 ```text
 GitHub PR / Issue / CI  →  DeepSeek Harness  →  Review / Diagnose / Fix / Issue → PR
 ```
 
-它和 [Claude Code Action](https://github.com/anthropics/claude-code-action) 属于同一类 GitHub 集成：由 GitHub 事件启动 coding agent，再把 review、诊断或代码改动写回仓库。这个项目使用的是 DeepSeek Harness。
+It belongs to the same category of GitHub integration as [Claude Code Action](https://github.com/anthropics/claude-code-action): GitHub events start a coding agent, and the action writes reviews, diagnoses, or code changes back to the repository. This project uses DeepSeek Harness.
 
-PR 可以自动收到行内 review；失败的 CI 可以得到诊断；在你明确开放写权限后，`@dsh` 也可以修代码或把 Issue 做成 PR。
+Pull requests can receive automatic inline reviews. Failed CI runs can receive a diagnosis. Once you explicitly enable write access, `@dsh` can also fix code or turn an issue into a pull request.
 
-这是由社区维护的项目，不是 DeepSeek 或 GitHub 官方产品。
+This is a community project. It is not an official DeepSeek or GitHub product.
 
 Maintained by [@Lixiaoyiao](https://github.com/Lixiaoyiao).
 
-## 真实运行
+## Live runs
 
-下面都是这个仓库自己的公开运行记录，可以直接查看评论和 Actions 日志。
+These are public runs from this repository. You can inspect the comments and Actions logs directly.
 
-| 场景                            | 运行记录                                                                                                                                                              |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PR Review，以及复跑不重复发评论 | [PR #3](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/3) · [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760570162) |
-| 读取失败 check 和日志后给出诊断 | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760603284)                                                                         |
-| 受信任写模式下修复并验证        | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
-| 从 Issue 实现代码并创建 PR      | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
+| Scenario                                                | Run                                                                                                                                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR review, including a rerun without duplicate comments | [PR #3](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/3) · [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760570162) |
+| Diagnosis based on failed checks and logs               | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31760603284)                                                                         |
+| Fix and validation in trusted write mode                | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
+| Issue implementation followed by a pull request         | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
-## 快速开始
+## Quick start
 
-先在仓库的 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。
+Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions** in your repository.
 
-然后创建 `.github/workflows/dsh-review.yml`：
+Then create `.github/workflows/dsh-review.yml`:
 
 ```yaml
 name: DSH review
@@ -64,75 +64,75 @@ jobs:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
-现在打开一个非 draft PR。Action 会读取 diff 和仓库上下文，并发布 review summary；有确定问题时，也会在对应代码行留下评论。
+Open a non-draft pull request. The action reads the diff and repository context, then posts a review summary. When it finds a concrete problem, it also comments on the relevant line.
 
-完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
+See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
-> v0.2.0 已发布。上面的 Quick start 和现有 v0.2 模板仍固定到本次真实 E2E 验证过的不可变 runtime commit SHA，不代表该 SHA 已包含下述 v0.3 功能。新增的 [`examples/task-automation.yml`](examples/task-automation.yml) 明确标记为拟发布 v0.3 接口；发布后应把 tag 换成不可变 commit SHA。完整 release notes 见 [`CHANGELOG.md`](CHANGELOG.md)。
+> v0.2.0 is released. The Quick start above and the existing v0.2 templates remain pinned to the immutable runtime commit exercised by the real E2E release checks; that SHA does not include the v0.3 features described below. The new [`examples/task-automation.yml`](examples/task-automation.yml) is explicitly marked as a planned v0.3 interface. Replace its tag with the immutable release commit after publication. See [`CHANGELOG.md`](CHANGELOG.md) for the complete release notes.
 
-## 能做什么
+## What it does
 
-| 入口                                                 | 结果                                       |
-| ---------------------------------------------------- | ------------------------------------------ |
-| PR `opened` / `synchronize` / `ready_for_review`     | 自动 review，发布 summary 和行内评论       |
-| `@dsh task --read <问题或任务>`                      | 通用问答、代码阅读和仓库分析               |
-| `@dsh task --write <编码任务>`                       | 在全部写入 gate 通过后修改、验证并交付代码 |
-| dispatch / schedule workflow 中显式设置非空 `prompt` | 运行通用自动化 task                        |
-| `@dsh review`                                        | 手动重新 review 当前 PR                    |
-| `@dsh diagnose`                                      | 读取失败的 check 和日志，定位原因          |
-| `@dsh fix`                                           | 在受信任写模式下修改代码并运行验证         |
-| Issue 中的 `@dsh implement`                          | 理解 Issue、改代码、运行验证并创建 PR      |
+| Entry point                                                | Result                                                               |
+| ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| PR `opened` / `synchronize` / `ready_for_review`           | Automatic review with a summary and inline comments                  |
+| `@dsh task --read <question or task>`                      | General Q&A, code reading, and repository analysis                   |
+| `@dsh task --write <coding task>`                          | Change, validate, and deliver code after every write gate passes     |
+| An explicit non-empty `prompt` in a dispatch/schedule flow | Run a general automation task                                        |
+| `@dsh review`                                              | Review the current pull request again                                |
+| `@dsh diagnose`                                            | Read failed checks and logs, then identify the cause                 |
+| `@dsh fix`                                                 | Change code and run validation in trusted write mode                 |
+| `@dsh implement` on an issue                               | Understand the issue, change code, validate, and open a pull request |
 
-命令必须出现在评论第一行。可以直接复制这些 workflow：
+The command must be on the first line of the comment. Ready-to-copy workflows are included:
 
-- [`examples/commands.yml`](examples/commands.yml)：`@dsh` 命令、修复和 Issue → PR
-- [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml)：CI 失败诊断
-- [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml)：受信任的 CI 自动修复
-- [`examples/task-automation.yml`](examples/task-automation.yml)：拟发布 v0.3 的显式 prompt 通用自动化
+- [`examples/commands.yml`](examples/commands.yml) for `@dsh` commands, fixes, and Issue → PR
+- [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml) for failed CI diagnosis
+- [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml) for trusted CI auto-fix
+- [`examples/task-automation.yml`](examples/task-automation.yml) for the planned v0.3 explicit-prompt automation interface
 
-`fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`，并配置测试命令。详细输入见 [`action.yml`](action.yml)。
+Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"` and define validation commands. See [`action.yml`](action.yml) for all inputs.
 
-## 通用 task 与显式自动化（v0.3.0 开发预览）
+## General tasks and explicit automation (v0.3.0 development preview)
 
-`task` 不把工作限制在 review、diagnose、fix 或 implement 模板内。它既能回答自然语言问题，也能阅读仓库或执行编码任务：
+`task` is not limited to the review, diagnose, fix, or implement templates. It can answer natural-language questions, inspect a repository, or carry out a coding task:
 
 ```text
-@dsh task --read 解释这个 PR 为什么需要两阶段提交
-@dsh task --write 为解析器补上空输入测试并运行验证
+@dsh task --read Explain why this pull request needs a two-phase commit
+@dsh task --write Add empty-input coverage to the parser and run validation
 ```
 
-命令必须从评论第一行开始；后续行可以继续写任务说明。`--read` 是 `task` 的默认值。`--write` 只表示请求写能力，不是授权：仍需 `allow-write: "true"`、同仓库且非 `pull_request_target` 的上下文、所有来源 actor 通过 write/maintain/admin 检查，以及 `workspace.edit` 留在有效工具 allowlist 中。fork PR 永远不会因此升级为写模式。
+The command must start on the first line of the comment; later lines may continue the instructions. `--read` is the default for `task`. `--write` requests a capability but does not authorize it. The workflow still needs `allow-write: "true"`, a same-repository context that is not `pull_request_target`, write/maintain/admin permission for every originating actor, and `workspace.edit` in the effective tool allowlist. A fork pull request can never be upgraded to write mode this way.
 
-在 `workflow_dispatch`、`repository_dispatch` 或 `schedule` 这类自动化事件中，`command: auto` 加非空 `prompt` 会路由到通用 `task`。也可以显式设置 `command: task`；此时 `prompt` 必填。`task-access` 默认为 `read`：
+On `workflow_dispatch`, `repository_dispatch`, or `schedule` automation events, `command: auto` plus a non-empty `prompt` routes to a general `task`. You may instead set `command: task`, in which case `prompt` is required. `task-access` defaults to `read`:
 
 ```yaml
 with:
   command: auto
-  prompt: "检查依赖边界，必要时补测试并解释结果"
+  prompt: "Check the dependency boundary, add tests if needed, and explain the result"
   task-access: read
 ```
 
-`prompt` 属于受信任 control-plane 配置，只应来自维护者写入的 workflow 或受信任的 dispatch 输入；不要把 Issue 正文、PR 内容、日志或其他不可信数据未经区分地提升为 `prompt`。完整的读/写 dispatch 模板见 [`examples/task-automation.yml`](examples/task-automation.yml)。该模板使用拟发布的 `@v0.3` 接口占位，正式发布后必须固定到不可变 commit SHA。
+`prompt` is trusted control-plane configuration. Populate it only from a maintainer-authored workflow or a trusted dispatch input; do not silently promote issue bodies, pull-request content, logs, or other untrusted data into `prompt`. See [`examples/task-automation.yml`](examples/task-automation.yml) for a complete read/write dispatch template. It uses a planned `@v0.3` interface placeholder and must be pinned to an immutable commit SHA after the release.
 
-无 Issue/PR 实体的只读自动化会通过 step summary 和 outputs 返回回答。无实体或以 Issue 为目标的写 task 会创建独立 `dsh/task-*` 分支和 PR；controller 不会把通用自动化改动直接推到默认分支。PR 上获准的同仓库写 task 仍只作用于 controller 绑定并重新校验过的目标分支。
+A read-only automation task without an issue or pull-request entity returns its answer through the step summary and outputs. A write task with no entity, or one targeting an issue, creates a dedicated `dsh/task-*` branch and pull request; the controller never pushes general automation changes directly to the default branch. An authorized task on a same-repository pull request can affect only the target branch that the controller bound and revalidated.
 
-## 多轮修改、验证与修复闭环
+## Multi-turn edit, validation, and repair loop
 
-v0.3 的循环在 Action controller 中，而不在 DSH shell 中。每一轮都是新的、受同一任务锚点和能力策略约束的 DSH turn：
+The v0.3 loop belongs to the Action controller, not to a shell inside DSH. Every iteration is a fresh DSH turn constrained by the same task anchor and capability policy:
 
 ```text
 DSH turn
-  ├─ needs_tool → controller 运行一个已允许工具 → 限长/脱敏结果作为不可信反馈 → 下一轮
-  ├─ final → controller validation 失败 → stdout/stderr 作为不可信反馈 → 下一轮修改
-  ├─ final → validation 通过 → controller 发布、commit 或创建 PR
-  └─ blocked → 安全结束并返回 neutral
+  ├─ needs_tool → controller runs one allowed tool → bounded/redacted untrusted result → next turn
+  ├─ final → controller validation fails → stdout/stderr as untrusted feedback → next edit turn
+  ├─ final → validation passes → controller publishes, commits, or opens a pull request
+  └─ blocked → stop safely with a neutral result
 ```
 
-DSH 不能直接运行 shell，也不持有 GitHub 或 DeepSeek 凭据。controller 负责工具执行、validation、实际变更检查和最后的 GitHub 写入。`max-turns`（默认 3）统一限制工具请求和 validation 修复所消耗的 DSH turn；`timeout-minutes` 是整个 controller loop 的总 deadline。若相同 workspace revision 连续得到相同 validation 失败，controller 会以 no-progress 错误停止，避免无效循环。turn/tool/validation-retry 计数与限长 tool receipts 会写入 `result-json.loop`。
+DSH cannot run a shell directly and holds neither GitHub nor DeepSeek credentials. The controller owns tool execution, validation, actual-change inspection, and the final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
 
-## 维护者定义的安全命令工具
+## Maintainer-defined safe command tools
 
-模型不能自由拼 shell。维护者在 versioned `tool-config` 中给每个命令固定完整 argv，再通过 `allowed-tools` 单独暴露其 ID：
+The model cannot assemble arbitrary shell commands. A maintainer defines the complete fixed argv for each command in a versioned `tool-config` manifest, then exposes its ID separately through `allowed-tools`:
 
 ```yaml
 with:
@@ -153,69 +153,69 @@ with:
     }
 ```
 
-请把示例 argv 替换为仓库自己的确定命令。command tool 不接收模型参数；常见的直接 shell executable 会作为附加防线被拒绝，未定义工具、超出调用次数以及不符合当前 policy 的 network/workspace 权限也会失败。真正的安全边界是维护者固定全部 argv、模型不能追加参数，以及凭据隔离的容器。命令在无 controller 凭据、固定 digest 的 hardened container 中运行；stdout/stderr 会限长和脱敏，并始终按不可信数据回送。仅把工具写进 manifest 也不会授权执行：ID 还必须出现在 `allowed-tools`，且当前 security policy 必须允许相应的 execute/write/network capability。
+Replace the sample argv with a deterministic command for your repository. A command tool accepts no model arguments. Common direct shell executables are rejected as an additional guard; undefined tools, calls beyond `maxCalls`, and network/workspace access that exceeds the current policy also fail. The primary boundary is maintainer-fixed complete argv, no model-added arguments, and a credential-isolated container pinned by full digest. stdout/stderr is bounded and redacted, then returned only as untrusted feedback. A manifest entry alone grants nothing: its ID must also appear in `allowed-tools`, and the current security policy must allow the required execute/write/network capability.
 
-## v0.3 扩展接口与 v0.2 兼容性
+## v0.3 extension seams and v0.2 compatibility
 
-v0.3 在 controller 内部固定了 protocol v1 的 `AgentEngine`、`ToolProvider`、`ExtensionProvider`、`SessionStore` 与 session binding 数据形状。binding 为将来的 resume 预留 repository/head、actor、policy、task scope、engine、toolset 和 extension lock 绑定，避免跨仓库、跨 SHA 或跨能力策略复用会话。
+v0.3 fixes the internal protocol-v1 shapes for `AgentEngine`, `ToolProvider`, `ExtensionProvider`, `SessionStore`, and session bindings. A future resume implementation can bind a session to repository/head, actor, policy, task scope, engine, toolset, and extension lock so it cannot be reused across repositories, SHAs, or capability policies.
 
-这些目前只是扩展 seam：**v0.3.0 没有启用真实 MCP server、插件发现/安装/执行，也没有跨 workflow run 的 session 持久化或 resume**。当前没有可配置的 MCP/plugin/resume action input，也不会输出可复用 session token；请勿把 provider 类型名理解成已交付功能。
+These are extension seams only: **v0.3.0 does not enable real MCP servers, plugin discovery/installation/execution, or cross-workflow session persistence/resume**. There are no MCP, plugin, or resume action inputs today, and the action emits no reusable session token. Provider type names are not a claim that those user-facing features are available.
 
-协议版本、tool routing、session binding 与未来 provider 必须满足的安全责任见 [`docs/extension-contracts.md`](docs/extension-contracts.md)。
+See [`docs/extension-contracts.md`](docs/extension-contracts.md) for protocol versioning, tool routing, session binding, and the security responsibilities future providers must satisfy.
 
-v0.2 的既有 inputs、scalar outputs 和 schema-v1 `result-json` envelope 继续有效；`command: auto` 保持原来的自动 review 与 `workflow_run` diagnose/fix 路由。v0.3 只新增 `task` operation 和可选 loop metadata，默认 `task-access: read`、`max-turns: 3`，且 command manifest 为空，因此现有 workflow 不需要为新能力改写。上面的 v0.2.0 SHA 示例仍然只代表 v0.2.0。
+Existing v0.2 inputs, scalar outputs, and the schema-v1 `result-json` envelope remain valid. `command: auto` preserves automatic review and `workflow_run` diagnose/fix routing. v0.3 only adds the `task` operation and optional loop metadata; `task-access: read`, `max-turns: 3`, and an empty command manifest are the defaults, so existing workflows do not need to opt into the new capabilities. The v0.2.0 SHA shown above still represents v0.2.0 only.
 
-## 运行进度与结构化输出
+## Progress and structured outputs
 
-当一次获准的操作能够对应到 PR 或 Issue 时，controller 会在三个主要阶段更新一条 sticky comment：准备受限上下文、运行 DSH 并校验结构化输出、发布结果或执行受信任写入。它复用现有的 controller-owned v1 marker，因此不会额外制造一条“进度评论”：
+When an authorized operation resolves to a pull request or issue, the controller updates one sticky comment at three major stages: preparing bounded context, running DSH and validating its structured output, and publishing the result or applying the trusted write. It reuses the existing controller-owned v1 marker, so progress does not create a second status comment:
 
-| 操作                | 复用的 sticky marker |
+| Operation           | Reused sticky marker |
 | ------------------- | -------------------- |
 | `task`              | `task`               |
 | `review`            | `summary`            |
 | `diagnose`          | `diagnosis`          |
 | `fix` / `implement` | `write`              |
 
-成功时，详细 review、诊断或写入结果会替换同一条评论；失败时，同一位置会显示稳定错误码、失败阶段、经过脱敏和限长的错误信息，以及建议的下一步。只有预期 numeric bot ID 发布的 marker 才会被更新，用户伪造的 marker 不会被接管。生命周期评论更新是 best effort：GitHub 评论 API 暂时不可用不会遮蔽 agent、validation 或写入的真实结果。
+On success, the detailed review, diagnosis, or write result replaces that same comment. On failure, it shows a stable error code, the failing phase, a redacted and bounded message, and an actionable next step. Only markers authored by the expected numeric bot ID are updated; user-forged markers are ignored. Lifecycle comment updates are best effort, so a temporary GitHub comments API failure does not hide the real agent, validation, or write outcome.
 
-`progress-comment` 默认是 `true`。如果不希望显示中间状态，可以关闭：
+`progress-comment` defaults to `true`. Disable intermediate lifecycle updates with:
 
 ```yaml
 with:
   progress-comment: "false"
 ```
 
-关闭它只会禁用 lifecycle 更新，不会关闭正常的 review 行内评论、review summary、CI diagnosis 或 fix 最终状态发布。
+This disables lifecycle updates only. It does not disable normal inline review comments, review summaries, CI diagnoses, or final fix status publication.
 
-建议让 job 的 `timeout-minutes` 比 Action 的同名输入多留几分钟；这样 DSH 内部 watchdog 能先结束 worker，并有时间写完失败 outputs、step summary 和 sticky comment。
+Keep the job-level `timeout-minutes` a few minutes above the action input of the same name. This gives the internal DSH watchdog time to stop the worker and finalize failure outputs, the step summary, and the sticky comment.
 
-Action 在 success、neutral 和 failure 路径都会设置 `result-json`。这是带 `schemaVersion: 1` 的 JSON envelope，包含适用的 `status`、operation、summary、timing、policy/capabilities、实际 isolation report、publication 统计、controller validation、write 结果、sticky comment ID 和 error。`status` 可能是 `success`、`neutral`、`failed`、`timed_out`、`validation_failed` 或 `denied`；`validation_failed` 同时覆盖无效的 DSH structured output 和 controller validation 失败，具体由 `error.code` 区分。失败对象包含稳定的 `code`、`phase`、`title`、`message`、`guidance` 和 `retryable`。
+The action sets `result-json` on success, neutral, and failure paths. This is a `schemaVersion: 1` JSON envelope containing the applicable `status`, operation, summary, timing, policy/capabilities, actual isolation report, publication statistics, controller validation, write result, sticky comment ID, and error. `status` is one of `success`, `neutral`, `failed`, `timed_out`, `validation_failed`, or `denied`. `validation_failed` covers both invalid DSH structured output and controller validation failure; `error.code` distinguishes them. A failure object carries stable `code`, `phase`, `title`, `message`, `guidance`, and `retryable` fields.
 
-所有标量 outputs 如下：
+All scalar outputs are:
 
-| Output             | 含义                                                               |
-| ------------------ | ------------------------------------------------------------------ |
-| `conclusion`       | `success`、`neutral` 或 `failure`                                  |
-| `operation`        | `task`、`review`、`diagnose`、`fix`、`implement` 或 `none`         |
-| `summary`          | 任意操作的校验后摘要，失败时为安全的失败摘要                       |
-| `review-summary`   | `summary` 的向后兼容别名                                           |
-| `findings-count`   | review 中选中的 finding 数；其他操作中为已校验的 agent finding 数  |
-| `branch-name`      | 创建的 DSH 分支（不适用时为空）                                    |
-| `pull-request-url` | 创建的 PR URL（不适用时为空）                                      |
-| `commit-sha`       | 成功 fix 创建的 commit（不适用时为空）                             |
-| `trust`            | `untrusted`、`trusted-read`、`trusted-write` 或尚未解析时的 `none` |
-| `duration-ms`      | controller 总耗时，毫秒                                            |
-| `comment-id`       | 可用时的 sticky progress/result comment ID                         |
-| `error-code`       | 稳定失败码；成功和 neutral 时为空                                  |
-| `error-message`    | 脱敏且限长的失败信息                                               |
-| `result-json`      | 上述 versioned JSON envelope                                       |
+| Output             | Meaning                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `conclusion`       | `success`, `neutral`, or `failure`                                               |
+| `operation`        | `task`, `review`, `diagnose`, `fix`, `implement`, or `none`                      |
+| `summary`          | Validated summary for any operation, or a safe failure summary                   |
+| `review-summary`   | Backward-compatible alias of `summary`                                           |
+| `findings-count`   | Selected review findings, or validated agent findings for other operations       |
+| `branch-name`      | Created DSH branch, empty when not applicable                                    |
+| `pull-request-url` | Created pull request URL, empty when not applicable                              |
+| `commit-sha`       | Commit created by a successful fix, empty when not applicable                    |
+| `trust`            | `untrusted`, `trusted-read`, `trusted-write`, or `none` before policy resolution |
+| `duration-ms`      | Total controller duration in milliseconds                                        |
+| `comment-id`       | Sticky progress/result comment ID when available                                 |
+| `error-code`       | Stable failure code; empty on success or neutral completion                      |
+| `error-message`    | Redacted and bounded failure message                                             |
+| `result-json`      | The versioned JSON envelope described above                                      |
 
-v0.1.0 已有的 `conclusion`、`operation`、`review-summary`、`findings-count`、`branch-name` 和 `pull-request-url` 均保留；现有 workflow 不需要改写。模型给出的 `verification` 与 controller 真正运行的 validation 是两类数据，`result-json` 会把后者单独放在 `validation` 中。
+The v0.1.0 outputs `conclusion`, `operation`, `review-summary`, `findings-count`, `branch-name`, and `pull-request-url` remain available, so existing workflows do not need to be rewritten. Model-reported `verification` and controller-executed validation are different data; `result-json` exposes the latter separately under `validation`.
 
-失败的 Action step 也会先写 outputs；后续步骤要读取它时，请使用 `always()`，并通过环境变量传给 shell，避免把模型派生文本直接拼进脚本：
+A failed action step still writes its outputs first. Use `always()` in a later step and pass the value through an environment variable instead of interpolating model-derived text into a script:
 
 ```yaml
-# 先给 DeepSeek Harness step 设置 id: dsh
+# First give the DeepSeek Harness step id: dsh
 - name: Inspect DSH result
   if: ${{ always() && steps.dsh.outputs['result-json'] != '' }}
   env:
@@ -223,11 +223,11 @@ v0.1.0 已有的 `conclusion`、`operation`、`review-summary`、`findings-count
   run: printf '%s\n' "$DSH_RESULT_JSON" | jq .
 ```
 
-`result-json` 中的 summary、路径和其他模型派生字符串仍然是不可信数据；它们是 observability/output data，不能作为授权信号，也不要直接插入 shell 命令。
+Summaries, paths, and other model-derived strings inside `result-json` remain untrusted data. The envelope is observability/output data, not an authorization signal; do not splice its strings directly into shell commands.
 
-## 写模式
+## Write mode
 
-`allow-write` 默认是 `false`。写入只对同仓库、受信任操作者开放；fork PR 始终是 review-only。测试命令使用 argv 数组，不经过 shell 展开：
+`allow-write` defaults to `false`. Writes are limited to trusted actors working in the same repository; fork pull requests are always review-only. Validation commands are argv arrays and are not expanded by a shell:
 
 ```yaml
 with:
@@ -237,31 +237,31 @@ with:
   container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
 ```
 
-写模式要求使用完整的 Docker image digest。Docker 需要在 runner 上可用。
+Write mode requires a complete Docker image digest. Docker must be available on the runner.
 
-## 安全
+## Security
 
-安全模型分成四层，避免把“操作者可信”和“仓库内容可信”混为一谈：
+The security model has four separate layers so that a trusted actor is never confused with trusted repository content:
 
-1. **Actor / control plane**：交互式 `@dsh` 命令要求所有来源 actor 都通过 write/maintain/admin 检查；写操作还必须显式设置 `allow-write: "true"`。workflow token scopes 只决定 controller 能调用哪些 GitHub API，不能绕过 actor 或 policy gate。
-2. **输入数据**：仓库文件、diff、CI 日志、README/AGENTS/CLAUDE、Issue、PR 和评论始终是不可信数据。模型输出也不直接获得权力，必须通过严格 schema、路径、大小和 marker 校验。
-3. **Worker**：`untrusted`、`trusted-read`、`trusted-write` 是执行 profile，不表示仓库内容变得可信。fork 没有仓库工具；read profile 只允许不可变副本上的 read/search；write profile 只允许 `.git`-less 副本上的 read/search/edit，不能运行 shell 或直接调用 GitHub。
-4. **Controller / commit authority**：只有 controller 持有 GitHub client 和真实凭据，负责重新绑定 SHA/Issue/PR identity、运行无凭据 validation、检查实际文件变化，并最终评论、commit、push 或创建 PR。
+1. **Actor / control plane:** interactive `@dsh` commands require every originating actor to pass the write/maintain/admin check. Writes additionally require explicit `allow-write: "true"`. Workflow token scopes only determine which GitHub APIs the controller may call; they cannot bypass actor or policy gates.
+2. **Input data:** repository files, diffs, CI logs, README/AGENTS/CLAUDE files, issues, pull requests, and comments always remain untrusted. Model output receives no authority directly and must pass strict schema, path, size, and marker validation.
+3. **Worker:** `untrusted`, `trusted-read`, and `trusted-write` are execution profiles; they do not make repository content trusted. Forks receive no repository tools, the read profile gets read/search over an immutable copy, and the write profile gets read/search/edit over a `.git`-less copy without shell or direct GitHub access.
+4. **Controller / commit authority:** only the controller holds the GitHub client and real credentials. It rebinds SHA and issue/PR identity, runs credential-free validation, checks actual file changes, and finally comments, commits, pushes, or opens a pull request.
 
-常用模板的 workflow permissions：
+Workflow permissions used by the supplied templates are:
 
-| 场景                          | Workflow token permissions                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| 自动或 fork PR review         | `contents: read`、`pull-requests: write`                                                    |
-| 只读通用 task                 | `contents: read`；需要 Issue/PR sticky comment 时再加对应 write scope                       |
-| 创建分支和 PR 的自动化写 task | `contents: write`、`pull-requests: write`                                                   |
-| CI diagnosis                  | `actions: read`、`checks: read`、`contents: read`、`issues: write`、`pull-requests: write`  |
-| 支持 fix / implement 的命令   | `contents: write`、`actions: read`、`checks: read`、`issues: write`、`pull-requests: write` |
-| CI auto-fix                   | 与上一行相同                                                                                |
+| Scenario                                 | Workflow token permissions                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Automatic or fork PR review              | `contents: read`, `pull-requests: write`                                                    |
+| Read-only general task                   | `contents: read`; add the matching write scope only when an Issue/PR sticky comment is used |
+| Automation task that creates a branch/PR | `contents: write`, `pull-requests: write`                                                   |
+| CI diagnosis                             | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
+| Commands that support fix / implement    | `contents: write`, `actions: read`, `checks: read`, `issues: write`, `pull-requests: write` |
+| CI auto-fix                              | Same as the preceding row                                                                   |
 
-progress comment 使用与最终结果评论相同的权限，不新增 scope。`GITHUB_TOKEN` 只留在 controller；DeepSeek key 由 controller 侧代理注入，两者都不会进入 DSH workspace 或 validation 命令。完整信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。v0.3.0 仍只接受经过当前 policy profile 审计的 `@deepseek-ai/dsh@0.1.0-rc.6`；DSH 仍在快速迭代，升级版本前必须新增并审查对应 profile。
+Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH workspace or validation commands. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.3.0 still accepts only the audited `@deepseek-ai/dsh@0.1.0-rc.6` policy profile; adding another DSH version requires a matching profile and review.
 
-## 架构
+## Architecture
 
 ```text
 GitHub event
@@ -280,25 +280,25 @@ Action controller: final schema + validation → publish / commit / branch + PR
 Action outputs: legacy scalars + versioned result-json
 ```
 
-DSH worker 不持有 GitHub client。模型输出通过 schema 校验后，才由 controller 映射到 diff 行、调用已授权工具、更新 tracking 评论或执行受信任写入。MCP/plugin/session store 目前只位于 provider contract 层，不在这条运行路径中。
+The DSH worker does not hold a GitHub client. Model output must pass schema validation before the controller maps it to diff lines, invokes an authorized tool, updates tracking comments, or performs a trusted write. MCP/plugin/session-store types currently stop at the provider-contract layer and are not part of this runtime path.
 
-## 开发
+## Development
 
-需要 Node.js 24。
+Node.js 24 is required.
 
 ```bash
 npm ci
 npm run check
 ```
 
-Marketplace 使用的 `dist/` 会随 release 一起提交。依赖和打包说明见 [`BUNDLED_DEPENDENCIES.md`](BUNDLED_DEPENDENCIES.md)。
+The `dist/` bundle used by GitHub Marketplace is committed with each release. See [`BUNDLED_DEPENDENCIES.md`](BUNDLED_DEPENDENCIES.md) for dependency and bundling details.
 
 ## License
 
-[MIT](LICENSE)。第三方许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+[MIT](LICENSE). Third-party licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgements
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供本项目使用的 headless agent runtime。
-- GitHub 事件路由、权限检查和 tracking 机制基于 [Claude Code Action](https://github.com/anthropics/claude-code-action) 的 MIT 实现适配。对应上游 commit 和许可文本记录在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-- Structured output 和执行/发布权限分离的设计也参考了 [Codex GitHub Action](https://learn.chatgpt.com/docs/github-action)；本项目仍保留自己的 controller/worker 信任边界与输出协议。
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) provides the headless agent runtime used by this project.
+- The GitHub event routing, permission checks, and tracking model are adapted from the MIT-licensed [Claude Code Action](https://github.com/anthropics/claude-code-action). The exact upstream commit and license text are recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+- The structured-output and execution/publication permission separation also draw on the design of [Codex GitHub Action](https://learn.chatgpt.com/docs/github-action); this project retains its own controller/worker trust boundary and result protocol.
