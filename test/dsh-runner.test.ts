@@ -382,6 +382,7 @@ describe("runDsh", () => {
     expect(installSpec?.args).toContain("@deepseek-ai/dsh@0.1.0-rc.6");
     expect(installSpec?.args).not.toContain("--ignore-scripts");
     expect(installSpec?.args).toContain("--no-audit");
+    expect(installSpec?.args).toContain("NODE_OPTIONS=--max-old-space-size=1536");
     expect(captured?.command).toBe("docker");
     expect(captured?.args).toContain("--read-only");
     expect(captured?.args).toContain("--user");

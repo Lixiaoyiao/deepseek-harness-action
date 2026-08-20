@@ -558,6 +558,8 @@ function dockerInstallSpec(
       "HOME=/tmp",
       "--env",
       "npm_config_cache=/tmp/npm-cache",
+      "--env",
+      "NODE_OPTIONS=--max-old-space-size=1536",
       request.containerImage,
       "npm",
       "install",

@@ -32,10 +32,12 @@ jobs:
           trap cleanup EXIT
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$run_as" \
+            --memory 2g --cpus 2 \
             --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
             --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package" \
             --workdir /opt/dsh-action/package \
             --env HOME=/tmp --env npm_config_cache=/tmp/npm-cache \
+            --env NODE_OPTIONS=--max-old-space-size=1536 \
             docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
             npm install --no-audit --no-fund --omit=dev --save=false --loglevel=error \
               @deepseek-ai/dsh@0.1.0-rc.6
