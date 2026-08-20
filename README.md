@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/Lixiaoyiao/deepseek-harness-action?display_name=tag)](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/latest)
 [![MIT](https://img.shields.io/github/license/Lixiaoyiao/deepseek-harness-action)](LICENSE)
 
-[中文](README.md)
+[中文](README.zh-CN.md)
 
 Run DeepSeek Harness directly from GitHub pull requests, issues, and failed CI jobs.
 
