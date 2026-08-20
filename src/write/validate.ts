@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { assertPinnedContainerImage } from "../dsh/runner.js";
 import { runCommand, type CommandResult } from "../security/argv.js";
+import { isIgnoredGeneratedRootEntry } from "./workspace.js";
 
 const VALIDATION_ENV = [
   "PATH",
@@ -43,6 +44,13 @@ function deadlineExceededResult(): CommandResult {
     timedOut: true,
     outputTruncated: false,
   };
+}
+
+function includeInValidationCopy(workspaceRoot: string, source: string): boolean {
+  const path = relative(workspaceRoot, source);
+  if (path === "") return true;
+  const rootEntry = path.split(sep)[0];
+  return rootEntry !== undefined && !isIgnoredGeneratedRootEntry(rootEntry);
 }
 
 export class ValidationFailureError extends Error {
@@ -131,7 +139,12 @@ export async function runValidationCommandsInDocker(
   const validationParent = await mkdtemp(join(tmpdir(), "dsh-action-validation-"));
   const validationRoot = join(validationParent, "workspace");
   try {
-    await cp(cwd, validationRoot, { recursive: true, force: false, errorOnExist: true });
+    await cp(cwd, validationRoot, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      filter: (source) => includeInValidationCopy(cwd, source),
+    });
     const results: ValidationResult[] = [];
     for (const argv of commands) {
       if (argv.length === 0) throw new Error("Validation command must not be empty");

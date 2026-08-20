@@ -127,7 +127,9 @@ maintainer configuration, `allowed-tools` and the controller policy:
   destination allowlist and may expose repository contents to arbitrary egress
   destinations permitted by the runner network.
 - The real GitHub token and DeepSeek key are never placed in the command
-  container. Command output remains untrusted even though the argv is trusted.
+  container. Input validation rejects either controller credential if a trusted
+  workflow interpolates it into command-tool or validation argv. Command output
+  remains untrusted even though the argv is trusted.
 
 ### 4. Controller and commit authority
 
@@ -141,7 +143,9 @@ mutation.
 - Validation commands are fixed workflow argv arrays, never model-provided
   shell text. They run only after all trusted-write gates in a disposable,
   credential-free container. A validation failure or timeout prevents the
-  branch update or pull request creation.
+  branch update or pull request creation. The validation copy excludes the
+  root `.git` and `node_modules` directories because those generated paths are
+  also excluded from the publishable change set.
 - Entity-free automation and issue-backed `task` writes never push directly to
   the repository default branch. They bind the default-branch head as an
   immutable base, then create a controller-owned task branch and pull request.

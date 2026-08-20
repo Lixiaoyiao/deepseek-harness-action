@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,56 @@ describe("trusted-write validation container", () => {
           "docker.io/library/node:24@sha256:" + "a".repeat(64),
         ),
       ).resolves.toEqual([]);
+    } finally {
+      await rm(source, { force: true, recursive: true });
+    }
+  });
+
+  it("excludes ignored root metadata and generated dependencies from validation", async () => {
+    const source = await mkdtemp(join(tmpdir(), "dsh-action-validation-source-"));
+    try {
+      await writeFile(join(source, "tracked.txt"), "validated\n", "utf8");
+      await mkdir(join(source, ".git"), { recursive: true });
+      await writeFile(join(source, ".git", "config"), "poisoned\n", "utf8");
+      await mkdir(join(source, "node_modules", ".bin"), { recursive: true });
+      await writeFile(join(source, "node_modules", ".bin", "test"), "poisoned\n", "utf8");
+      let inspected = false;
+      await expect(
+        runValidationCommandsInDocker(
+          source,
+          [["node", "check.js"]],
+          "docker.io/library/node:24@sha256:" + "a".repeat(64),
+          30_000,
+          async (options) => {
+            const mountIndex = options.args.indexOf("--mount");
+            const mount = options.args[mountIndex + 1] ?? "";
+            const prefix = "type=bind,source=";
+            const suffix = ",target=/workspace";
+            if (!mount.startsWith(prefix) || !mount.endsWith(suffix)) {
+              throw new Error("validation workspace mount is missing");
+            }
+            const validationRoot = mount.slice(prefix.length, -suffix.length);
+            await expect(readFile(join(validationRoot, "tracked.txt"), "utf8")).resolves.toBe(
+              "validated\n",
+            );
+            await expect(
+              readFile(join(validationRoot, ".git", "config"), "utf8"),
+            ).rejects.toThrow();
+            await expect(
+              readFile(join(validationRoot, "node_modules", ".bin", "test"), "utf8"),
+            ).rejects.toThrow();
+            inspected = true;
+            return {
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              timedOut: false,
+              outputTruncated: false,
+            };
+          },
+        ),
+      ).resolves.toHaveLength(1);
+      expect(inspected).toBe(true);
     } finally {
       await rm(source, { force: true, recursive: true });
     }

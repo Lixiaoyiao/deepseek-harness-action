@@ -153,7 +153,7 @@ with:
     }
 ```
 
-请把示例 argv 替换为仓库自己的确定命令。command tool 不接收模型参数；常见的直接 shell executable 会作为附加防线被拒绝，未定义工具、超出调用次数以及不符合当前 policy 的 network/workspace 权限也会失败。真正的安全边界是维护者固定全部 argv、模型不能追加参数，以及凭据隔离的容器。命令在无 controller 凭据、固定 digest 的 hardened container 中运行；stdout/stderr 会限长和脱敏，并始终按不可信数据回送。仅把工具写进 manifest 也不会授权执行：ID 还必须出现在 `allowed-tools`，且当前 security policy 必须允许相应的 execute/write/network capability。
+请把示例 argv 替换为仓库自己的确定命令。command tool 不接收模型参数；常见的直接 shell executable 会作为附加防线被拒绝，未定义工具、超出调用次数以及不符合当前 policy 的 network/workspace 权限也会失败。真正的安全边界是维护者固定全部 argv、模型不能追加参数，以及凭据隔离的容器。如果 workflow 把 controller 凭据插值进 command-tool 或 validation argv，输入校验会直接拒绝。命令在无 controller 凭据、固定 digest 的 hardened container 中运行；stdout/stderr 会限长和脱敏，并始终按不可信数据回送。仅把工具写进 manifest 也不会授权执行：ID 还必须出现在 `allowed-tools`，且当前 security policy 必须允许相应的 execute/write/network capability。
 
 ## v0.3 扩展接口与 v0.2 兼容性
 

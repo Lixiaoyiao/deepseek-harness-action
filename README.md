@@ -153,7 +153,7 @@ with:
     }
 ```
 
-Replace the sample argv with a deterministic command for your repository. A command tool accepts no model arguments. Common direct shell executables are rejected as an additional guard; undefined tools, calls beyond `maxCalls`, and network/workspace access that exceeds the current policy also fail. The primary boundary is maintainer-fixed complete argv, no model-added arguments, and a credential-isolated container pinned by full digest. stdout/stderr is bounded and redacted, then returned only as untrusted feedback. A manifest entry alone grants nothing: its ID must also appear in `allowed-tools`, and the current security policy must allow the required execute/write/network capability.
+Replace the sample argv with a deterministic command for your repository. A command tool accepts no model arguments. Common direct shell executables are rejected as an additional guard; undefined tools, calls beyond `maxCalls`, and network/workspace access that exceeds the current policy also fail. The primary boundary is maintainer-fixed complete argv, no model-added arguments, and a credential-isolated container pinned by full digest. Controller credentials are rejected if a workflow interpolates them into command-tool or validation argv. stdout/stderr is bounded and redacted, then returned only as untrusted feedback. A manifest entry alone grants nothing: its ID must also appear in `allowed-tools`, and the current security policy must allow the required execute/write/network capability.
 
 ## v0.3 extension seams and v0.2 compatibility
 

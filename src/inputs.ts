@@ -110,6 +110,25 @@ function optionalInput(reader: InputReader, name: string, fallback: string): str
   return value === "" ? fallback : value;
 }
 
+function assertControllerSecretsAbsentFromArgv(inputs: ActionInputs): void {
+  const secrets = [inputs.deepseekApiKey, inputs.githubToken].filter(
+    (secret) => Buffer.byteLength(secret, "utf8") >= 8,
+  );
+  const configuredArgv = [
+    ...inputs.testCommands,
+    ...inputs.toolConfig.commands.map(({ argv }) => argv),
+  ];
+  if (
+    configuredArgv.some((argv) =>
+      argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
+    )
+  ) {
+    throw new Error(
+      "Invalid action inputs: controller credentials must not appear in test-commands or tool-config argv",
+    );
+  }
+}
+
 /** Parse and validate all action inputs before any external side effect occurs. */
 export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   const parsed = actionInputsSchema.safeParse({
@@ -146,6 +165,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       { cause: error },
     );
   }
+  assertControllerSecretsAbsentFromArgv(parsed.data);
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
     throw new Error("Invalid action inputs: prompt is required when command is task");
   }

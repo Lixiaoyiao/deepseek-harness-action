@@ -58,7 +58,7 @@ inputs:
     required: false
     default: "true"
   test-commands:
-    description: 'JSON array of argv arrays for trusted validation, e.g. [["npm","test"]].'
+    description: 'JSON array of credential-free argv arrays for trusted validation, e.g. [["npm","test"]]. Controller credentials in argv are rejected.'
     required: false
     default: "[]"
   base-url:
@@ -82,7 +82,7 @@ inputs:
     required: false
     default: '["workspace.read","workspace.search","workspace.edit"]'
   tool-config:
-    description: "Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv is rejected; common direct shell executables are also denied."
+    description: "Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv and controller credentials in argv are rejected; common direct shell executables are also denied."
     required: false
     default: '{"schemaVersion":1,"commands":[]}'
 outputs:

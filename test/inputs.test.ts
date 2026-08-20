@@ -66,4 +66,38 @@ describe("loadInputs", () => {
     expect(result).toMatchObject({ taskAccess: "write", maxTurns: 3 });
     expect(result.toolConfig.commands[0]).toMatchObject({ name: "test", network: "none" });
   });
+
+  it("rejects controller credentials embedded in validation or command-tool argv", () => {
+    const deepseekKey = "sk-deepseek-secret-value";
+    const githubToken = "ghs_controller-secret-value";
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": deepseekKey,
+          "github-token": githubToken,
+          "test-commands": JSON.stringify([["node", "check.js", githubToken]]),
+        }),
+      ),
+    ).toThrow(/credentials must not appear/u);
+
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": deepseekKey,
+          "github-token": githubToken,
+          "allowed-tools": '["command.probe"]',
+          "tool-config": JSON.stringify({
+            schemaVersion: 1,
+            commands: [
+              {
+                name: "probe",
+                description: "probe",
+                argv: ["node", "probe.js", deepseekKey],
+              },
+            ],
+          }),
+        }),
+      ),
+    ).toThrow(/credentials must not appear/u);
+  });
 });
