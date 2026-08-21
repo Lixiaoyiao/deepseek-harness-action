@@ -21,4 +21,18 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-type-assertion": "off",
     },
   },
+  {
+    files: ["assets/**/*.mjs", "test/fixtures/**/*.mjs"],
+    languageOptions: {
+      parserOptions: { projectService: false },
+      globals: {
+        AbortController: "readonly",
+        Buffer: "readonly",
+        clearTimeout: "readonly",
+        process: "readonly",
+        setTimeout: "readonly",
+      },
+    },
+    rules: tseslint.configs.disableTypeChecked.rules,
+  },
 );

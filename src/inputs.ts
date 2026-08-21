@@ -2,6 +2,11 @@ import * as core from "@actions/core";
 import { z } from "zod";
 
 import {
+  assertControllerCredentialsAbsentFromExtensions,
+  validateExtensionToolReferences,
+} from "./extensions/plan.js";
+import { parseMcpConfiguration, parsePluginConfiguration } from "./extensions/schema.js";
+import {
   parseAllowedTools,
   parseToolConfiguration,
   validateAllowedToolReferences,
@@ -55,6 +60,7 @@ const actionInputsSchema = z.object({
   botUserId: integerInput(1, 2_147_483_647),
   progressComment: booleanInput,
   maxTurns: integerInput(1, 10),
+  allowPluginInstall: booleanInput,
   allowedTools: z.string().transform((value, context) => {
     try {
       return parseAllowedTools(value);
@@ -77,6 +83,28 @@ const actionInputsSchema = z.object({
       return z.NEVER;
     }
   }),
+  mcpConfig: z.string().transform((value, context) => {
+    try {
+      return parseMcpConfiguration(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  }),
+  pluginConfig: z.string().transform((value, context) => {
+    try {
+      return parsePluginConfiguration(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  }),
 });
 
 export type ActionInputs = z.infer<typeof actionInputsSchema>;
@@ -88,7 +116,7 @@ const defaults = {
   command: "auto",
   taskAccess: "read",
   prompt: "",
-  dshVersion: "0.1.0-rc.6",
+  dshVersion: "0.1.0-rc.8",
   dshExecutable: "",
   isolation: "docker",
   containerImage:
@@ -101,8 +129,11 @@ const defaults = {
   botUserId: "41898282",
   progressComment: "true",
   maxTurns: "3",
+  allowPluginInstall: "false",
   allowedTools: '["workspace.read","workspace.search","workspace.edit"]',
   toolConfig: '{"schemaVersion":1,"commands":[]}',
+  mcpConfig: '{"schemaVersion":1,"servers":[]}',
+  pluginConfig: '{"schemaVersion":1,"bundles":[],"plugins":[]}',
 } as const;
 
 function optionalInput(reader: InputReader, name: string, fallback: string): string {
@@ -148,8 +179,11 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
     progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
     maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
+    allowPluginInstall: optionalInput(reader, "allow-plugin-install", defaults.allowPluginInstall),
     allowedTools: optionalInput(reader, "allowed-tools", defaults.allowedTools),
     toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
+    mcpConfig: optionalInput(reader, "mcp-config", defaults.mcpConfig),
+    pluginConfig: optionalInput(reader, "plugin-config", defaults.pluginConfig),
   });
 
   if (!parsed.success) {
@@ -157,6 +191,16 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   }
   try {
     validateAllowedToolReferences(parsed.data.allowedTools, parsed.data.toolConfig);
+    validateExtensionToolReferences(
+      parsed.data.allowedTools,
+      parsed.data.mcpConfig,
+      parsed.data.pluginConfig,
+    );
+    assertControllerCredentialsAbsentFromExtensions(
+      parsed.data.mcpConfig,
+      parsed.data.pluginConfig,
+      [parsed.data.deepseekApiKey, parsed.data.githubToken],
+    );
   } catch (error: unknown) {
     throw new Error(
       `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,

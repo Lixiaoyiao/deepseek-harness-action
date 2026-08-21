@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
@@ -24,11 +24,119 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
     expect(metadata).toMatch(/allowed-tools:[\s\S]*?workspace\.read/u);
     expect(metadata).toMatch(/tool-config:[\s\S]*?schemaVersion/u);
+    expect(metadata).toMatch(/mcp-config:[\s\S]*?schemaVersion/u);
+    expect(metadata).toMatch(/plugin-config:[\s\S]*?schemaVersion/u);
+    expect(metadata).toMatch(/allow-plugin-install:[\s\S]*?default: "false"/u);
     expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
-    expect(metadata).toContain('default: "0.1.0-rc.6"');
-    expect(metadata).toContain("Trusted-write requires a full name@sha256 digest");
+    expect(metadata).toContain('default: "0.1.0-rc.8"');
+    expect(metadata).toMatch(/extensions and writes require a full name@sha256 digest/iu);
+    expect(metadata).toMatch(/mcp-config:[\s\S]*?stdio startup executes trusted worker code/iu);
+    expect(metadata).toMatch(/plugin-config:[\s\S]*?startup executes trusted worker code/iu);
+    expect(metadata).toMatch(/extension-profile-digest:[\s\S]*?SHA-256 digest/u);
+    expect(metadata).toMatch(
+      /tool-receipts:[\s\S]*?bounded controller\/DSH receipt arrays and truncation metadata/u,
+    );
     expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
     expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
+  });
+
+  it("pins the official DSH rc.8 runtime and its lockfile exactly", async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(
+      await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+    ) as {
+      packages: Record<string, { version?: string }>;
+    };
+    const expectedVersion = "0.1.0-rc.8";
+    const runtimePackages = [
+      "@deepseek-ai/dsh",
+      "@deepseek-ai/dsh-app-boot",
+      "@deepseek-ai/dsh-base",
+      "@deepseek-ai/dsh-cmdline",
+      "@deepseek-ai/dsh-headless",
+      "@deepseek-ai/dsh-launch-environment",
+      "@deepseek-ai/dsh-mcp-client",
+    ];
+
+    for (const packageName of runtimePackages) {
+      expect(manifest.dependencies[packageName]).toBe(expectedVersion);
+      expect(lock.packages[`node_modules/${packageName}`]?.version).toBe(expectedVersion);
+    }
+    for (const [packageName, version] of Object.entries({
+      ...manifest.dependencies,
+      ...manifest.devDependencies,
+    })) {
+      if (packageName === "@deepseek-ai/dsh" || packageName.startsWith("@deepseek-ai/dsh-")) {
+        expect(version).toBe(expectedVersion);
+      }
+    }
+
+    const lockedDshVersions = Object.entries(lock.packages)
+      .filter(([packagePath]) =>
+        /(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/u.test(packagePath),
+      )
+      .map(([, entry]) => entry.version);
+    expect(lockedDshVersions.length).toBeGreaterThan(0);
+    expect(new Set(lockedDshVersions)).toEqual(new Set([expectedVersion]));
+  });
+
+  it("keeps active CI on the locked app-boot and MCP runtime smoke", async () => {
+    const workflowsDirectory = new URL("../.github/workflows/", import.meta.url);
+    const activeWorkflows = (await readdir(workflowsDirectory, { withFileTypes: true })).filter(
+      (entry) => entry.isFile() && /\.ya?ml$/u.test(entry.name),
+    );
+    for (const workflow of activeWorkflows) {
+      const contents = await readFile(new URL(workflow.name, workflowsDirectory), "utf8");
+      expect(contents).not.toContain("0.1.0-rc.6");
+    }
+
+    const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    expect(ci).toContain("cp package.json package-lock.json");
+    expect(ci).toContain("npm ci --no-audit --no-fund --omit=dev --ignore-scripts");
+    expect(ci).toContain('const expectedVersion = "0.1.0-rc.8"');
+    expect(ci).toContain('await import("@deepseek-ai/dsh-app-boot")');
+    expect(ci).toContain('await import("@deepseek-ai/dsh-mcp-client")');
+    expect(ci).toContain("action-launcher.mjs");
+    expect(ci).toContain("action-policy.mjs");
+    expect(ci).not.toContain("lib/bin.js");
+    expect(ci).not.toContain("--dump-config");
+    expect(ci).not.toContain("policy.patch.yml");
+  });
+
+  it("ships the rc.8 extension contract in dist without rc.6 drift", async () => {
+    const bundle = await readFile(new URL("../dist/index.js", import.meta.url), "utf8");
+    expect(bundle).toContain("0.1.0-rc.8");
+    expect(bundle).not.toContain("0.1.0-rc.6");
+    for (const token of [
+      "mcp-config",
+      "plugin-config",
+      "allow-plugin-install",
+      "extension-profile-digest",
+      "tool-receipts",
+      "action-launcher.mjs",
+      "@deepseek-ai/dsh-mcp-client",
+    ]) {
+      expect(bundle).toContain(token);
+    }
+  });
+
+  it("generates static bundle notices from NCC source maps only", async () => {
+    const generator = await readFile(
+      new URL("../scripts/generate-bundled-notices.mjs", import.meta.url),
+      "utf8",
+    );
+    const notices = await readFile(new URL("../BUNDLED_DEPENDENCIES.md", import.meta.url), "utf8");
+    expect(generator).toContain('.endsWith(".js.map")');
+    expect(generator).toContain("packagePathFromSource");
+    expect(generator).not.toMatch(/Object\.entries\(lock\.packages\).*metadata\.dev/su);
+    expect(notices).toContain("reported by the committed NCC source maps");
+    expect(notices).toContain("installed\nfrom `package-lock.json`");
+    expect(notices).not.toContain("## @deepseek-ai/dsh@");
   });
 
   it("never executes the pull request revision before loading the DeepSeek secret", async () => {

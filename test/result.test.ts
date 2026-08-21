@@ -24,6 +24,7 @@ const policy: SecurityPolicy = {
     readCi: true,
     publishComments: true,
     executeRepositoryCode: true,
+    loadExtensions: true,
     accessNetwork: true,
     modifyWorkspace: true,
     commit: true,
@@ -76,6 +77,7 @@ describe("versioned action results", () => {
           processIsolated: true,
           networkIsolated: false,
           workspaceAccess: "read-write",
+          extensionProfile: "github-action",
           limitations: [],
         },
       },
@@ -213,5 +215,63 @@ describe("versioned action results", () => {
     expect(summary).not.toContain("dsh-action:v1");
     expect(summary).toContain("@​team [image removed]");
     expect(summary).toContain("**Next step:**");
+  });
+
+  it("bounds duplicated receipt outputs below the reserved GitHub output budget", () => {
+    const outcome: RunOutcome = {
+      schemaVersion: 1,
+      conclusion: "success",
+      operation: "task",
+      summary: "Many calls completed",
+      findingsCount: 0,
+      durationMs: 1_000,
+      agent: {
+        durationMs: 900,
+        isolation: {
+          backend: "docker",
+          credentialMediated: true,
+          repoToolsEnabled: false,
+          processIsolated: true,
+          networkIsolated: true,
+          workspaceAccess: "read-only",
+          extensionProfile: "github-action",
+          limitations: [],
+        },
+        dshToolReceipts: Array.from({ length: 10_000 }, (_, index) => ({
+          schemaVersion: 1 as const,
+          callId: `call-${String(index)}-${"a".repeat(180)}`,
+          id: "mcp.fixture.search",
+          runtimeName: "mcp__fixture__search",
+          provider: "mcp",
+          counted: true,
+          completed: true,
+          ok: true,
+          durationMs: 1,
+        })),
+      },
+    };
+
+    const outputs = buildActionOutputs(outcome);
+    const receiptsText = String(outputs["tool-receipts"]);
+    const resultText = String(outputs["result-json"]);
+    const receipts = JSON.parse(receiptsText) as {
+      readonly dsh: readonly unknown[];
+      readonly truncated: boolean;
+      readonly droppedCount: number;
+    };
+    const result = JSON.parse(resultText) as {
+      readonly loop: {
+        readonly dshToolReceipts: readonly unknown[];
+        readonly toolReceiptsTruncated: boolean;
+        readonly toolReceiptsDroppedCount: number;
+      };
+    };
+
+    expect((receiptsText.length + resultText.length) * 2).toBeLessThanOrEqual(640 * 1024);
+    expect(receipts.truncated).toBe(true);
+    expect(receipts.droppedCount).toBeGreaterThan(0);
+    expect(result.loop.dshToolReceipts).toEqual(receipts.dsh);
+    expect(result.loop.toolReceiptsTruncated).toBe(true);
+    expect(result.loop.toolReceiptsDroppedCount).toBe(receipts.droppedCount);
   });
 });

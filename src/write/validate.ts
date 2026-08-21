@@ -29,6 +29,21 @@ export interface ValidationResult {
   readonly result: CommandResult;
 }
 
+/** A trusted write is never authorized without an executed validation suite. */
+export function assertWriteValidationConfigured(
+  runTests: boolean,
+  commands: readonly (readonly string[])[],
+): void {
+  if (!runTests) {
+    throw new Error(
+      "run-tests=false cannot authorize a repository write; trusted writes require Controller validation",
+    );
+  }
+  if (commands.length === 0) {
+    throw new Error("test-commands must contain at least one command before a repository write");
+  }
+}
+
 function validationDeadline(timeoutMs: number): number {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new Error("Validation timeout must be a positive integer");

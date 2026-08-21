@@ -3,6 +3,144 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- Native MCP integration through the official
+  `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`. Maintainer-owned `mcp-config`
+  supports the official `stdio` and `streamable-http` transports, while
+  `allowed-tools` separately exposes only selected `mcp.<server>.<tool>` IDs.
+- Native DSH Bundle/Profile integration. The Controller validates trusted
+  workflow configuration, generates a controlled `github-action` Profile and
+  Cordis patch, and loads only explicitly configured Bundles and plugins.
+- Strict `plugin-config` validation for exact npm versions or GitHub
+  `git+https` sources pinned to a 40-character commit. Third-party installation
+  is disabled by default and requires `allow-plugin-install: "true"`.
+- A positive Action-owned DSH ToolRuntime policy for native, MCP and plugin
+  tools. Read, workspace-write and network capabilities are intersected with
+  Controller policy; per-call timeout, serialized output size, per-tool calls
+  and per-owner calls are bounded across the multi-turn loop.
+- Extension audit identity and bounded receipts in structured results, plus the
+  additive `extension-profile-digest` and `tool-receipts` scalar outputs. The
+  latter serializes separate `controller` and `dsh` receipt arrays plus explicit
+  `truncated` and `droppedCount` metadata.
+- A controlled MCP/Profile workflow template in
+  `examples/controlled-extensions.yml`.
+
+### Changed
+
+- Upgraded the only accepted DSH runtime from exact
+  `@deepseek-ai/dsh@0.1.0-rc.6` to exact `0.1.0-rc.8`, with the matching MCP
+  client pinned exactly. Shipped DSH dependencies are installed from the
+  committed lockfile rather than a floating `latest` or semver range.
+- Replaced the v0.3 extension-provider placeholder with adapters for DSH's
+  official Profile, Bundle, Cordis plugin and ToolRuntime mechanisms. The
+  Action does not maintain a parallel plugin system.
+- The controlled Profile starts through the official
+  `@deepseek-ai/dsh-app-boot@0.1.0-rc.8` public API instead of the general CLI path.
+  Workspace/`$DSH_HOME` `.env` discovery and dynamic user-patch watch/hot reload
+  are skipped.
+- DSH-native, MCP and plugin tools now use a positive runtime policy. Only
+  selected/effective tools are required to register. Before restriction,
+  `visible ⊆ known` and `allowed ⊆ visible`; afterwards,
+  `visible == allowed`. A configured but unselected known tool may be absent but
+  cannot remain model-visible after restriction. The existing fixed-argv
+  `command.*` ToolRouter remains controller-side, and both execution planes are
+  compiled from the same fail-closed Controller policy and monotonic call guard.
+- MCP's server-wide `toolCallTimeoutMs` is the maximum timeout among that
+  server's effective allowed tools; the Action-owned per-tool policy then
+  applies each tool's own potentially tighter deadline.
+- DSH admission and completion events are reconciled into final per-call
+  receipts and aggregated across fresh turns. A post-admission worker crash is
+  retained as `completed:false`, and final output bounding reports exactly how
+  many receipts were dropped.
+- The redacted extension audit digest is bound into public task identity, while
+  the Controller-only complete configuration digest separately binds runtime
+  reuse. Secret-bearing MCP or plugin configuration is never hashed into a
+  public branch name or pull-request marker.
+- Repository writes now always require `run-tests=true`, a non-empty
+  `test-commands` list, and success from every Controller validation command.
+  `run-tests=false` now denies a write instead of waiving validation; this is an
+  intentional breaking security hardening.
+
+### Compatibility
+
+- Workflows that leave `mcp-config` and `plugin-config` empty and keep
+  `allow-plugin-install=false` retain the v0.3 review, diagnose, fix,
+  implement, auto, task, multi-turn, sticky-comment and Controller GitHub-write
+  paths, except for mandatory write validation and deferral of write-task
+  comments until that validation succeeds.
+- Existing v0.2/v0.3 input names, scalar outputs and schema-v1 `result-json`
+  remain available. Extension audit and receipt fields are additive.
+- DSH rc.8 supplies the official app-boot public API used to start the
+  controlled headless Profile; the compatibility work includes the exact
+  dependency lock, explicit Profile generation and positive tool policy.
+
+### Security
+
+- Model output, repository files, fork content, issues, pull requests and CI
+  logs cannot alter `mcp-config`, `plugin-config`, `allowed-tools` or
+  `allow-plugin-install`. Capability-bearing values must come from trusted
+  workflow configuration.
+- `container-image`, `base-url`, `isolation`, and `dsh-executable` are documented
+  as trusted capability inputs because they choose worker code, credential
+  routing, or the process boundary. Every image value is validated as one
+  Docker/OCI reference before use, preventing it from becoming a Docker option;
+  writes and extensions additionally require an immutable digest.
+- Fork and other untrusted profiles receive no MCP or plugin tools. Workspace
+  write still requires every existing actor/origin/SHA gate, protected-path
+  check and successful final validation before any GitHub mutation, including a
+  write-task status comment.
+- Stdio MCP launch rejects shells, package managers, Git and dynamic runners;
+  HTTP MCP requires explicit network authority. Configured extension values
+  cannot contain the Controller's GitHub token or real DeepSeek key. The check
+  recursively scans keys and string values, including percent-decoded variants
+  of URL material. Extension-secret masking covers withheld URL path/query
+  candidates and credential-like argv, env, header and nested plugin-config
+  fields without masking ordinary values such as `read` or `safe-json`.
+  Structured HTTP audit data exposes the endpoint origin but withholds pathname,
+  query and headers.
+- Third-party Bundle/plugin installation and startup are treated as trusted
+  code execution, as is starting an approved stdio MCP executable. Exact
+  top-level pins and ToolRuntime call guards constrain model-routed calls but do
+  not sandbox initialization, background work, direct process I/O, or replace
+  review of transitive dependencies and runner-level network/filesystem
+  controls. The Controller snapshots the top-level runtime package inventory
+  before installation and rejects any package removal or version change
+  afterwards.
+- Invocation-count state and receipts are telemetry rather than authorization
+  inputs or tamper-proof logs; approved trusted extension code shares the worker
+  and can influence them. `network=false` blocks ordinary external egress but
+  the Controller still maps `host.docker.internal` to the internal network's
+  inspected IPv4 gateway for the LLM proxy. That host-gateway path is not a port
+  allowlist, so runner firewall policy remains the boundary for other host
+  services; package acquisition separately uses bridge networking.
+- The Agent still receives no unrestricted shell, `GITHUB_TOKEN`, real
+  DeepSeek API key, commit, push, pull-request or release authority. The
+  Controller remains the only code/ref/pull-request writer after validation
+  succeeds. Read-only lifecycle comments remain available during execution;
+  write-task comments are deferred until final validation succeeds, so a failed
+  gate produces no GitHub API write.
+
+### Verification status
+
+- Unit and integration coverage is added for rc.8 compatibility, official MCP
+  calls and denial paths, timeout/crash/call limits, package allowlisting and
+  pin validation, workspace/network permissions, multi-turn MCP calls,
+  untrusted actor/fork escalation attempts, malicious prompt escalation and
+  validation-gated GitHub writes.
+- Real DeepSeek API, external MCP endpoint and live GitHub write E2E are not
+  represented as completed by this development changelog. Their final status
+  must be reported from the release candidate verification run.
+
+### Deferred
+
+- Session resume, label and assignee triggers, branch templates and Agent Teams
+  remain out of scope for v0.4.0.
+- Per-destination network allowlisting and sandboxing of trusted third-party
+  startup code are not provided by the tool-call permission model.
+
 ## [0.3.0] - 2026-08-21
 
 ### Added
@@ -169,6 +307,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.1.0

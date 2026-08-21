@@ -3,4 +3,5 @@ coverage/
 *.log
 .env
 .dsh-action/
+.dsh-*-test-*/
 work/

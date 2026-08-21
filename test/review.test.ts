@@ -47,9 +47,17 @@ describe("DSH tool planes", () => {
       permissions: ["execute" as const],
       inputSchema: {},
     };
-    expect(partitionDshToolPlanes([workspace, command])).toEqual({
+    const mcp = {
+      id: "mcp.docs.lookup",
+      description: "Look up controlled documentation",
+      provider: "mcp" as const,
+      permissions: ["execute" as const, "network" as const],
+      inputSchema: {},
+    };
+    expect(partitionDshToolPlanes([workspace, command, mcp])).toEqual({
       workspaceTools: ["workspace.edit"],
       controllerTools: [command],
+      extensionTools: [mcp],
     });
     expect(() => partitionDshToolPlanes([{ ...workspace, id: "workspace.shell" }])).toThrow(
       "Unsupported native DSH tool id",

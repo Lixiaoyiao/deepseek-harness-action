@@ -11,13 +11,26 @@ export type DshErrorCode =
   | "DSH_SPAWN"
   | "DSH_TIMEOUT";
 
+export interface DshFailureTelemetry {
+  readonly durationMs: number;
+  readonly isolationReport: DshIsolationReport;
+  readonly extensionAudit?: ExtensionAudit;
+  readonly toolReceipts?: readonly DshToolReceipt[];
+}
+
 export class DshError extends Error {
   public readonly code: DshErrorCode;
+  public telemetry: DshFailureTelemetry | undefined;
 
   public constructor(code: DshErrorCode, message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = new.target.name;
     this.code = code;
+  }
+
+  public attachTelemetry(telemetry: DshFailureTelemetry): this {
+    this.telemetry = telemetry;
+    return this;
   }
 }
 
@@ -95,7 +108,7 @@ export class DshMalformedOutputError extends DshError {
 }
 
 export class DshCredentialLeakError extends DshError {
-  public constructor(channel: "stdout" | "stderr") {
+  public constructor(channel: "stdout" | "stderr" | "tool receipt") {
     super("DSH_CREDENTIAL_LEAK", `DSH ${channel} contained a controller credential`);
   }
 }
@@ -105,3 +118,5 @@ export class DshProxyError extends DshError {
     super("DSH_PROXY", message, options);
   }
 }
+import type { ExtensionAudit } from "../extensions/plan.js";
+import type { DshIsolationReport, DshToolReceipt } from "./runner.js";

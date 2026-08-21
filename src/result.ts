@@ -6,7 +6,8 @@ import {
   type AgentToolReceipt,
 } from "./agent/loop.js";
 import { DshError } from "./dsh/errors.js";
-import type { DshIsolationReport } from "./dsh/runner.js";
+import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
+import type { ExtensionAudit } from "./extensions/plan.js";
 import type { PublicationResult } from "./review/publisher.js";
 import { stripTrackingMarkers } from "./review/tracking.js";
 import type { SecurityPolicy } from "./security/policy.js";
@@ -42,6 +43,8 @@ export interface AgentRunSummary {
   readonly toolCalls?: number;
   readonly validationRetries?: number;
   readonly toolReceipts?: readonly AgentToolReceipt[];
+  readonly dshToolReceipts?: readonly DshToolReceipt[];
+  readonly extensionAudit?: ExtensionAudit;
 }
 
 export interface ValidationSummary {
@@ -70,6 +73,15 @@ export interface RunOutcome {
   readonly commentId?: number;
   readonly error?: ActionFailure;
 }
+
+interface PublicReceiptPayload {
+  readonly controller: readonly AgentToolReceipt[];
+  readonly dsh: readonly DshToolReceipt[];
+  readonly truncated: boolean;
+  readonly droppedCount: number;
+}
+
+const MAX_LARGE_ACTION_OUTPUT_UTF16_BYTES = 640 * 1024;
 
 function safeMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -254,7 +266,10 @@ export function describeActionFailure(error: unknown, phase: ActionPhase): Actio
   };
 }
 
-function structuredResult(outcome: RunOutcome): Record<string, unknown> {
+function structuredResult(
+  outcome: RunOutcome,
+  receipts: PublicReceiptPayload,
+): Record<string, unknown> {
   const write = {
     ...(outcome.writeStatus === undefined ? {} : { status: outcome.writeStatus }),
     ...(outcome.commitSha === undefined ? {} : { commitSha: outcome.commitSha }),
@@ -299,10 +314,18 @@ function structuredResult(outcome: RunOutcome): Record<string, unknown> {
             ...(outcome.agent.validationRetries === undefined
               ? {}
               : { validationRetries: outcome.agent.validationRetries }),
-            ...(outcome.agent.toolReceipts === undefined
-              ? {}
-              : { toolReceipts: outcome.agent.toolReceipts }),
+            ...(receipts.controller.length === 0 ? {} : { toolReceipts: receipts.controller }),
+            ...(receipts.dsh.length === 0 ? {} : { dshToolReceipts: receipts.dsh }),
+            ...(receipts.truncated
+              ? {
+                  toolReceiptsTruncated: true,
+                  toolReceiptsDroppedCount: receipts.droppedCount,
+                }
+              : {}),
           },
+          ...(outcome.agent.extensionAudit === undefined
+            ? {}
+            : { extensions: outcome.agent.extensionAudit }),
         }),
     ...(outcome.publication === undefined ? {} : { publication: outcome.publication }),
     ...(outcome.validation === undefined ? {} : { validation: outcome.validation }),
@@ -310,6 +333,66 @@ function structuredResult(outcome: RunOutcome): Record<string, unknown> {
     ...(outcome.commentId === undefined ? {} : { commentId: outcome.commentId }),
     ...(outcome.error === undefined ? {} : { error: outcome.error }),
   };
+}
+
+type InterleavedReceipt =
+  | { readonly plane: "controller"; readonly receipt: AgentToolReceipt }
+  | { readonly plane: "dsh"; readonly receipt: DshToolReceipt };
+
+function interleavedReceipts(outcome: RunOutcome): readonly InterleavedReceipt[] {
+  const controller = outcome.agent?.toolReceipts ?? [];
+  const dsh = outcome.agent?.dshToolReceipts ?? [];
+  const entries: InterleavedReceipt[] = [];
+  for (let index = 0; index < Math.max(controller.length, dsh.length); index += 1) {
+    const controllerReceipt = controller[index];
+    if (controllerReceipt !== undefined) {
+      entries.push({ plane: "controller", receipt: controllerReceipt });
+    }
+    const dshReceipt = dsh[index];
+    if (dshReceipt !== undefined) entries.push({ plane: "dsh", receipt: dshReceipt });
+  }
+  return entries;
+}
+
+function receiptPayload(
+  entries: ReturnType<typeof interleavedReceipts>,
+  keep: number,
+): PublicReceiptPayload {
+  const controller: AgentToolReceipt[] = [];
+  const dsh: DshToolReceipt[] = [];
+  for (const entry of entries.slice(0, keep)) {
+    if (entry.plane === "controller") controller.push(entry.receipt);
+    else dsh.push(entry.receipt);
+  }
+  return {
+    controller,
+    dsh,
+    truncated: keep < entries.length,
+    droppedCount: entries.length - keep,
+  };
+}
+
+function utf16Bytes(value: string): number {
+  return value.length * 2;
+}
+
+function boundedPublicReceipts(outcome: RunOutcome): PublicReceiptPayload {
+  const entries = interleavedReceipts(outcome);
+  const serializedBytes = (keep: number): number => {
+    const receipts = receiptPayload(entries, keep);
+    return (
+      utf16Bytes(JSON.stringify(receipts)) +
+      utf16Bytes(JSON.stringify(structuredResult(outcome, receipts)))
+    );
+  };
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (serializedBytes(middle) <= MAX_LARGE_ACTION_OUTPUT_UTF16_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  return receiptPayload(entries, low);
 }
 
 export function actionStatus(outcome: RunOutcome): ActionStatus {
@@ -329,6 +412,7 @@ export function actionStatus(outcome: RunOutcome): ActionStatus {
 }
 
 export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string, string | number>> {
+  const receipts = boundedPublicReceipts(outcome);
   return {
     conclusion: outcome.conclusion,
     operation: outcome.operation ?? "none",
@@ -343,7 +427,9 @@ export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string,
     "comment-id": outcome.commentId ?? "",
     "error-code": outcome.error?.code ?? "",
     "error-message": outcome.error?.message ?? "",
-    "result-json": JSON.stringify(structuredResult(outcome)),
+    "extension-profile-digest": outcome.agent?.extensionAudit?.digest ?? "",
+    "tool-receipts": JSON.stringify(receipts),
+    "result-json": JSON.stringify(structuredResult(outcome, receipts)),
   };
 }
 

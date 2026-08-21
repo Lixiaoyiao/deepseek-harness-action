@@ -22,14 +22,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Linux Docker DSH runtime smoke
+      - name: Linux Docker locked DSH rc.8 runtime smoke
         shell: bash
         run: |
           set -euo pipefail
           runtime_dir="$(mktemp -d)"
           run_as="$(id -u):$(id -g)"
-          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json || true; rmdir "$runtime_dir" || true; }
+          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json /cleanup/action-launcher.mjs || true; rmdir "$runtime_dir" || true; }
           trap cleanup EXIT
+          cp package.json package-lock.json assets/dsh/action-launcher.mjs "$runtime_dir/"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$run_as" \
             --memory 4g --cpus 2 \
@@ -39,24 +40,93 @@ jobs:
             --env HOME=/tmp --env npm_config_cache=/tmp/npm-cache \
             --env NODE_OPTIONS=--max-old-space-size=3072 \
             docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
-            npm install --no-audit --no-fund --omit=dev --save=false --loglevel=error \
-              @deepseek-ai/dsh@0.1.0-rc.6
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            npm ci --no-audit --no-fund --omit=dev --ignore-scripts --loglevel=error
+          docker run --rm -i --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$run_as" \
             --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
             --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
-            --workdir /tmp \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/assets/dsh,target=/opt/dsh-action/assets,readonly" \
+            --workdir /opt/dsh-action/package \
             docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
-            node -e 'const pty=require("/opt/dsh-action/package/node_modules/node-pty"); if(typeof pty.spawn!=="function") throw new Error("node-pty spawn export missing"); process.stdout.write("node-pty ok\\n")'
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --user "$run_as" \
-            --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
-            --tmpfs /dsh-home:rw,nosuid,nodev,size=536870912 \
-            --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
-            --mount "type=bind,source=$GITHUB_WORKSPACE/assets/dsh/trusted-write.patch.yml,target=/opt/dsh-action/policy.patch.yml,readonly" \
-            --workdir /tmp \
-            --env DSH_HOME=/dsh-home --env HOME=/dsh-home \
-            --env DSH_TELEMETRY_DISABLED=1 --env DSH_TOOLS_MODE=native \
-            docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
-            node --expose-internals /opt/dsh-action/package/node_modules/@deepseek-ai/dsh/lib/bin.js \
-              --profile headless --patch /opt/dsh-action/policy.patch.yml --dump-config
+            node --input-type=module <<'NODE'
+          import { spawnSync } from "node:child_process";
+          import { readFile } from "node:fs/promises";
+
+          const expectedVersion = "0.1.0-rc.8";
+          const expectedPackages = [
+            "@deepseek-ai/dsh",
+            "@deepseek-ai/dsh-app-boot",
+            "@deepseek-ai/dsh-cmdline",
+            "@deepseek-ai/dsh-launch-environment",
+            "@deepseek-ai/dsh-mcp-client",
+          ];
+          const manifest = JSON.parse(await readFile("package.json", "utf8"));
+          const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
+          for (const packageName of expectedPackages) {
+            if (manifest.dependencies?.[packageName] !== expectedVersion) {
+              throw new Error(`${packageName} is not exactly pinned to ${expectedVersion}`);
+            }
+            const installed = JSON.parse(
+              await readFile(`node_modules/${packageName}/package.json`, "utf8"),
+            );
+            if (installed.version !== expectedVersion) {
+              throw new Error(`${packageName} installed ${installed.version}`);
+            }
+          }
+          for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
+            if (
+              /(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(packagePath) &&
+              entry.version !== expectedVersion
+            ) {
+              throw new Error(`${packagePath} is locked to ${entry.version}`);
+            }
+          }
+
+          const appBoot = await import("@deepseek-ai/dsh-app-boot");
+          if (
+            typeof appBoot.boot !== "function" ||
+            typeof appBoot.loadProfile !== "function" ||
+            typeof appBoot.installFailLoud !== "function"
+          ) {
+            throw new Error("official dsh-app-boot exports are unavailable");
+          }
+          const mcp = await import("@deepseek-ai/dsh-mcp-client");
+          if (mcp.name !== "mcp-client" || typeof mcp.apply !== "function") {
+            throw new Error("official dsh-mcp-client exports are unavailable");
+          }
+
+          for (const asset of [
+            "action-launcher.mjs",
+            "action-policy.mjs",
+            "action-workspace.mjs",
+          ]) {
+            const assetPath = `/opt/dsh-action/assets/${asset}`;
+            const syntax = spawnSync(process.execPath, ["--check", assetPath], {
+              encoding: "utf8",
+            });
+            if (syntax.status !== 0) {
+              throw new Error(`${asset} failed syntax validation: ${syntax.stderr}`);
+            }
+          }
+          const launcher = await readFile(
+            "/opt/dsh-action/assets/action-launcher.mjs",
+            "utf8",
+          );
+          const packagedLauncher = await readFile(
+            "/opt/dsh-action/package/action-launcher.mjs",
+            "utf8",
+          );
+          if (packagedLauncher !== launcher) {
+            throw new Error("controlled launcher was not copied into the locked package root");
+          }
+          for (const packageName of [
+            "@deepseek-ai/dsh-app-boot",
+            "@deepseek-ai/dsh-cmdline",
+            "@deepseek-ai/dsh-launch-environment",
+          ]) {
+            if (!launcher.includes(packageName)) {
+              throw new Error(`controlled launcher does not use ${packageName}`);
+            }
+          }
+          process.stdout.write("locked DSH rc.8 app-boot/MCP runtime ok\n");
+          NODE

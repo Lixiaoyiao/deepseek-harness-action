@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.3.0",
-  "description": "DeepSeek Harness for GitHub - general coding tasks, repair loops, review, and safe automation",
+  "version": "0.4.0",
+  "description": "DeepSeek Harness for GitHub - controlled MCP, Bundle/Profile extensions, coding tasks, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {
     "type": "git",
@@ -36,11 +36,22 @@
   "dependencies": {
     "@actions/core": "3.0.1",
     "@actions/github": "9.1.1",
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-base": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-cmdline": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-headless": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.8",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.8",
     "@eslint/js": "10.0.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "26.2.0",
     "@vercel/ncc": "0.45.0",
     "@vitest/coverage-v8": "4.1.10",

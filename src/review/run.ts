@@ -4,12 +4,14 @@ import {
   type DshIsolationReport,
   type DshRunResult,
   type DshRuntime,
+  type DshToolReceipt,
 } from "../dsh/runner.js";
 import type { DshOutput } from "../dsh/schema.js";
 import type { Operation, RequestedAccess } from "../commands/parse.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import type { EffectiveTools } from "../tools/registry.js";
 import type { AgentEngine, AgentToolManifest, AgentTurnRequest } from "../agent/contracts.js";
+import type { EffectiveExtensionPlan } from "../extensions/plan.js";
 import { workspaceToolSchema, type WorkspaceToolId } from "../tools/schema.js";
 
 export interface AgentTask {
@@ -30,24 +32,32 @@ export interface RunAgentTaskOptions {
 export interface DshTurnMetadata {
   readonly isolationReport: DshIsolationReport;
   readonly rawStdout?: string;
+  readonly extensionAudit?: EffectiveExtensionPlan["audit"];
+  readonly toolReceipts?: readonly DshToolReceipt[];
 }
 
 export function partitionDshToolPlanes(tools: readonly AgentToolManifest[]): {
   readonly workspaceTools: readonly WorkspaceToolId[];
   readonly controllerTools: readonly AgentToolManifest[];
+  readonly extensionTools: readonly AgentToolManifest[];
 } {
   const workspaceTools: WorkspaceToolId[] = [];
   const controllerTools: AgentToolManifest[] = [];
+  const extensionTools: AgentToolManifest[] = [];
   for (const tool of tools) {
-    if (tool.provider !== "builtin") {
+    if (tool.provider === "command") {
       controllerTools.push(tool);
+      continue;
+    }
+    if (tool.provider === "mcp" || tool.provider === "plugin") {
+      extensionTools.push(tool);
       continue;
     }
     const parsed = workspaceToolSchema.safeParse(tool.id);
     if (!parsed.success) throw new Error(`Unsupported native DSH tool id: ${tool.id}`);
     workspaceTools.push(parsed.data);
   }
-  return { workspaceTools, controllerTools };
+  return { workspaceTools, controllerTools, extensionTools };
 }
 
 /** Current engine adapter; the outer loop depends only on the provider-neutral contract. */
@@ -59,12 +69,20 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
     private readonly inputs: ActionInputs,
     private readonly policy: SecurityPolicy,
     private readonly runtime?: DshRuntime,
+    private readonly extensions?: EffectiveExtensionPlan,
   ) {
     this.version = inputs.dshVersion;
   }
 
   public async runTurn(request: AgentTurnRequest) {
-    const { workspaceTools, controllerTools } = partitionDshToolPlanes(request.tools);
+    const { workspaceTools, controllerTools, extensionTools } = partitionDshToolPlanes(
+      request.tools,
+    );
+    const actualExtensionIds = extensionTools.map(({ id }) => id).sort();
+    const plannedExtensionIds = (this.extensions?.manifests ?? []).map(({ id }) => id).sort();
+    if (JSON.stringify(actualExtensionIds) !== JSON.stringify(plannedExtensionIds)) {
+      throw new Error("DSH extension manifest set does not match the Controller plan");
+    }
     const result = await runDsh(
       {
         operation: request.operation,
@@ -73,6 +91,7 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
         workspacePath: request.workspacePath,
         toolCatalog: controllerTools,
         workspaceTools,
+        ...(this.extensions === undefined ? {} : { extensions: this.extensions }),
         trust: this.policy.trust,
         isolation: this.inputs.isolation,
         timeoutMs: request.timeoutMs,
@@ -91,6 +110,8 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
       metadata: {
         isolationReport: result.isolationReport,
         ...(result.rawStdout === undefined ? {} : { rawStdout: result.rawStdout }),
+        ...(result.extensionAudit === undefined ? {} : { extensionAudit: result.extensionAudit }),
+        ...(result.toolReceipts === undefined ? {} : { toolReceipts: result.toolReceipts }),
       },
     };
   }
@@ -101,7 +122,12 @@ export async function runAgentTask(
   inputs: ActionInputs,
   options: RunAgentTaskOptions = {},
 ): Promise<DshRunResult> {
-  const turn = await new DshAgentEngine(inputs, task.policy, options.runtime).runTurn({
+  const turn = await new DshAgentEngine(
+    inputs,
+    task.policy,
+    options.runtime,
+    task.tools.extensions,
+  ).runTurn({
     schemaVersion: 1,
     operation: task.operation,
     requestedAccess: task.requestedAccess,
@@ -116,5 +142,11 @@ export async function runAgentTask(
     durationMs: turn.durationMs,
     isolationReport: turn.metadata.isolationReport,
     ...(turn.metadata.rawStdout === undefined ? {} : { rawStdout: turn.metadata.rawStdout }),
+    ...(turn.metadata.extensionAudit === undefined
+      ? {}
+      : { extensionAudit: turn.metadata.extensionAudit }),
+    ...(turn.metadata.toolReceipts === undefined
+      ? {}
+      : { toolReceipts: turn.metadata.toolReceipts }),
   };
 }

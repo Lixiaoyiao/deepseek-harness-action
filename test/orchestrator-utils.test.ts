@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { assertOperationContext, boundedText, reportFailure } from "../src/orchestrator.js";
+import {
+  assertOperationContext,
+  boundedText,
+  deferProgressUntilWriteValidation,
+  reportFailure,
+} from "../src/orchestrator.js";
 import type { EntitySnapshot } from "../src/github/fetch.js";
 import type { GitHubContext } from "../src/github/context.js";
 
 describe("orchestrator bounds and failure reporting", () => {
+  it("defers every write-task progress publication until final validation", () => {
+    expect(deferProgressUntilWriteValidation({ requestedAccess: "write" })).toBe(true);
+    expect(deferProgressUntilWriteValidation({ requestedAccess: "read" })).toBe(false);
+  });
+
   it("bounds UTF-8 without splitting multibyte characters", () => {
     expect(boundedText("small", 10)).toBe("small");
     const bounded = boundedText("路径".repeat(100), 64);

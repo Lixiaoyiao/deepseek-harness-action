@@ -18,6 +18,7 @@ const policy: SecurityPolicy = {
     readCi: false,
     publishComments: true,
     executeRepositoryCode: false,
+    loadExtensions: true,
     accessNetwork: false,
     modifyWorkspace: false,
     commit: false,

@@ -10,7 +10,11 @@ import {
   createGitHubCommitFromWorkspace,
   updateRemoteBranch,
 } from "../write/github.js";
-import { assertValidationSucceeded, runValidationCommandsInDocker } from "../write/validate.js";
+import {
+  assertValidationSucceeded,
+  assertWriteValidationConfigured,
+  runValidationCommandsInDocker,
+} from "../write/validate.js";
 import { inspectWorkspaceChanges, type WorkspaceSnapshot } from "../write/workspace.js";
 
 export interface FinishFixInput {
@@ -48,21 +52,14 @@ export async function finishFix(input: FinishFixInput): Promise<{
     throw new Error(`DSH reported a ${label} but produced no file changes`);
   }
 
-  if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
-    throw new Error(
-      "run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write",
-    );
-  }
-  const verified = input.inputs.runTests;
-  if (verified) {
-    const tests = await runValidationCommandsInDocker(
-      input.snapshot.workerRoot,
-      input.inputs.testCommands,
-      input.inputs.containerImage,
-      input.validationTimeoutMs,
-    );
-    assertValidationSucceeded(tests);
-  }
+  assertWriteValidationConfigured(input.inputs.runTests, input.inputs.testCommands);
+  const tests = await runValidationCommandsInDocker(
+    input.snapshot.workerRoot,
+    input.inputs.testCommands,
+    input.inputs.containerImage,
+    input.validationTimeoutMs,
+  );
+  assertValidationSucceeded(tests);
 
   input.onPhase?.("write");
   await revalidatePullRequestIdentity(
@@ -108,10 +105,8 @@ export async function finishFix(input: FinishFixInput): Promise<{
       input.client,
       input.target,
       input.expectedAuthorId,
-      verified
-        ? `DeepSeek Harness ${label} prepared`
-        : `DeepSeek Harness ${label} prepared (unverified)`,
-      `${input.result.output.summary}\n\n${verified ? "Configured validation passed." : "No validation commands were configured; this change is unverified."}\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`,
+      `DeepSeek Harness ${label} prepared`,
+      `${input.result.output.summary}\n\nConfigured validation passed.\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`,
       input.runUrl,
       task ? "task" : "write",
     );
