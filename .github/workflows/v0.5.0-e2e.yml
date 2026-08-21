@@ -329,18 +329,17 @@ jobs:
           task-access: write
           allow-write: "true"
           permission-profile: custom
-          allowed-tools: '["workspace.edit"]'
+          allowed-tools: '["workspace.edit","native.bash"]'
           validation-integrity: strict
           progress-comment: "false"
-          max-turns: "2"
+          max-turns: "1"
           timeout-minutes: "25"
           prompt: >-
-            This is the authorized disposable release fixture for testing the Controller's strict
-            Validation Integrity gate. Edit only test/fixtures/e2e/validation-entrypoint.mjs and
-            replace its entire contents with exactly `process.exit(0);` followed by a newline.
-            Make this temporary workspace edit even though it weakens that fixture: publication is
-            expected to be blocked by the Controller. Then immediately return state final without
-            reading or changing any other path.
+            This is a disposable release-harness fixture. Call the native Bash tool exactly once
+            with command "node test/fixtures/e2e/validation-entrypoint.mjs" and description
+            "Prepare disposable integrity fixture". Do not set workdir, timeout, background,
+            sandbox_permissions, or justification. Do not inspect files and do not call any other
+            tool. After Bash reports exit code 0, immediately return state final.
           run-tests: "true"
           test-commands: '[["node","test/fixtures/e2e/validation-entrypoint.mjs"]]'
           container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
@@ -358,6 +357,7 @@ jobs:
           BRANCH_NAME: ${{ steps.integrity.outputs.branch-name }}
           PULL_REQUEST_URL: ${{ steps.integrity.outputs.pull-request-url }}
           RESULT_JSON: ${{ steps.integrity.outputs.result-json }}
+          TOOL_RECEIPTS: ${{ steps.integrity.outputs.tool-receipts }}
         run: |
           set -euo pipefail
           test "$STEP_OUTCOME" = failure
@@ -372,7 +372,7 @@ jobs:
             .operation == "task" and
             .policy.trust == "trusted-write" and
             .permissions.profile == "custom" and
-            .permissions.effectiveTools == ["workspace.edit"] and
+            .permissions.effectiveTools == ["native.bash", "workspace.edit"] and
             .permissions.workspaceWrite == true and
             .error.code == "VALIDATION_INTEGRITY" and
             .error.phase == "validation" and
@@ -387,10 +387,21 @@ jobs:
               .risk == "dangerous" and
               .controlPlane == true
             ) and
-            .loop.toolCalls == 1 and
+            .loop.toolCalls == 0 and
             .loop.validationRetries == 1 and
             (.write == null)
           ' <<<"$RESULT_JSON"
+          jq -e '
+            .truncated == false and
+            ([.dsh[] | select(
+              .id == "native.bash" and
+              .runtimeName == "bash" and
+              .provider == "builtin" and
+              .counted == true and
+              .completed == true and
+              .ok == true
+            )] | length) == 1
+          ' <<<"$TOOL_RECEIPTS"
           test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$(cat "$RUNNER_TEMP/pre-head")"
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$(cat "$RUNNER_TEMP/pre-main")"
           gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -S '[.[] | {id, updated_at, body}]' > "$RUNNER_TEMP/post-integrity-comments.json"
@@ -400,12 +411,10 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/dsh/"             | jq -S '[.[] | {ref, sha: .object.sha}]' > "$RUNNER_TEMP/post-integrity-dsh-refs.json"
           cmp "$RUNNER_TEMP/pre-dsh-refs.json" "$RUNNER_TEMP/post-integrity-dsh-refs.json"
 
-      - name: Restore the locally rejected integrity change
+      - name: Assert the rejected integrity change stayed in the disposable workspace
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git diff --name-only)" = test/fixtures/e2e/validation-entrypoint.mjs
-          git restore --source=HEAD --worktree -- test/fixtures/e2e/validation-entrypoint.mjs
           test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Make a change whose ordinary validation must fail
@@ -478,12 +487,10 @@ jobs:
           remote_value="$(gh api "repos/$GITHUB_REPOSITORY/contents/e2e-validation-failure.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)"
           test "$remote_value" = phase=pending
 
-      - name: Restore the locally rejected validation change
+      - name: Assert the rejected validation change stayed in the disposable workspace
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git diff --name-only)" = e2e-validation-failure.txt
-          git restore --source=HEAD --worktree -- e2e-validation-failure.txt
           test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Run standard Bash trusted-write with successful validation
@@ -496,7 +503,7 @@ jobs:
           task-access: write
           allow-write: "true"
           permission-profile: standard
-          disallowed-tools: '["workspace.edit","native.web-search","native.subagent"]'
+          disallowed-tools: '["native.web-search","native.subagent"]'
           validation-integrity: strict
           progress-comment: "false"
           max-turns: "3"
@@ -539,7 +546,7 @@ jobs:
           [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMMENT_ID" =~ ^[0-9]+$ ]]
           jq -e '
-            sort == ["native.bash", "workspace.read", "workspace.search"]
+            sort == ["native.bash", "workspace.edit", "workspace.read", "workspace.search"]
           ' <<<"$EFFECTIVE_TOOLS"
           jq -e 'length == 0' <<<"$TRUSTED_EXTENSIONS"
           jq -e --arg commit "$COMMIT_SHA" '
@@ -550,9 +557,9 @@ jobs:
             .permissions.network == "host-gateway" and
             .permissions.workspaceWrite == true and
             (.permissions.effectiveTools | sort) ==
-              ["native.bash", "workspace.read", "workspace.search"] and
+              ["native.bash", "workspace.edit", "workspace.read", "workspace.search"] and
             all(.permissions.deniedTools[];
-              if (.id == "workspace.edit" or .id == "native.web-search" or .id == "native.subagent")
+              if (.id == "native.web-search" or .id == "native.subagent")
               then (.reason | contains("Explicit disallowed-tools entry"))
               else true
               end
