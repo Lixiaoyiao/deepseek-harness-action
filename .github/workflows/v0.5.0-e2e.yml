@@ -327,7 +327,7 @@ jobs:
           task-access: write
           allow-write: "true"
           permission-profile: custom
-          allowed-tools: '["command.integrity-probe"]'
+          allowed-tools: '["workspace.edit","command.integrity-probe"]'
           tool-config: |
             {
               "schemaVersion": 1,
@@ -384,7 +384,7 @@ jobs:
             .operation == "task" and
             .policy.trust == "trusted-write" and
             .permissions.profile == "custom" and
-            .permissions.effectiveTools == ["command.integrity-probe"] and
+            .permissions.effectiveTools == ["command.integrity-probe", "workspace.edit"] and
             .permissions.workspaceWrite == true and
             .error.code == "VALIDATION_INTEGRITY" and
             .error.phase == "validation" and
