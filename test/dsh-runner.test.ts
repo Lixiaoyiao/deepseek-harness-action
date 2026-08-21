@@ -116,7 +116,10 @@ describe("executeBoundedDshProcess", () => {
     env: { PATH: process.env.PATH },
   });
   const limits = (overrides: Partial<DshProcessLimits> = {}): DshProcessLimits => ({
-    timeoutMs: 2_000,
+    // A saturated Windows worker can take several seconds just to start a child
+    // Node process during the full coverage run. Keep the production timeout
+    // behavior covered by the explicit 50 ms case below.
+    timeoutMs: 10_000,
     maxStdoutBytes: 1_024,
     maxStderrBytes: 1_024,
     maxCombinedBytes: 2_048,
