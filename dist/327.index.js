@@ -1,8 +1,8 @@
-export const id = 421;
-export const ids = [421];
+export const id = 327;
+export const ids = [327];
 export const modules = {
 
-/***/ 3421:
+/***/ 3327:
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 
@@ -11,14 +11,14 @@ __webpack_require__.d(__webpack_exports__, {
   finishFix: () => (/* binding */ finishFix)
 });
 
-// EXTERNAL MODULE: ../../../../2026-08-15/v0-2-0-review-ci-fix/work/deepseek-harness-action/node_modules/@actions/core/lib/core.js + 18 modules
-var core = __webpack_require__(7571);
+// EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js + 18 modules
+var core = __webpack_require__(6257);
 // EXTERNAL MODULE: ./src/review/tracking.ts
-var tracking = __webpack_require__(1447);
+var tracking = __webpack_require__(4843);
 // EXTERNAL MODULE: ./src/github/comments.ts
-var comments = __webpack_require__(4065);
+var comments = __webpack_require__(6645);
 // EXTERNAL MODULE: ./src/security/redaction.ts
-var redaction = __webpack_require__(7671);
+var redaction = __webpack_require__(5275);
 ;// CONCATENATED MODULE: ./src/github/status.ts
 
 
@@ -36,13 +36,13 @@ async function publishStatusComment(client, target, authorId, title, message, ru
 }
 
 // EXTERNAL MODULE: ./src/write/pr.ts
-var pr = __webpack_require__(3205);
+var pr = __webpack_require__(8385);
 // EXTERNAL MODULE: ./src/write/github.ts
-var github = __webpack_require__(2936);
+var github = __webpack_require__(252);
 // EXTERNAL MODULE: ./src/write/validate.ts
-var validate = __webpack_require__(9093);
+var validate = __webpack_require__(6713);
 // EXTERNAL MODULE: ./src/write/workspace.ts + 1 modules
-var workspace = __webpack_require__(7265);
+var workspace = __webpack_require__(1670);
 ;// CONCATENATED MODULE: ./src/commands/fix.ts
 
 
@@ -99,4 +99,4 @@ async function finishFix(input) {
 
 };
 
-//# sourceMappingURL=421.index.js.map
+//# sourceMappingURL=327.index.js.map
