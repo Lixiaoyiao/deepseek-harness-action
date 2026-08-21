@@ -178,10 +178,12 @@ describe("official rc.8 Profile package extension boot", () => {
         const patch = JSON.parse(await readFile(profile.patchPath, "utf8")) as {
           readonly insert?: readonly { readonly id?: string; readonly name?: string }[];
         }[];
+        const installedEntry = join(installedFixture, "index.mjs");
         expect(patch.flatMap((row) => row.insert ?? [])).toContainEqual(
           expect.objectContaining({
             id: "dsh-action-plugin-fixture",
-            name: pathToFileURL(join(installedFixture, "index.mjs")).href,
+            name:
+              process.platform === "win32" ? pathToFileURL(installedEntry).href : installedEntry,
           }),
         );
       }
