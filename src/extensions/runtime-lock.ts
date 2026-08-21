@@ -4,8 +4,10 @@ import { DshConfigurationError } from "../dsh/errors.js";
 
 const MAX_RUNTIME_LOCK_BYTES = 32 * 1024 * 1024;
 const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
-const PINNED_GITHUB_RESOLUTION_PATTERN =
-  /^git\+https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git#[0-9a-f]{40}$/u;
+const PINNED_GITHUB_HTTPS_RESOLUTION_PATTERN =
+  /^git\+https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\.git#([0-9a-f]{40})$/u;
+const PINNED_GITHUB_NPM_SSH_RESOLUTION_PATTERN =
+  /^git\+ssh:\/\/git@github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\.git#([0-9a-f]{40})$/u;
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -131,6 +133,25 @@ function validIntegrity(value: unknown): value is string {
   );
 }
 
+/**
+ * npm normalizes an exact git+https GitHub dependency to git+ssh://git@github.com in
+ * package-lock.json. Accept only those two immutable spellings and compare their canonical
+ * repository/commit identity; no generic SSH URL, alternate user, host, port, or mutable ref is
+ * allowed.
+ */
+function pinnedGitHubResolutionIdentity(
+  resolved: string,
+  allowNpmSshNormalization: boolean,
+): string | undefined {
+  const match =
+    PINNED_GITHUB_HTTPS_RESOLUTION_PATTERN.exec(resolved) ??
+    (allowNpmSshNormalization ? PINNED_GITHUB_NPM_SSH_RESOLUTION_PATTERN.exec(resolved) : null);
+  if (match === null) return undefined;
+  const [, owner, repository, commit] = match;
+  if (owner === undefined || repository === undefined || commit === undefined) return undefined;
+  return `${owner.toLowerCase()}/${repository.toLowerCase()}#${commit}`;
+}
+
 function validateHttpsResolution(resolved: string, integrity: unknown, path: string): void {
   let url: URL;
   try {
@@ -171,9 +192,9 @@ function validateResolvedPackage(
   }
 
   if (typeof entry.resolved === "string" && entry.resolved.startsWith("git+")) {
-    if (!PINNED_GITHUB_RESOLUTION_PATTERN.test(entry.resolved)) {
+    if (pinnedGitHubResolutionIdentity(entry.resolved, true) === undefined) {
       throw new DshConfigurationError(
-        `Runtime lock package ${path} must pin git+https GitHub resolution to a 40-character commit`,
+        `Runtime lock package ${path} must pin a supported GitHub resolution to a 40-character commit`,
       );
     }
     if (entry.integrity !== undefined && !validIntegrity(entry.integrity)) {
@@ -347,10 +368,17 @@ function assertDirectExtensionLocks(
           `Runtime lock resolved ${packageName} to ${String(entry.version)}, expected ${source}`,
         );
       }
-    } else if (entry.resolved !== source) {
-      throw new DshConfigurationError(
-        `Runtime lock did not preserve the pinned git source for ${packageName}`,
-      );
+    } else {
+      const expectedIdentity = pinnedGitHubResolutionIdentity(source, false);
+      const installedIdentity =
+        typeof entry.resolved === "string"
+          ? pinnedGitHubResolutionIdentity(entry.resolved, true)
+          : undefined;
+      if (expectedIdentity === undefined || installedIdentity !== expectedIdentity) {
+        throw new DshConfigurationError(
+          `Runtime lock did not preserve the pinned git source for ${packageName}`,
+        );
+      }
     }
   }
 }

@@ -273,7 +273,14 @@ describe("controlled extension configuration", () => {
     expect(
       parseSource(`git+https://github.com/acme/dsh-lint.git#${"a".repeat(40)}`).plugins[0]?.source,
     ).toContain("#aaaa");
-    for (const source of ["latest", "^1.2.3", "~1.2.3", "github:acme/dsh-lint", "1.2.x"]) {
+    for (const source of [
+      "latest",
+      "^1.2.3",
+      "~1.2.3",
+      "github:acme/dsh-lint",
+      `git+ssh://git@github.com/acme/dsh-lint.git#${"a".repeat(40)}`,
+      "1.2.x",
+    ]) {
       expect(() => parseSource(source), source).toThrow(/exact semver/u);
     }
     expect(() => parseSource("0.1.0-rc.8", "@deepseek-ai/dsh-headless")).toThrow(

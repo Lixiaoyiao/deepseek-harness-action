@@ -193,9 +193,10 @@ describe("extension runtime package lock", () => {
     },
   );
 
-  it("accepts an exact git+https GitHub commit and rejects mutable git resolution", () => {
+  it("accepts npm's strict SSH normalization of an exact git+https GitHub commit", () => {
     const commit = "a".repeat(40);
     const source = `git+https://github.com/acme/dsh-plugin.git#${commit}`;
+    const npmResolved = `git+ssh://git@github.com/Acme/DSH-Plugin.git#${commit}`;
     const lock = baselineLock();
     lock.name = "dsh-profile-github-action";
     lock.packages[""] = {
@@ -205,7 +206,8 @@ describe("extension runtime package lock", () => {
     };
     lock.packages["node_modules/@acme/dsh-plugin"] = {
       version: "1.0.0",
-      resolved: source,
+      resolved: npmResolved,
+      integrity: INTEGRITY_B,
     };
     const baseline = snapshotRuntimeLock(JSON.stringify(baselineLock()));
     expect(
@@ -217,18 +219,98 @@ describe("extension runtime package lock", () => {
       }).digest,
     ).toMatch(/^[0-9a-f]{64}$/u);
 
-    lock.packages["node_modules/@acme/dsh-plugin"] = {
-      version: "1.0.0",
-      resolved: "git+https://github.com/acme/dsh-plugin.git#main",
-    };
-    expect(() =>
+    packageEntry(lock, "node_modules/@acme/dsh-plugin").resolved = source;
+    expect(
       auditExtensionRuntimeLock({
         lockText: JSON.stringify(lock),
         baseline,
         extensionDependencies: { "@acme/dsh-plugin": source },
         expectedRootName: "dsh-profile-github-action",
+      }).digest,
+    ).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it.each([
+    "git+https://github.com/acme/dsh-plugin.git#main",
+    `git+ssh://other@github.com/acme/dsh-plugin.git#${"a".repeat(40)}`,
+    `git+ssh://git@github.example/acme/dsh-plugin.git#${"a".repeat(40)}`,
+    `git+ssh://git@github.com.evil.test/acme/dsh-plugin.git#${"a".repeat(40)}`,
+    `git+ssh://git@github.com:22/acme/dsh-plugin.git#${"a".repeat(40)}`,
+    `git+ssh://git@github.com/acme/dsh-plugin#${"a".repeat(40)}`,
+    `git+ssh://git@github.com/acme/dsh-plugin.git#${"A".repeat(40)}`,
+  ])("rejects unsupported or mutable git resolution %s", (resolved) => {
+    const commit = "a".repeat(40);
+    const source = `git+https://github.com/acme/dsh-plugin.git#${commit}`;
+    const lock = baselineLock();
+    lock.name = "dsh-profile-github-action";
+    lock.packages[""] = {
+      ...packageEntry(lock, ""),
+      name: "dsh-profile-github-action",
+      dependencies: { runtime: "1.0.0", "@acme/dsh-plugin": source },
+    };
+    lock.packages["node_modules/@acme/dsh-plugin"] = {
+      version: "1.0.0",
+      resolved,
+    };
+    expect(() =>
+      auditExtensionRuntimeLock({
+        lockText: JSON.stringify(lock),
+        baseline: snapshotRuntimeLock(JSON.stringify(baselineLock())),
+        extensionDependencies: { "@acme/dsh-plugin": source },
+        expectedRootName: "dsh-profile-github-action",
       }),
     ).toThrow(/40-character commit/u);
+  });
+
+  it.each([
+    `git+ssh://git@github.com/acme/dsh-plugin.git#${"b".repeat(40)}`,
+    `git+ssh://git@github.com/other/dsh-plugin.git#${"a".repeat(40)}`,
+    `git+ssh://git@github.com/acme/other.git#${"a".repeat(40)}`,
+  ])("rejects npm SSH normalization to a different identity %s", (resolved) => {
+    const source = `git+https://github.com/acme/dsh-plugin.git#${"a".repeat(40)}`;
+    const lock = baselineLock();
+    lock.name = "dsh-profile-github-action";
+    lock.packages[""] = {
+      ...packageEntry(lock, ""),
+      name: "dsh-profile-github-action",
+      dependencies: { runtime: "1.0.0", "@acme/dsh-plugin": source },
+    };
+    lock.packages["node_modules/@acme/dsh-plugin"] = {
+      version: "1.0.0",
+      resolved,
+    };
+    expect(() =>
+      auditExtensionRuntimeLock({
+        lockText: JSON.stringify(lock),
+        baseline: snapshotRuntimeLock(JSON.stringify(baselineLock())),
+        extensionDependencies: { "@acme/dsh-plugin": source },
+        expectedRootName: "dsh-profile-github-action",
+      }),
+    ).toThrow(/did not preserve the pinned git source/u);
+  });
+
+  it("does not accept npm's SSH normalization as the configured source", () => {
+    const commit = "a".repeat(40);
+    const sshSource = `git+ssh://git@github.com/acme/dsh-plugin.git#${commit}`;
+    const lock = baselineLock();
+    lock.name = "dsh-profile-github-action";
+    lock.packages[""] = {
+      ...packageEntry(lock, ""),
+      name: "dsh-profile-github-action",
+      dependencies: { runtime: "1.0.0", "@acme/dsh-plugin": sshSource },
+    };
+    lock.packages["node_modules/@acme/dsh-plugin"] = {
+      version: "1.0.0",
+      resolved: sshSource,
+    };
+    expect(() =>
+      auditExtensionRuntimeLock({
+        lockText: JSON.stringify(lock),
+        baseline: snapshotRuntimeLock(JSON.stringify(baselineLock())),
+        extensionDependencies: { "@acme/dsh-plugin": sshSource },
+        expectedRootName: "dsh-profile-github-action",
+      }),
+    ).toThrow(/did not preserve the pinned git source/u);
   });
 
   it("rejects direct packages already represented by a Controller lock path", () => {
