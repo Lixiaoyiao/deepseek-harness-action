@@ -138,7 +138,19 @@ describe("operation finalizers", () => {
         contextPacket: { repository: "o/r", data: "untrusted" },
         instructions: "focus on security",
         workspacePath: "workspace",
-        tools: { workspace: [], manifests: [], commands: [] },
+        tools: {
+          native: [],
+          workspace: [],
+          manifests: [],
+          commands: [],
+          permission: {
+            profile: "custom",
+            requestedTools: [],
+            disallowedTools: [],
+            deniedTools: [],
+          },
+          permissionDenials: [],
+        },
       },
       inputs({ dshExecutable: "C:/dsh/lib/bin.js", timeoutMinutes: 2 }),
     );

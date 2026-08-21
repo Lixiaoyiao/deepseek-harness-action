@@ -133,7 +133,7 @@ describe("official rc.8 Profile package extension boot", () => {
       const profileOptions = {
         dshHome,
         plan,
-        workspaceTools: [],
+        nativeTools: [],
         workspaceWrite: false,
         task: "Call the allowed Bundle tool, then finish.",
         workerWorkspacePath: workspace,

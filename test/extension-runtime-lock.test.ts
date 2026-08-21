@@ -117,7 +117,7 @@ describe("extension runtime package lock", () => {
       const profile = await prepareControlledProfile({
         dshHome: runtime.dshHome,
         plan,
-        workspaceTools: [],
+        nativeTools: [],
         workspaceWrite: false,
         task: "test",
         workerWorkspacePath: "/workspace",

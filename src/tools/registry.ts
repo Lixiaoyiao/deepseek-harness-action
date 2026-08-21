@@ -7,12 +7,21 @@ import type {
 } from "../agent/contracts.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import type { EffectiveExtensionPlan } from "../extensions/plan.js";
+import {
+  resolvePermissionRequest,
+  type PermissionProfile,
+  type PermissionResolution,
+  type ToolDenial,
+} from "../permissions/profile.js";
 import { executeCommandTool } from "./executor.js";
 import {
+  autonomyToolSchema,
   commandToolId,
   type AllowedToolId,
+  type AutonomyToolId,
   type CommandToolDefinition,
   type CommandToolId,
+  type NativeToolId,
   type ToolConfiguration,
   type WorkspaceToolId,
 } from "./schema.js";
@@ -23,10 +32,28 @@ const workspaceDescriptions: Readonly<Record<WorkspaceToolId, string>> = {
   "workspace.edit": "Edit files inside the disposable bound workspace.",
 };
 
+const autonomyDescriptions: Readonly<Record<AutonomyToolId, string>> = {
+  "native.bash":
+    "Run bounded foreground Bash commands inside the DSH workspace sandbox; escalation is never approved.",
+  "native.web-search":
+    "Search the web through the Controller-mediated DeepSeek Messages proxy without receiving the real API key.",
+  "native.subagent":
+    "Delegate bounded foreground work to one in-process DSH subagent with inherited tool restrictions.",
+};
+
+export interface ResolveEffectiveToolsOptions {
+  readonly permissionProfile?: PermissionProfile;
+  readonly disallowedTools?: readonly AllowedToolId[];
+  readonly isolation?: "docker" | "none";
+}
+
 export interface EffectiveTools {
+  readonly native: readonly NativeToolId[];
   readonly workspace: readonly WorkspaceToolId[];
   readonly manifests: readonly AgentToolManifest[];
   readonly commands: readonly CommandToolDefinition[];
+  readonly permission: PermissionResolution;
+  readonly permissionDenials: readonly ToolDenial[];
   readonly extensions?: EffectiveExtensionPlan;
 }
 
@@ -34,27 +61,104 @@ export function resolveEffectiveTools(
   allowed: readonly AllowedToolId[],
   configuration: ToolConfiguration,
   policy: SecurityPolicy,
+  options: ResolveEffectiveToolsOptions = {},
 ): EffectiveTools {
-  const allowedSet = new Set<AllowedToolId>(allowed);
-  const workspace = (Object.keys(workspaceDescriptions) as WorkspaceToolId[]).filter((id) => {
-    if (!allowedSet.has(id)) return false;
-    if (id === "workspace.edit") return policy.capabilities.modifyWorkspace;
-    return policy.capabilities.readRepository && policy.trust !== "untrusted";
+  const permission = resolvePermissionRequest(
+    options.permissionProfile ?? "strict",
+    allowed,
+    options.disallowedTools ?? [],
+  );
+  const requested = new Set<AllowedToolId>(permission.requestedTools);
+  const disallowed = new Set<AllowedToolId>(permission.disallowedTools);
+  const permissionDenials: ToolDenial[] = [...permission.deniedTools];
+  const deny = (id: AllowedToolId, reason: string): false => {
+    if (!disallowed.has(id)) permissionDenials.push({ id, reason });
+    return false;
+  };
+  const isolation = options.isolation ?? "docker";
+  const nativeCandidates = [
+    ...(Object.keys(workspaceDescriptions) as WorkspaceToolId[]),
+    ...(Object.keys(autonomyDescriptions) as AutonomyToolId[]),
+  ] as const;
+  const native = nativeCandidates.filter((id): id is NativeToolId => {
+    if (!requested.has(id) || disallowed.has(id)) return false;
+    if (id === "workspace.edit") {
+      return (
+        (policy.capabilities.modifyWorkspace && isolation === "docker") ||
+        deny(id, "Workspace editing requires trusted-write policy with Docker isolation")
+      );
+    }
+    if (id === "workspace.read" || id === "workspace.search") {
+      return (
+        (policy.capabilities.readRepository &&
+          policy.trust !== "untrusted" &&
+          isolation === "docker") ||
+        deny(id, "Repository tools require a trusted actor and Docker isolation")
+      );
+    }
+    if (id === "native.bash") {
+      return (
+        (policy.capabilities.executeRepositoryCode &&
+          policy.capabilities.modifyWorkspace &&
+          isolation === "docker") ||
+        deny(id, "Bash requires trusted-write repository-code execution in Docker")
+      );
+    }
+    if (id === "native.web-search") {
+      return (
+        (policy.capabilities.accessNetwork &&
+          policy.trust !== "untrusted" &&
+          isolation === "docker") ||
+        deny(id, "Web search requires a trusted same-repository actor and Docker")
+      );
+    }
+    return (
+      (policy.capabilities.readRepository &&
+        policy.capabilities.modifyWorkspace &&
+        policy.trust === "trusted-write" &&
+        isolation === "docker") ||
+      deny(id, "Subagent delegation requires trusted-write policy in Docker")
+    );
   });
+  const workspace = native.filter(
+    (id): id is WorkspaceToolId => !autonomyToolSchema.safeParse(id).success,
+  );
   const commands = policy.capabilities.executeRepositoryCode
     ? configuration.commands.filter(
         ({ name, network, workspaceAccess }) =>
-          allowedSet.has(commandToolId(name)) &&
+          requested.has(commandToolId(name)) &&
+          !disallowed.has(commandToolId(name)) &&
           (workspaceAccess !== "write" || policy.capabilities.modifyWorkspace) &&
           (network !== "bridge" || policy.capabilities.accessNetwork),
       )
     : [];
-  const manifests: AgentToolManifest[] = [
-    ...workspace.map((id) => ({
+  for (const command of configuration.commands) {
+    const id = commandToolId(command.name);
+    if (!requested.has(id) || disallowed.has(id) || commands.includes(command)) continue;
+    permissionDenials.push({
       id,
-      description: workspaceDescriptions[id],
+      reason:
+        "The Controller trust policy denied this command's execution, write, or network grant",
+    });
+  }
+  const manifests: AgentToolManifest[] = [
+    ...native.map((id) => ({
+      id,
+      description:
+        id in workspaceDescriptions
+          ? workspaceDescriptions[id as WorkspaceToolId]
+          : autonomyDescriptions[id as AutonomyToolId],
       provider: "builtin" as const,
-      permissions: [id === "workspace.edit" ? "write" : "read"] as const,
+      permissions:
+        id === "workspace.edit"
+          ? (["write"] as const)
+          : id === "native.bash"
+            ? (["read", "execute"] as const)
+            : id === "native.web-search"
+              ? (["network"] as const)
+              : id === "native.subagent"
+                ? (["read", "execute"] as const)
+                : (["read"] as const),
       inputSchema: { type: "object", additionalProperties: false },
     })),
     ...commands.map((command) => ({
@@ -69,7 +173,7 @@ export function resolveEffectiveTools(
       inputSchema: { type: "object", additionalProperties: false },
     })),
   ];
-  return { workspace, manifests, commands };
+  return { native, workspace, manifests, commands, permission, permissionDenials };
 }
 
 export interface CommandToolProviderOptions {

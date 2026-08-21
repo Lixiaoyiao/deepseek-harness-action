@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
@@ -68,7 +68,7 @@ jobs:
 
 完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
 
-> v0.4.0 已发布。上面的兼容性 Quick start 有意继续固定到不可变的 v0.3.0 runtime commit。若要使用受控 MCP 或 Plugin/Profile 扩展，请从 [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) 开始，并在生产使用前把其中的 release Tag 替换为 v0.4.0 Release 对应的不可变 commit SHA。发布说明见 [`CHANGELOG.md`](CHANGELOG.md)。
+> 此 Quick start 跟随 v0.5.0 release Tag，让新用户默认使用当前版本。生产环境请把 Tag 替换为 v0.5.0 发布时给出的完整不可变 commit SHA。v0.3/v0.4 的历史行为仍保留在 [`CHANGELOG.md`](CHANGELOG.md) 中。
 
 ## 能做什么
 
@@ -88,8 +88,8 @@ jobs:
 - [`examples/commands.yml`](examples/commands.yml)：`@dsh` 命令、修复和 Issue → PR
 - [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml)：CI 失败诊断
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml)：受信任的 CI 自动修复
-- [`examples/task-automation.yml`](examples/task-automation.yml)：v0.3 显式 prompt 通用自动化
-- [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml)：v0.4 受控 MCP 与 DSH Bundle/Profile 配置
+- [`examples/task-automation.yml`](examples/task-automation.yml)：v0.5 基于 profile 的显式 prompt 通用自动化
+- [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml)：v0.5 custom MCP 与 DSH Bundle/Profile 配置
 
 `fix` 和 `implement` 不会因为写了命令就自动获得权限。你还需要在 workflow 中设置 `allow-write: "true"`、保持 `run-tests: "true"`，并在 `test-commands` 中提供至少一个 argv 数组。详细输入见 [`action.yml`](action.yml)。
 
@@ -113,13 +113,13 @@ with:
   task-access: read
 ```
 
-`prompt` 属于受信任 control-plane 配置，只应来自维护者写入的 workflow 或受信任的 dispatch 输入；不要把 Issue 正文、PR 内容、日志或其他不可信数据未经区分地提升为 `prompt`。同样的来源规则也适用于 capability inputs，尤其是 `container-image`、`base-url`、`isolation` 与 `dsh-executable`：它们决定 worker code、凭据路由或进程边界。固定到不可变 v0.3.0 兼容 runtime 的完整读/写 dispatch 模板见 [`examples/task-automation.yml`](examples/task-automation.yml)。
+`prompt` 属于受信任 control-plane 配置，只应来自维护者写入的 workflow 或受信任的 dispatch 输入；不要把 Issue 正文、PR 内容、日志或其他不可信数据未经区分地提升为 `prompt`。同样的来源规则也适用于 capability inputs，尤其是 `permission-profile`、`allowed-tools`、`disallowed-tools`、`container-image`、`base-url`、`web-search-base-url`、`isolation` 与 `dsh-executable`：它们决定权限、worker code、凭据路由或进程边界。当前基于 profile 的完整读/写 dispatch 模板见 [`examples/task-automation.yml`](examples/task-automation.yml)。
 
 无 Issue/PR 实体的只读自动化会通过 step summary 和 outputs 返回回答。无实体或以 Issue 为目标的写 task 会创建独立 `dsh/task-*` 分支和 PR；controller 不会把通用自动化改动直接推到默认分支。PR 上获准的同仓库写 task 仍只作用于 controller 绑定并重新校验过的目标分支。
 
 ## 多轮修改、验证与修复闭环
 
-v0.3 引入的 controller loop 在 v0.4 中保持不变。它属于 Action controller，而不在 DSH shell 中；每一轮都是新的、受同一任务锚点和能力策略约束的 DSH turn：
+v0.3 引入的 controller loop 在 v0.5 中仍是执行模型。它属于 Action controller，而不在 DSH shell 中；每一轮都是新的、受同一任务锚点和能力策略约束的 DSH turn：
 
 ```text
 DSH turn
@@ -129,14 +129,29 @@ DSH turn
   └─ blocked → 安全结束并返回 neutral
 ```
 
-内置 Agent toolset 没有无限制 shell，DSH 也不持有 GitHub 凭据或真实 DeepSeek 凭据；但显式获准的第三方扩展属于受信任 worker code，可以产生下文说明的进程级副作用。controller 负责固定 argv 工具执行、validation、实际变更检查和最后的 GitHub 写入。`max-turns`（默认 3）统一限制工具请求和 validation 修复所消耗的 DSH turn；`timeout-minutes` 是整个 controller loop 的总 deadline。若相同 workspace revision 连续得到相同 validation 失败，controller 会以 no-progress 错误停止，避免无效循环。turn/tool/validation-retry 计数与限长 tool receipts 会写入 `result-json.loop`。
+默认 `strict` Agent toolset 没有 shell。受信任维护者可以选择 `standard` 或精确的 `custom` 策略，在无凭据 Docker worker 内开放经过审计的 DSH 原生 Bash 工具。任何 profile 都不会让 DSH 获得 GitHub 凭据、真实 DeepSeek key、自行批准或扩大工具集合的能力，也不会获得 commit/push/PR/Release 权限。显式获准的第三方扩展属于受信任 worker code，可以产生下文说明的进程级副作用。controller 负责 validation、实际变更检查和所有最终 GitHub mutation。`max-turns`（默认 3）统一限制工具请求和 validation 修复所消耗的 DSH turn；`timeout-minutes` 是整个 controller loop 的总 deadline。若相同 workspace revision 连续得到相同 validation 失败，controller 会以 no-progress 错误停止，避免无效循环。turn/tool/validation-retry 计数与限长 tool receipts 会写入 `result-json.loop`。
+
+## 权限档位
+
+多数 workflow 只需要选择一个 preset。权限档位控制沙箱内的 Agent，不授予 GitHub authority。
+
+| Profile    | 适用场景                        | 预设工具                                                                                     |
+| ---------- | ------------------------------- | -------------------------------------------------------------------------------------------- |
+| `strict`   | Review 与兼容 v0.4 的默认行为   | `workspace.read`、`workspace.search`，以及 policy 允许时的 `workspace.edit`                  |
+| `standard` | 受信任维护者的常规 Coding Agent | strict preset 加 `native.bash`、Controller-mediated `native.web-search` 和 `native.subagent` |
+| `custom`   | 精确工具、MCP、Bundle 或 Plugin | 不预设工具；显式列出每个需要的 canonical ID                                                  |
+
+`allowed-tools` 在 preset 展开后增加精确 ID；`disallowed-tools` 使用相同的精确 ID 语法，并始终优先。可用族为 `workspace.*`、`native.*`、`command.<name>`、`mcp.<server>.<tool>` 和 `plugin.<extension>.<tool>`。如果 v0.4 workflow 依赖较小的精确 allowlist，应改选 `custom`，或加入对应 deny 项，因为 allowlist 不再替换 `strict`/`standard` preset。最终结果仍要与 actor、event、trust、workspace、network、extension 和 Controller policy 取交集；任何越界请求都会 fail closed。`custom` 不是通配授权：它从空集开始，未知、不可用、遗漏或 policy 不允许的 ID 都会 fail closed。outputs 与 step summary 会报告解析后的 `permission-profile`、`effective-tools`、`network-access`、`workspace-write` 和 `trusted-extensions`。
+
+`native.web-search` 由 Controller 通过已配置的 DeepSeek web-search endpoint 中介；它不会把真实 key 暴露给 DSH，也不等于开放通用 bridge egress。`native.bash` 要求 trusted-write Docker，不能与 bridge-networked extension 共用 worker。MCP、Bundle 与 Plugin 配置属于高级 `custom` 路径，因为获准的启动代码是 trusted worker code。Agent 无法修改自己的 profile、allow/deny 列表、extension 配置或安装 gate。
 
 ## 维护者定义的安全命令工具
 
-模型不能自由拼 shell。维护者在 versioned `tool-config` 中给每个命令固定完整 argv，再通过 `allowed-tools` 单独暴露其 ID：
+`command.*` 工具不能接收或组装模型提供的 argv。维护者在 versioned `tool-config` 中给每个命令固定完整 argv，再通过 `allowed-tools` 单独暴露其 ID：
 
 ```yaml
 with:
+  permission-profile: custom
   allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.bundle-syntax"]'
   tool-config: |
     {
@@ -154,11 +169,11 @@ with:
     }
 ```
 
-请把示例 argv 替换为仓库自己的确定命令。command tool 不接收模型参数；常见的直接 shell executable 会作为附加防线被拒绝，未定义工具、超出调用次数以及不符合当前 policy 的 network/workspace 权限也会失败。真正的安全边界是维护者固定全部 argv、模型不能追加参数，以及凭据隔离的容器。如果 workflow 把 controller 凭据插值进 command-tool 或 validation argv，输入校验会直接拒绝。命令在无 controller 凭据、固定 digest 的 hardened container 中运行；stdout/stderr 会限长和脱敏，并始终按不可信数据回送。仅把工具写进 manifest 也不会授权执行：ID 还必须出现在 `allowed-tools`，且当前 security policy 必须允许相应的 execute/write/network capability。
+请把示例 argv 替换为仓库自己的确定命令。command tool 不接收模型参数；常见的直接 shell executable 会作为附加防线被拒绝，未定义工具、超出调用次数以及不符合当前 policy 的 network/workspace 权限也会失败。真正的安全边界是维护者固定全部 argv、模型不能追加参数，以及凭据隔离的容器。如果 workflow 把 controller 凭据插值进 command-tool 或 validation argv，输入校验会直接拒绝。命令在无 controller 凭据、固定 digest 的 hardened container 中运行；stdout/stderr 会限长和脱敏，并始终按不可信数据回送。仅把工具写进 manifest 也不会授权执行：ID 还必须出现在 `allowed-tools`，且当前 security policy 必须允许相应的 execute/write/network capability。单独的 `native.bash` 只会通过显式 `standard`/`custom` profile，并在 trusted-write Docker policy 检查后开放；它只能运行受限的前台命令，继承沙箱与凭据隔离，且不会获得提权批准。
 
 ## 官方 MCP、Bundle 与 Profile 接入
 
-v0.4 将经过审计的 runtime 从 `@deepseek-ai/dsh@0.1.0-rc.6` 精确升级到 `0.1.0-rc.8`，并使用官方 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`，没有另造一套 MCP client 或插件加载器。Controller 校验受信任 workflow 配置，生成受控 DSH `github-action` Profile，在 Profile manifest 中列出获准 Bundle，把获准 plugin 和 MCP row 写入 Cordis patch，再通过官方 `@deepseek-ai/dsh-app-boot@0.1.0-rc.8` 公共 API 启动该 Profile。这个受控启动路径跳过 workspace 与 `$DSH_HOME` 的 `.env` 发现，也不启用通用 CLI 的动态 user patch 监听/热加载路径。随 Action 交付的 DSH 依赖全部由 lockfile 精确固定；`latest`、semver range、浮动 Git ref 和旧式 MCP SSE 均会被拒绝。
+v0.4 将经过审计的 runtime 从 `@deepseek-ai/dsh@0.1.0-rc.6` 精确升级到 `0.1.0-rc.8`，并采用官方 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`；v0.5 保留这些经过审计的 exact pin，没有另造一套 MCP client 或插件加载器。Controller 校验受信任 workflow 配置，生成受控 DSH `github-action` Profile，在 Profile manifest 中列出获准 Bundle，把获准 plugin 和 MCP row 写入 Cordis patch，再通过官方 `@deepseek-ai/dsh-app-boot@0.1.0-rc.8` 公共 API 启动该 Profile。这个受控启动路径跳过 workspace 与 `$DSH_HOME` 的 `.env` 发现，也不启用通用 CLI 的动态 user patch 监听/热加载路径。随 Action 交付的 DSH 依赖全部由 lockfile 精确固定；`latest`、semver range、浮动 Git ref 和旧式 MCP SSE 均会被拒绝。
 
 官方 MCP client 在这里开放它实际支持的 transport：
 
@@ -169,6 +184,7 @@ v0.4 将经过审计的 runtime 从 `@deepseek-ai/dsh@0.1.0-rc.6` 精确升级�
 
 ```yaml
 with:
+  permission-profile: custom
   allowed-tools: '["workspace.read","workspace.search","mcp.repo-index.lookup"]'
   mcp-config: |
     {
@@ -217,13 +233,13 @@ Action 自有 policy adapter 对模型路由的 DSH native tools、官方 MCP to
 
 限制前，每个可见 runtime tool 都必须属于 Controller 审计清单，且每个 selected tool 必须实际存在；配置中已声明但未列入 `allowed-tools` 的工具不要求完成注册。限制后，模型可见清单必须与 selected allowlist 完全一致。未知工具、缺失的 selected tool，以及仍暴露在 allowlist 外的 agent-scoped tool 都会 fail closed；独立的单调 ToolRuntime guard 还会拒绝任何缺少有效 Controller rule 的调用。
 
-Network 与 workspace mount 属于整个 DSH 进程，而不是单个工具。由于 extension 进程共享 Agent 的仓库视图，每个 extension tool 都必须显式声明 `read`；同一 turn 内所有有效 MCP server/package 还必须声明相同的 network 与 workspace-write 模式。trusted-read worker 只接受 read-only owner，trusted-write worker 中共同运行的每个 owner 都必须显式声明 `workspace-write`。不同模式会被拒绝，而不会被表述成并不存在的 per-tool isolation。`network: false` 表示内部 Docker network 阻止普通外部出站，并非 worker 完全没有网络路径：DSH 仍会把 `host.docker.internal` 映射到该 network 经检查得到的 IPv4 gateway，以访问 Controller 侧 LLM proxy。该 host-gateway path 不是 port allowlist，其他 host service 是否可达由 runner firewall policy 决定，package acquisition 也会另行使用 bridge network。
+Network 与 workspace mount 属于整个 DSH 进程，而不是单个工具。由于 extension 进程共享 Agent 的仓库视图，每个 extension tool 都必须显式声明 `read`；同一 turn 内所有有效 MCP server/package 还必须声明相同的 network 与 workspace-write 模式。trusted-read worker 只接受 read-only owner，trusted-write worker 中共同运行的每个 owner 都必须显式声明 `workspace-write`。不同模式会被拒绝，而不会被表述成并不存在的 per-tool isolation。`network: false` 表示内部 Docker network 阻止普通外部出站，并非 worker 完全没有网络路径：DSH 仍会把 `host.docker.internal` 映射到该 network 经检查得到的 IPv4 gateway，以访问 Controller 侧 LLM proxy。因此有效权限 output 会报告 `host-gateway`，而不是 `none`。该 host-gateway path 不是 port allowlist，其他 host service 是否可达由 runner firewall policy 决定，package acquisition 也会另行使用 bridge network。
 
 Profile composition、ID mapping、进程级兼容规则、receipt 形状与 deferred session 边界详见 [`docs/extension-contracts.md`](docs/extension-contracts.md)。
 
 ### 兼容性
 
-如果 `mcp-config`、`plugin-config` 保持为空，且 `allow-plugin-install` 保持默认 `false`，v0.4 会沿用 v0.3 的 review、diagnose、fix、implement、auto、task、多轮、sticky comment 与 GitHub write 路径。原有 input 名称、scalar outputs 和 schema-v1 `result-json` envelope 保持兼容。两项有意的安全加固是：所有写入强制 validation，以及写任务评论延迟到 validation 成功后。v0.4 不加入 session resume、Label/Assignee trigger、branch template 或 Agent Teams。
+默认 `strict` profile 保留 v0.4 的 review、diagnose、fix、implement、auto、task、多轮、sticky comment 与 Controller-owned GitHub write 路径。原有 input 名称、scalar outputs 和 schema-v1 `result-json` envelope 保持兼容。v0.5 加入 opt-in `standard`/`custom` Agent 权限与 validation-definition integrity，但不加入 session resume、Label/Assignee trigger、custom trigger phrase、branch template、Agent Teams 或其它平台扩张。
 
 ## 运行进度与结构化输出
 
@@ -236,7 +252,7 @@ Profile composition、ID mapping、进程级兼容规则、receipt 形状与 def
 | `diagnose`          | `diagnosis`          |
 | `fix` / `implement` | `write`              |
 
-成功时，详细 review、诊断或通过 validation 的写入结果会替换同一条评论。只读失败可以在这里显示稳定错误码、阶段、经过脱敏和限长的消息与下一步；写请求若被阻止、没有变更或在最终 validation 前/期间失败，则只产生 Action outputs 和 step summary，不产生任何 GitHub API 写入。只有预期 numeric bot ID 发布的 marker 才会被更新，用户伪造的 marker 不会被接管。适用的生命周期评论更新是 best effort：GitHub 评论 API 暂时不可用不会遮蔽 agent、validation 或写入的真实结果。
+成功时，详细 review、诊断或通过 validation 的写入结果会替换同一条评论。只读失败可以在这里显示稳定错误码、阶段、经过脱敏和限长的消息与下一步。若获准的 `@dsh task --write` 最终没有 repository change，Controller 不会 commit、更新 ref、创建 PR 或 Release，但仍会把 final answer 正常发布到已解析的 Issue/PR，并把 no-change 结果写入 outputs 与 step summary。被阻止的请求，或在最终 validation 前/期间失败的写请求，仍只产生 outputs 与 step summary。只有预期 numeric bot ID 发布的 marker 才会被更新，用户伪造的 marker 不会被接管。适用的生命周期评论更新是 best effort：GitHub 评论 API 暂时不可用不会遮蔽 agent、validation 或写入的真实结果。
 
 `progress-comment` 默认是 `true`。如果不希望显示中间状态，可以关闭：
 
@@ -249,28 +265,33 @@ with:
 
 建议让 job 的 `timeout-minutes` 比 Action 的同名输入多留几分钟；这样 DSH 内部 watchdog 能先结束 worker，并有时间写完失败 outputs、step summary 和适用的只读 sticky comment。
 
-Action 在 success、neutral 和 failure 路径都会设置 `result-json`。这是带 `schemaVersion: 1` 的 JSON envelope，包含适用的 `status`、operation、summary、timing、policy/capabilities、有效 extension audit、限长 tool receipts、实际 isolation report、publication 统计、controller validation、write 结果、sticky comment ID 和 error。`status` 可能是 `success`、`neutral`、`failed`、`timed_out`、`validation_failed` 或 `denied`；`validation_failed` 同时覆盖无效的 DSH structured output 和 controller validation 失败，具体由 `error.code` 区分。失败对象包含稳定的 `code`、`phase`、`title`、`message`、`guidance` 和 `retryable`。
+Action 在 success、neutral 和 failure 路径都会设置 `result-json`。这是带 `schemaVersion: 1` 的 JSON envelope，包含适用的 `status`、operation、summary、timing、policy/capabilities、permission audit、有效 extension audit、限长 tool receipts、实际 isolation report、publication 统计、controller validation 与 validation-integrity audit、write 结果、sticky comment ID 和 error。`status` 可能是 `success`、`neutral`、`failed`、`timed_out`、`validation_failed` 或 `denied`；`validation_failed` 同时覆盖无效的 DSH structured output 和 controller validation 失败，具体由 `error.code` 区分。失败对象包含稳定的 `code`、`phase`、`title`、`message`、`guidance` 和 `retryable`。
 
 所有标量 outputs 如下：
 
-| Output                     | 含义                                                               |
-| -------------------------- | ------------------------------------------------------------------ |
-| `conclusion`               | `success`、`neutral` 或 `failure`                                  |
-| `operation`                | `task`、`review`、`diagnose`、`fix`、`implement` 或 `none`         |
-| `summary`                  | 任意操作的校验后摘要，失败时为安全的失败摘要                       |
-| `review-summary`           | `summary` 的向后兼容别名                                           |
-| `findings-count`           | review 中选中的 finding 数；其他操作中为已校验的 agent finding 数  |
-| `branch-name`              | 创建的 DSH 分支（不适用时为空）                                    |
-| `pull-request-url`         | 创建的 PR URL（不适用时为空）                                      |
-| `commit-sha`               | 成功 fix 创建的 commit（不适用时为空）                             |
-| `trust`                    | `untrusted`、`trusted-read`、`trusted-write` 或尚未解析时的 `none` |
-| `duration-ms`              | controller 总耗时，毫秒                                            |
-| `comment-id`               | 可用时的 sticky progress/result comment ID                         |
-| `error-code`               | 稳定失败码；成功和 neutral 时为空                                  |
-| `error-message`            | 脱敏且限长的失败信息                                               |
-| `extension-profile-digest` | 脱敏后有效 Profile audit 的 SHA-256 digest；不可用时为空           |
-| `tool-receipts`            | 含限长 `controller`/`dsh` 数组及截断元数据的 JSON object           |
-| `result-json`              | 上述 versioned JSON envelope                                       |
+| Output                     | 含义                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| `conclusion`               | `success`、`neutral` 或 `failure`                                                   |
+| `operation`                | `task`、`review`、`diagnose`、`fix`、`implement` 或 `none`                          |
+| `summary`                  | 任意操作的校验后摘要，失败时为安全的失败摘要                                        |
+| `review-summary`           | `summary` 的向后兼容别名                                                            |
+| `findings-count`           | review 中选中的 finding 数；其他操作中为已校验的 agent finding 数                   |
+| `branch-name`              | 创建的 DSH 分支（不适用时为空）                                                     |
+| `pull-request-url`         | 创建的 PR URL（不适用时为空）                                                       |
+| `commit-sha`               | 成功 fix 创建的 commit（不适用时为空）                                              |
+| `trust`                    | `untrusted`、`trusted-read`、`trusted-write` 或尚未解析时的 `none`                  |
+| `permission-profile`       | 已解析的 `strict`、`standard`、`custom` 或 `none` Agent 权限 preset                 |
+| `effective-tools`          | 经过 preset、deny、trust 与 policy 检查后剩余精确工具的 JSON 数组                   |
+| `network-access`           | 有效 worker path：`host-gateway`、`mediated-web`、`bridge`，权限尚未解析时为 `none` |
+| `workspace-write`          | 有效 Agent 工具能否修改 disposable workspace                                        |
+| `trusted-extensions`       | Controller 批准的 MCP、Bundle 与 Plugin owner 的 JSON 数组                          |
+| `duration-ms`              | controller 总耗时，毫秒                                                             |
+| `comment-id`               | 可用时的 sticky progress/result comment ID                                          |
+| `error-code`               | 稳定失败码；成功和 neutral 时为空                                                   |
+| `error-message`            | 脱敏且限长的失败信息                                                                |
+| `extension-profile-digest` | 脱敏后有效 Profile audit 的 SHA-256 digest；不可用时为空                            |
+| `tool-receipts`            | 含限长 `controller`/`dsh` 数组及截断元数据的 JSON object                            |
+| `result-json`              | 上述 versioned JSON envelope                                                        |
 
 v0.1.0 已有的 `conclusion`、`operation`、`review-summary`、`findings-count`、`branch-name` 和 `pull-request-url` 均保留；现有 workflow 不需要改写。模型给出的 `verification` 与 controller 真正运行的 validation 是两类数据，`result-json` 会把后者单独放在 `validation` 中。
 
@@ -289,25 +310,37 @@ v0.1.0 已有的 `conclusion`、`operation`、`review-summary`、`findings-count
 
 ## 写模式
 
-`allow-write` 默认是 `false`。所有代码、Git ref、pull request 和写任务评论变更都要求 `run-tests: "true"`、至少一个 `test-commands` argv 数组，并且每条 validation command 成功。`run-tests: "false"` 会拒绝变更，不再是 waiver；这是 v0.4 有意引入的 breaking security hardening。在该 gate 成功前，写请求不会产生 GitHub comment、commit、ref update 或 pull request。变更仍只对同仓库、受信任操作者开放；fork PR 始终是 review-only。测试命令使用 argv 数组，不经过 shell 展开：
+`allow-write` 默认是 `false`。所有代码、Git ref、pull request 和写任务评论变更都要求 `run-tests: "true"`、至少一个 `test-commands` argv 数组，并且每条 validation command 成功。`run-tests: "false"` 会拒绝变更，不再是 waiver；这是 v0.4 有意引入的 breaking security hardening。在该 gate 成功或 actual-change inspection 确认 task 无变更之前，写请求不会产生 GitHub comment、commit、ref update 或 pull request；no-change task 只能发布 final answer。repository mutation 仍只对同仓库、受信任操作者开放；fork PR 始终是 review-only。测试命令使用 argv 数组，不经过 shell 展开：
 
 ```yaml
 with:
   allow-write: "true"
+  permission-profile: standard
   run-tests: "true"
+  validation-integrity: strict
   test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
   container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
 ```
 
 写模式和任何有效 extension 都要求使用完整的 Docker image digest。所有 image 值（包括允许 tag 的只读兼容路径）都必须是单一 Docker/OCI reference，不能以 option 开头或包含可拆分参数的空白；image 本身属于 trusted worker code。Docker 需要在 runner 上可用。
 
+### Validation 定义完整性
+
+Controller 会单独识别能够重新定义“validation 通过”含义的变更，包括 package scripts、test source/config、lint、typecheck、build config 和其它 validation entrypoint。这不会禁止代码与测试一起正常修改。
+
+- `off`：记录并报告 validation-definition changes，但不阻止。
+- `warn`：默认模式；报告变化类别与可疑的削弱信号。
+- `strict`：阻止高置信度的削弱（包括 audit 截断）；若 control-plane definition 有变化但没有明显削弱信号，则保留候选代码/测试并恢复基线 validation definitions，再执行配置好的 validation。
+
+该模式属于受信任 workflow 配置，仓库内容与模型都不能降低它。Controller 会在考虑任何 GitHub mutation 前把 audit 与处置结果写入 `result-json` 和 step summary。
+
 ## 安全
 
 安全模型分成四层，避免把“操作者可信”和“仓库内容可信”混为一谈：
 
-1. **Actor / control plane**：交互式 `@dsh` 命令要求所有来源 actor 都通过 write/maintain/admin 检查；写操作还必须显式设置 `allow-write: "true"` 并通过强制 validation。`container-image`、`base-url`、`isolation`、`dsh-executable` 等 capability-bearing inputs 只能来自受信任 workflow 配置。workflow token scopes 只决定 controller 能调用哪些 GitHub API，不能绕过 actor 或 policy gate。
+1. **Actor / control plane**：交互式 `@dsh` 命令要求所有来源 actor 都通过 write/maintain/admin 检查；写操作还必须显式设置 `allow-write: "true"` 并通过强制 validation。`permission-profile`、精确 allow/deny 列表、`validation-integrity`、`container-image`、凭据路由 URL、`isolation`、`dsh-executable` 等 capability-bearing inputs 只能来自受信任 workflow 配置。workflow token scopes 只决定 controller 能调用哪些 GitHub API，不能绕过 actor 或 policy gate。
 2. **输入数据**：仓库文件、diff、CI 日志、README/AGENTS/CLAUDE、Issue、PR 和评论始终是不可信数据。模型输出也不直接获得权力，必须通过严格 schema、路径、大小和 marker 校验。
-3. **Worker**：`untrusted`、`trusted-read`、`trusted-write` 是执行 profile，不表示仓库内容变得可信。fork 没有仓库工具；read profile 只允许不可变副本上的 read/search；write profile 只允许 `.git`-less 副本上的 read/search/edit，不能运行 shell 或直接调用 GitHub。
+3. **Worker**：`untrusted`、`trusted-read`、`trusted-write` 是 trust profile；`strict`、`standard`、`custom` 是独立的 Agent permission 维度。fork 没有仓库工具。受信任的 standard/custom worker 可以在无凭据 Docker 边界内开放经过审计的 native tools，但绝不直接访问 GitHub。
 4. **Controller / commit authority**：只有 controller 持有 GitHub client 和真实凭据，负责重新绑定 SHA/Issue/PR identity、运行无凭据 validation、检查实际文件变化，并最终评论、commit、push 或创建 PR。
 
 常用模板的 workflow permissions：
@@ -321,30 +354,34 @@ with:
 | 支持 fix / implement 的命令   | `contents: write`、`actions: read`、`checks: read`、`issues: write`、`pull-requests: write` |
 | CI auto-fix                   | 与上一行相同                                                                                |
 
-progress comment 使用与最终结果评论相同的权限，不新增 scope。`GITHUB_TOKEN` 只留在 controller；DeepSeek key 由 controller 侧代理注入，两者都不会进入 DSH workspace、MCP/Plugin 配置或 validation 命令。完整信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。v0.4.0 只接受经过审计的 `@deepseek-ai/dsh@0.1.0-rc.8` 与 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8` lock；其他版本必须重新审查对应 policy/profile。
+progress comment 使用与最终结果评论相同的权限，不新增 scope。`GITHUB_TOKEN` 只留在 controller；DeepSeek key 由 controller 侧代理注入，两者都不会进入 DSH workspace、MCP/Plugin 配置或 validation 命令。完整信任边界、已知限制和漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。v0.5.0 继续只接受经过审计的 `@deepseek-ai/dsh@0.1.0-rc.8` 与 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8` lock；其他版本必须重新审查对应 policy/profile。
 
 ## 架构
 
 ```text
 GitHub event
     ↓
-Action controller: route task/review/diagnose/fix/implement → resolve target → authorize
+Action controller: route → authorize → compile permission profile + exact allow/deny
     ↓
 只读操作的 Controller-owned sticky progress → bounded workspace / context
     ↓
 Fresh DSH turn in Docker
     ├─ DSH native / official MCP / Plugin tool → positive Action policy → receipt
     ├─ needs_tool → controller fixed-argv tool ──────────────────────────┐
-    └─ final → controller validation failure ────────────────────────────┤ bounded untrusted feedback
+    └─ final → validation + validation-integrity failure ────────────────┤ bounded untrusted feedback
                                                                          └→ next DSH turn (max-turns/deadline)
     ↓
-Action controller: final schema + validation → publish / commit / branch + PR
+Action controller: final schema + gates → answer / commit / branch + PR
                                       （写任务评论只会从这里开始）
     ↓
 Action outputs: legacy scalars + versioned result-json
 ```
 
 DSH worker 不持有 GitHub client。模型输出通过 schema 校验后，才由 controller 映射到 diff 行或调用已授权工具。只读 tracking comment 始终由 Controller 控制；写任务评论和所有受信任写入还必须等待最终仓库 validation 成功。受控 Profile 只会在 Controller 校验后由受信任 workflow inputs 生成；仓库内容和模型输出不能修改 MCP/Bundle/Plugin 集合。
+
+## Release canary
+
+轻量 [release canary](.github/workflows/release-canary.yml) 每周或手动运行，只使用 `contents: read`、一个 `strict` 只读 task，不设置矩阵或 mutation scope。发布维护者需要把 repository variable `DSH_V050_CANARY_SHA` 设为小写、完整 40 字符的 v0.5.0 release commit SHA，并提供 `DEEPSEEK_API_KEY`；workflow 会先校验并 checkout 该不可变 ref，再以本地 Action 运行。
 
 ## 开发
 

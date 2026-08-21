@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-const RELEASE_RUNTIME_SHA = "8eaaa7777a4756c5e519e791b6613b302fc0a92e";
+const RELEASE_REFERENCE = "v0.5.0";
 
 describe("Marketplace action metadata", () => {
   it("uses the supported Node 24 runtime and ships the declared bundle", async () => {
@@ -22,7 +22,10 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/progress-comment:[\s\S]*?default: "true"/u);
     expect(metadata).toMatch(/task-access:[\s\S]*?default: "read"/u);
     expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
-    expect(metadata).toMatch(/allowed-tools:[\s\S]*?workspace\.read/u);
+    expect(metadata).toMatch(/permission-profile:[\s\S]*?default: "strict"/u);
+    expect(metadata).toMatch(/allowed-tools:[\s\S]*?default: "\[\]"/u);
+    expect(metadata).toMatch(/disallowed-tools:[\s\S]*?default: "\[\]"/u);
+    expect(metadata).toMatch(/validation-integrity:[\s\S]*?default: "warn"/u);
     expect(metadata).toMatch(/tool-config:[\s\S]*?schemaVersion/u);
     expect(metadata).toMatch(/mcp-config:[\s\S]*?schemaVersion/u);
     expect(metadata).toMatch(/plugin-config:[\s\S]*?schemaVersion/u);
@@ -177,7 +180,7 @@ describe("Marketplace action metadata", () => {
       "../examples/task-automation.yml",
     ]) {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
-      expect(example).toContain(`uses: Lixiaoyiao/deepseek-harness-action@${RELEASE_RUNTIME_SHA}`);
+      expect(example).toContain(`uses: Lixiaoyiao/deepseek-harness-action@${RELEASE_REFERENCE}`);
     }
   });
 
@@ -198,21 +201,18 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.3.0 task example with a pinned runtime and safe named tool", async () => {
+  it("ships the v0.5.0 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
     );
-    expect(example).toContain(`deepseek-harness-action@${RELEASE_RUNTIME_SHA}`);
+    expect(example).toContain(`deepseek-harness-action@${RELEASE_REFERENCE}`);
     expect(example).not.toMatch(/planned|@v0\.3(?:\s|$)/iu);
     expect(example).toContain("task-access:");
     expect(example).toContain("max-turns:");
-    expect(example).toContain("allowed-tools:");
-    expect(example).toContain("tool-config:");
-    expect(example).toContain("command.bundle-syntax");
-    expect(example).toContain('"argv": ["node", "--check", "dist/index.js"]');
-    expect(example).toContain('"workspaceAccess": "read"');
-    expect(example).toContain('"network": "none"');
+    expect(example).toContain("permission-profile: standard");
+    expect(example).toContain("validation-integrity: strict");
+    expect(example).toContain("test-commands:");
   });
 
   it("keeps active command and diagnosis workflows on trusted action code", async () => {

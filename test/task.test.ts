@@ -119,11 +119,12 @@ beforeEach(() => {
   mocks.runValidation.mockResolvedValue([]);
   mocks.createCommit.mockResolvedValue({ sha: candidateSha, paths: ["src/cache.ts"] });
   mocks.createPullRequest.mockResolvedValue({ number: 9, url: "https://github.com/o/r/pull/9" });
+  mocks.upsertComment.mockResolvedValue(73);
 });
 
 describe("generic automation task finalizer", () => {
   it("publishes a bounded generic task answer under the task marker", async () => {
-    await publishTaskAnswer(
+    const commentId = await publishTaskAnswer(
       {} as GitHubClient,
       { owner: "o", repo: "r", issueNumber: 7 },
       41898282,
@@ -136,6 +137,7 @@ describe("generic automation task finalizer", () => {
       },
       "https://github.com/o/r/actions/runs/1",
     );
+    expect(commentId).toBe(73);
     expect(mocks.upsertComment).toHaveBeenCalledWith(
       expect.anything(),
       { owner: "o", repo: "r", issueNumber: 7 },

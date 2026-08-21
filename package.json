@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "DeepSeek Harness for GitHub - controlled MCP, Bundle/Profile extensions, coding tasks, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {
@@ -22,7 +22,7 @@
   },
   "scripts": {
     "prebuild": "node scripts/clean-dist.mjs",
-    "build": "ncc build src/index.ts -o dist --minify --source-map",
+    "build": "ncc build src/index.ts -o dist --minify --source-map --no-cache",
     "build:check": "npm run build && git diff --exit-code -- dist/ && git diff --cached --exit-code -- dist/",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

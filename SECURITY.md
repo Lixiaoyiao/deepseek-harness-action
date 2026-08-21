@@ -42,9 +42,11 @@ For a read-only operation, the controller creates a lifecycle comment only
 after the operation is allowed and a pull request or issue target has been
 resolved. A denied request therefore cannot use progress tracking to generate
 bot comment spam. A write request creates no lifecycle or status comment before
-every final Controller validation command succeeds. A failed gate therefore
-produces no GitHub comment, commit, ref update or pull request; the bounded
-failure remains in Action outputs and the step summary.
+every final Controller validation command succeeds or the Controller confirms
+there is no repository change to validate. A failed gate therefore produces no
+GitHub comment, commit, ref update or pull request; the bounded failure remains
+in Action outputs and the step summary. A confirmed no-change `task --write`
+may publish its final answer, but performs no repository mutation.
 
 #### Explicit prompts are trusted control-plane input
 
@@ -60,17 +62,19 @@ with:
 ```
 
 The same rule applies to capability-bearing inputs such as `command`,
-`task-access`, `allow-write`, `allowed-tools`, `tool-config`, `mcp-config`,
-`plugin-config`, `allow-plugin-install`, `run-tests`, `test-commands`,
-`container-image`, `base-url`, `isolation`, and `dsh-executable`: keep them
-literal or derive them only from trusted workflow configuration. The latter
-four select executable worker code, the destination that receives proxied
-DeepSeek requests, or whether an operating-system boundary exists. In
-particular, do not interpolate pull request titles/bodies, comments, CI output,
-repository files, a serialized event or model output into those inputs. Let the
-action fetch event and repository context itself; it will place those bytes in
-the bounded untrusted-data channel. A prompt cannot authorize or install a new
-MCP server, Bundle or plugin.
+`task-access`, `allow-write`, `permission-profile`, `allowed-tools`,
+`disallowed-tools`, `tool-config`, `mcp-config`, `plugin-config`,
+`allow-plugin-install`, `run-tests`, `test-commands`, `validation-integrity`,
+`container-image`, `base-url`, `web-search-base-url`, `isolation`, and
+`dsh-executable`: keep them literal or derive them only from trusted workflow
+configuration. These values select Agent authority, executable worker code,
+credential-routing destinations, validation policy, or whether an
+operating-system boundary exists. In particular, do not interpolate pull
+request titles/bodies, comments, CI output, repository files, a serialized
+event or model output into those inputs. Let the action fetch event and
+repository context itself; it will place those bytes in the bounded
+untrusted-data channel. A prompt cannot change its permission profile, lower
+validation integrity, or authorize/install an MCP server, Bundle or plugin.
 
 ### 2. Input and data trust
 
@@ -100,11 +104,28 @@ controller instructions.
 `untrusted`, `trusted-read` and `trusted-write` name effective execution
 profiles. They do not classify repository bytes as trustworthy.
 
-| Profile         | Repository access                                       | Worker tools                                                                                   | Repository code execution                                                                                     | GitHub authority |
-| --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `untrusted`     | None                                                    | No filesystem, MCP, plugin, shell, web, skills, repository instructions or subagents           | Disabled                                                                                                      | None             |
-| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Read/search plus explicitly configured read/network extension tools permitted by Controller    | Disabled unless a trusted workflow explicitly enables audited extension startup                               | None             |
-| `trusted-write` | Read/write `.git`-less copy                             | Read/search/edit plus explicitly configured extension tools; unrestricted shell remains denied | Disabled in DSH except explicitly trusted extensions; fixed-argv tools and validation use separate containers | None             |
+| Profile         | Repository access                                       | Worker tools                                                                                                 | Repository code execution                                                            | GitHub authority |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ---------------- |
+| `untrusted`     | None                                                    | No filesystem, MCP, plugin, shell, web, repository instructions or subagents                                 | Disabled                                                                             | None             |
+| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Permission-profile tools after Controller intersection; edit, Bash and subagent are denied                   | Disabled except audited extension startup; mediated web may be allowed               | None             |
+| `trusted-write` | Read/write `.git`-less copy                             | Permission-profile tools after Controller intersection, including opt-in native Bash/subagent and extensions | Enabled only in credential-free Docker under the selected trusted permission profile | None             |
+
+Trust profiles above answer whether the event and actor may access the
+repository. v0.5 permission profiles are a separate, monotonic Agent-tool
+dimension:
+
+| Permission profile | Preset request                                                        | Intended use                            |
+| ------------------ | --------------------------------------------------------------------- | --------------------------------------- |
+| `strict`           | `workspace.read`, `workspace.search`, `workspace.edit`                | v0.4-compatible default and review      |
+| `standard`         | strict plus `native.bash`, `native.web-search`, and `native.subagent` | trusted maintainer coding               |
+| `custom`           | no preset; every canonical tool ID is explicit                        | precise policy, MCP, Bundle, and Plugin |
+
+Preset expansion does not bypass trust. Exact `disallowed-tools` entries always
+win over the preset and `allowed-tools`; the remaining requests are intersected
+with event, actor, workspace, network, configured-provider, and Controller
+policy. Unknown, unavailable, or policy-ineligible tools fail closed with a
+reason in the permission audit. The Agent cannot modify its profile, allow/deny
+lists, or policy and cannot approve an extension or permission escalation.
 
 Fork and other untrusted runs require Docker isolation. Trusted writes also
 require Docker and a full `name@sha256:<64 lowercase hex>` image reference. The
@@ -116,21 +137,29 @@ paths where a mutable tag remains compatible. This prevents Docker option
 injection but does not make an operator-selected image trustworthy.
 
 DSH receives an ephemeral proxy token. A controller-side proxy injects the real
-DeepSeek key only while forwarding the fixed chat-completions endpoint. The
-actual backend, workspace access and known limitations are recorded in the
-structured isolation report rather than inferred from the requested profile.
-Because `base-url` chooses the upstream that receives those requests and the
-real key, it is a trusted credential-routing input, not untrusted request data.
+DeepSeek key only on fixed POST routes: chat completions, plus the exact
+Anthropic Messages route when `native.web-search` is effective. For the latter,
+the Controller replaces both upstream `Authorization` and `x-api-key`
+credentials; it rejects query strings, extra path segments, `web_fetch`, and
+arbitrary URLs. The actual backend, workspace access and known limitations are
+recorded in the structured isolation report rather than inferred from the
+requested profile. Both `base-url` and `web-search-base-url` choose upstreams
+that receive the real key, so they are trusted credential-routing inputs, not
+untrusted request data.
 
 #### Maintainer-defined controller tools
 
-v0.3 command tools are fixed-argv controller capabilities. A maintainer defines
-the executable and every argument in versioned `tool-config`, then separately
-allowlists the resulting `command.<name>` ID. The model may select an advertised
-ID and give a reason, but the v0.3 command provider rejects model-supplied
-arguments and never gives DSH a shell. Direct shell interpreters are rejected at
-configuration parsing as an additional guard; the primary boundary is that all
-argv bytes are trusted workflow configuration, not model output.
+Command tools, introduced in v0.3, are fixed-argv controller capabilities. A
+maintainer defines the executable and every argument in versioned `tool-config`,
+then separately allowlists the resulting `command.<name>` ID. The model may
+select an advertised ID and give a reason, but this provider rejects
+model-supplied arguments and never supplies a shell. Direct shell interpreters
+are rejected at configuration parsing as an additional guard; the primary
+boundary is that all argv bytes are trusted workflow configuration, not model
+output. The separate `native.bash` capability is opt-in through
+`standard`/`custom`, requires the trusted-write Docker policy, runs bounded
+foreground commands without escalation approval, and cannot share a worker
+with a bridge-networked extension.
 
 Each command tool runs in a named, hardened, credential-free container with a
 read-only container root, dropped capabilities, `no-new-privileges`, resource
@@ -151,7 +180,7 @@ maintainer configuration, `allowed-tools` and the controller policy:
 
 #### Controlled DSH native, MCP, Bundle, and plugin tools
 
-v0.4 uses the official DSH extension mechanisms. It pins
+v0.4 introduced the official DSH extension mechanisms, which v0.5 retains. It pins
 `@deepseek-ai/dsh@0.1.0-rc.8` and
 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`, generates a controlled Profile, and
 loads the approved Bundle and Cordis plugin rows from that Profile. It does not
@@ -167,8 +196,9 @@ CLI path that discovers workspace or `$DSH_HOME` `.env` files, nor does it
 enable dynamic user patch discovery, watch or hot reload. The only Profile and
 Cordis patch inputs come from the Controller-validated run configuration.
 
-The effective runtime tool set is a positive intersection of the strict
-configuration manifests, `allowed-tools`, and Controller policy. Model-routed
+The effective runtime tool set is a positive intersection of the selected
+permission preset, exact allow/deny lists, strict configuration manifests, and
+Controller policy. Model-routed
 DSH native, MCP and plugin calls pass through an Action-owned ToolRuntime policy
 adapter; fixed-argv `command.*` calls continue through the controller
 ToolRouter. The same capability compiler supplies both enforcement planes:
@@ -184,6 +214,15 @@ ToolRouter. The same capability compiler supplies both enforcement planes:
   must be allowed by the current policy. A Streamable HTTP MCP server therefore
   always requires network. Network-enabled worker execution is not a
   destination allowlist.
+- `native.web-search` is a separate Controller-mediated path to the configured
+  DeepSeek Messages endpoint. It exposes neither the real key nor arbitrary URL
+  fetch and does not imply general Docker bridge egress. `native.bash` remains
+  inside the credential-free trusted-write Docker worker and cannot share a
+  worker with a bridge-networked extension.
+- A non-bridge worker still reaches the Controller proxy through the inspected
+  Docker host gateway. Permission output therefore reports `host-gateway`, not
+  physical zero networking; that path is not a port allowlist, so runner firewall
+  policy remains responsible for other host services.
 - Network namespaces and workspace mounts belong to the whole DSH process. All
   co-hosted extension owners must declare the same network and workspace-write
   mode; every owner in trusted-write must opt into workspace-write. Mixed modes
@@ -268,6 +307,28 @@ installation and rejects any removal or version change afterwards. It also
 verifies the installed extension identity and pin and ensures the declared
 Bundle patch stays within its installed package before startup.
 
+#### Validation-definition integrity
+
+Repository validation is meaningful only if the Controller notices when the
+candidate also changes its definition. v0.5 classifies package scripts, test
+sources/configuration, lint, typecheck, build configuration, validation runtime
+files, and other effective entrypoints independently from ordinary code changes.
+Changing tests with the implementation is supported; a test change is not a
+denial by itself.
+
+- `off` records the classified changes without blocking them.
+- `warn` is the default and reports changed categories and weakening signals.
+- `strict` blocks high-confidence weakening and a truncated integrity audit. For
+  other control-plane definition changes it validates the candidate code/tests
+  in a baseline replay workspace whose validation definitions are restored from
+  the bound base revision.
+
+Signals such as newly focused/skipped tests or removing tests without a
+replacement are considered in the strict decision. The selected mode is a
+trusted Action input, not repository or model data. The Controller records the
+integrity audit and disposition in `result-json` and the step summary before any
+GitHub mutation.
+
 ### 4. Controller and commit authority
 
 Only the controller may call GitHub or turn model output into a repository
@@ -294,7 +355,10 @@ mutation.
   a separate repository action.
 - The controller owns the `summary`, `diagnosis`, `write` and `task` sticky markers.
   Read-only progress reuses the applicable final-result marker and updates it in
-  place. Write-task publication is deferred until final validation succeeds.
+  place. Write-task lifecycle publication is deferred until final validation
+  succeeds. If actual-change inspection confirms that `task --write` changed no
+  repository file, the Controller may publish the final answer without a commit,
+  ref update, pull request, or release mutation.
   `progress-comment=false` disables eligible lifecycle updates without weakening
   any authorization or validation gate.
 - Progress publication is secondary UX and cannot mask the primary result.
@@ -314,10 +378,16 @@ The supplied templates use the following sets:
 | CI diagnosis                                    | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
 | Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write` |
 | CI auto-fix                                     | Same as the preceding row                                                                   |
+| v0.5 release canary                             | `contents: read`                                                                            |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
+
+The release canary requires repository variable `DSH_V050_CANARY_SHA` to be the
+lowercase full 40-character v0.5.0 release commit SHA. It validates that value,
+checks out the immutable release ref, and runs one `strict` read-only task using
+`DEEPSEEK_API_KEY`; it receives no Issue/PR write or repository mutation scope.
 
 ## Known boundary
 
@@ -365,9 +435,10 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred beyond v0.4.0.
+A marker-level freshness guard remains deferred in v0.5.0.
 
-v0.4 binds its generated Profile and positive native-tool policy to the exact
+v0.5 retains v0.4's binding of its generated Profile and positive native-tool
+policy to the exact
 DSH version whose complete tool surface was audited. It accepts only
 `@deepseek-ai/dsh@0.1.0-rc.8` and the matching official
 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`; another tag, range or exact version is

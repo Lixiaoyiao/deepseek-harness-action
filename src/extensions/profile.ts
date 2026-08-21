@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { WorkspaceToolId } from "../tools/schema.js";
+import type { NativeToolId } from "../tools/schema.js";
 import { mcpPublicToolName } from "./plan.js";
 import type { EffectiveExtensionPlan, ExtensionToolGrant } from "./plan.js";
 
@@ -34,7 +34,7 @@ export interface ControlledProfilePaths {
 export interface PrepareControlledProfileOptions {
   readonly dshHome: string;
   readonly plan: EffectiveExtensionPlan;
-  readonly workspaceTools: readonly WorkspaceToolId[];
+  readonly nativeTools: readonly NativeToolId[];
   readonly workspaceWrite: boolean;
   readonly task: string;
   readonly workerWorkspacePath: string;
@@ -47,28 +47,72 @@ export interface PrepareControlledProfileOptions {
   readonly pluginModuleSpecifiers?: Readonly<Record<string, string>>;
 }
 
-const nativeRuntimeTools: Readonly<Record<WorkspaceToolId, readonly string[]>> = {
+const nativeRuntimeTools: Readonly<Record<NativeToolId, readonly string[]>> = {
   "workspace.read": ["read", "read_image"],
   "workspace.search": ["glob", "grep"],
   "workspace.edit": ["write", "edit", "str_replace_editor"],
+  "native.bash": ["bash"],
+  "native.web-search": ["web_search"],
+  "native.subagent": ["subagent"],
 };
 
-function nativeRules(tools: readonly WorkspaceToolId[]): DshPolicyRule[] {
+export function nativeRuntimeToolNames(tools: readonly NativeToolId[]): readonly string[] {
+  return [...new Set(tools.flatMap((logicalId) => nativeRuntimeTools[logicalId]))].sort(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+function nativeRuleLimits(
+  id: NativeToolId,
+): Pick<DshPolicyRule, "groupId" | "timeoutMs" | "maxOutputBytes" | "maxCalls" | "groupMaxCalls"> {
+  if (id === "native.bash") {
+    return {
+      groupId: "builtin.bash",
+      timeoutMs: 65_000,
+      maxOutputBytes: 512 * 1024,
+      maxCalls: 40,
+      groupMaxCalls: 40,
+    };
+  }
+  if (id === "native.web-search") {
+    return {
+      groupId: "builtin.web",
+      timeoutMs: 65_000,
+      maxOutputBytes: 256 * 1024,
+      maxCalls: 10,
+      groupMaxCalls: 10,
+    };
+  }
+  if (id === "native.subagent") {
+    return {
+      groupId: "builtin.subagent",
+      timeoutMs: 5 * 60_000,
+      maxOutputBytes: 512 * 1024,
+      maxCalls: 4,
+      groupMaxCalls: 4,
+    };
+  }
+  return {
+    groupId: "builtin.workspace",
+    timeoutMs: 60_000,
+    maxOutputBytes: 256 * 1024,
+    maxCalls: 100,
+    groupMaxCalls: 500,
+  };
+}
+
+function nativeRules(tools: readonly NativeToolId[]): DshPolicyRule[] {
   return tools.flatMap((id) =>
     nativeRuntimeTools[id].map((runtimeName) => ({
       id,
       runtimeName,
       provider: "builtin" as const,
-      groupId: "builtin.workspace",
-      timeoutMs: 60_000,
-      maxOutputBytes: 256 * 1024,
-      maxCalls: 100,
-      groupMaxCalls: 500,
+      ...nativeRuleLimits(id),
     })),
   );
 }
 
-function knownNativeRuntimeTools(tools: readonly WorkspaceToolId[]): readonly string[] {
+function knownNativeRuntimeTools(tools: readonly NativeToolId[]): readonly string[] {
   const enabled = new Set(tools);
   return [
     ...(enabled.has("workspace.read") || enabled.has("workspace.edit")
@@ -76,6 +120,9 @@ function knownNativeRuntimeTools(tools: readonly WorkspaceToolId[]): readonly st
       : []),
     ...(enabled.has("workspace.search") ? ["glob", "grep"] : []),
     ...(enabled.has("workspace.edit") ? ["str_replace_editor"] : []),
+    ...(enabled.has("native.bash") ? ["bash"] : []),
+    ...(enabled.has("native.web-search") ? ["web_search"] : []),
+    ...(enabled.has("native.subagent") ? ["subagent"] : []),
   ];
 }
 
@@ -163,7 +210,7 @@ function loaderModuleSpecifier(path: string): string {
   return /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith("\\\\") ? pathToFileURL(path).href : path;
 }
 
-const DISABLED_BASE_ROWS = [
+const ALWAYS_DISABLED_BASE_ROWS = [
   "session-title-llm",
   "session-telemetry-otel",
   "user-questions",
@@ -179,35 +226,33 @@ const DISABLED_BASE_ROWS = [
   "command-goal",
   "plan-mode",
   "command-compact",
-  "tool-bash",
   "tool-pwsh",
   "tool-jobs",
   "tool-todo",
   "tool-goal",
-  "subagent",
-  "subagent-spawn-in-process",
   "subagent-fork-in-process",
   "tool-subagent-control",
   "tool-subagent-list-agents",
-  "tool-subagent",
   "tool-subagent-fork",
   "tool-subagent-report",
   "workflow-worker-thread",
   "tool-workflow",
   "tool-ralph",
-  "web",
-  "web-search-deepseek",
-  "tool-web",
   "code-runtime",
 ] as const;
 
 function controlledRows(
   options: PrepareControlledProfileOptions,
 ): readonly Record<string, unknown>[] {
-  const enabled = new Set(options.workspaceTools);
+  const enabled = new Set(options.nativeTools);
   const mode = options.workspaceWrite ? "workspace-write" : "read-only";
   const disabled = [
-    ...DISABLED_BASE_ROWS,
+    ...ALWAYS_DISABLED_BASE_ROWS,
+    ...(!enabled.has("native.bash") ? ["tool-bash"] : []),
+    ...(!enabled.has("native.subagent")
+      ? ["subagent", "subagent-spawn-in-process", "tool-subagent"]
+      : []),
+    ...(!enabled.has("native.web-search") ? ["web", "web-search-deepseek", "tool-web"] : []),
     ...(!enabled.has("workspace.read") && !enabled.has("workspace.edit") ? ["tool-fs"] : []),
     ...(!enabled.has("workspace.search") ? ["tool-fs-search"] : []),
     ...(!enabled.has("workspace.edit") ? ["tool-str-replace-editor"] : []),
@@ -218,6 +263,63 @@ function controlledRows(
       name: "@deepseek-ai/dsh-sandbox-policy",
       config: { mode, workspaceRoot: options.workerWorkspacePath },
     },
+    ...(enabled.has("native.bash")
+      ? [
+          {
+            id: "tool-bash",
+            name: "@deepseek-ai/dsh-tool-bash",
+            config: { enableRunInBackground: false },
+          },
+        ]
+      : []),
+    ...(enabled.has("native.subagent")
+      ? [
+          { id: "subagent", name: "@deepseek-ai/dsh-subagent" },
+          {
+            id: "subagent-spawn-in-process",
+            name: "@deepseek-ai/dsh-subagent-spawn-in-process",
+            config: { providerName: "spawn" },
+          },
+          {
+            id: "tool-subagent",
+            name: "@deepseek-ai/dsh-tool-subagent",
+            config: {
+              provider: "spawn",
+              toolName: "subagent",
+              enableRunInBackground: false,
+              backgroundMode: "one-shot",
+              maxDepth: 1,
+              toolFilter: {
+                allow: [
+                  ...new Set([
+                    ...nativeRules(options.nativeTools).map(({ runtimeName }) => runtimeName),
+                    ...options.plan.tools.map(({ runtimeName }) => runtimeName),
+                  ]),
+                ],
+              },
+            },
+          },
+        ]
+      : []),
+    ...(enabled.has("native.web-search")
+      ? [
+          {
+            id: "web",
+            name: "@deepseek-ai/dsh-web",
+            config: { searchProvider: "deepseek-official" },
+          },
+          {
+            id: "web-search-deepseek",
+            name: "@deepseek-ai/dsh-web-search-deepseek",
+            config: { apiKeyEnv: "DEEPSEEK_API_KEY" },
+          },
+          {
+            id: "tool-web",
+            name: "@deepseek-ai/dsh-tool-web",
+            config: { search: true, fetch: false, searchTimeoutMs: 60_000 },
+          },
+        ]
+      : []),
     {
       id: "fs-sandbox",
       name: "@deepseek-ai/dsh-fs-sandbox",
@@ -247,7 +349,7 @@ export function renderControlledProfilePatch(options: PrepareControlledProfileOp
   readonly rules: readonly DshPolicyRule[];
 } {
   const rules = [
-    ...nativeRules(options.workspaceTools),
+    ...nativeRules(options.nativeTools),
     ...options.plan.tools.map((tool) => extensionRule(tool)),
   ];
   const entries = [
@@ -265,7 +367,7 @@ export function renderControlledProfilePatch(options: PrepareControlledProfileOp
         allowedRuntimeTools: rules.map((rule) => rule.runtimeName),
         knownRuntimeTools: [
           ...new Set([
-            ...knownNativeRuntimeTools(options.workspaceTools),
+            ...knownNativeRuntimeTools(options.nativeTools),
             ...knownExtensionRuntimeTools(options.plan),
           ]),
         ],

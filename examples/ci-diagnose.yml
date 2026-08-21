@@ -28,8 +28,8 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
-      # Pinned to the v0.3.0 audited runtime commit.
-      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
+      # Replace this v0.5.0 tag with its full release commit SHA in production.
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           allow-write: "false"

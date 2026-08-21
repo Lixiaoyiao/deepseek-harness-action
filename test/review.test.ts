@@ -55,7 +55,7 @@ describe("DSH tool planes", () => {
       inputSchema: {},
     };
     expect(partitionDshToolPlanes([workspace, command, mcp])).toEqual({
-      workspaceTools: ["workspace.edit"],
+      nativeTools: ["workspace.edit"],
       controllerTools: [command],
       extensionTools: [mcp],
     });

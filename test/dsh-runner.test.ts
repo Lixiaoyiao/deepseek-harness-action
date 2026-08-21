@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,11 +10,13 @@ import {
   DshOutputLimitError,
   DshTimeoutError,
 } from "../src/dsh/errors.js";
-import type { DeepSeekProxyHandle } from "../src/dsh/proxy.js";
+import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "../src/dsh/proxy.js";
 import {
   assertExtensionPackagesDoNotShadowRuntime,
   assertInstalledRuntimeInventoryUnchanged,
   assertSupportedDshVersion,
+  createDshRuntime,
+  disposeDshRuntime,
   executeBoundedDshProcess,
   installedTopLevelPackageInventory,
   runDsh,
@@ -78,6 +80,7 @@ function request(overrides: Partial<DshRunRequest>): DshRunRequest {
     maxOutputBytes: 64 * 1024,
     apiKey: "controller-real-key",
     baseUrl: "https://api.deepseek.com",
+    webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
     dshVersion: "0.1.0-rc.8",
     containerImage: "node:24-bookworm",
     ...overrides,
@@ -254,6 +257,97 @@ describe("runDsh", () => {
     expect(proxy.closeMock).toHaveBeenCalledOnce();
   });
 
+  it("binds normalized workspace, chat endpoint, and host executable across reused turns", async () => {
+    const fixture = await fixtures();
+    const alternateWorkspace = join(fixture.root, "alternate-workspace");
+    const alternateExecutable = join(fixture.root, "alternate-bin.js");
+    await mkdir(alternateWorkspace);
+    await writeFile(alternateExecutable, "");
+    const runtime = await createDshRuntime(fixture.root);
+    const executeProcess = (): Promise<DshProcessResult> =>
+      Promise.resolve({
+        stdout: JSON.stringify({
+          protocolVersion: 1,
+          operation: "review",
+          state: "final",
+          summary: "Done.",
+          findings: [],
+        }),
+        stderr: "",
+        exitCode: 0,
+        signal: null,
+      });
+    const dependencies = {
+      assetsDirectory: fixture.assets,
+      runtime,
+      startProxy: () => Promise.resolve(fakeProxy()),
+      executeProcess,
+    } as const;
+
+    try {
+      await runDsh(
+        request({
+          workspacePath: join(fixture.workspace, "."),
+          dshExecutable: fixture.executable,
+          baseUrl: "https://API.DEEPSEEK.COM:443/v1/?ignored=yes#fragment",
+        }),
+        dependencies,
+      );
+
+      expect(runtime.binding?.binding).toMatchObject({
+        workspacePath: await realpath(fixture.workspace),
+        chatBaseUrl: "https://api.deepseek.com/v1",
+        dshExecutableIdentity: await realpath(fixture.executable),
+      });
+      expect(runtime.binding?.binding).not.toHaveProperty("webSearchBaseUrl");
+
+      await expect(
+        runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            dshExecutable: fixture.executable,
+            baseUrl: "https://api.deepseek.com/v1",
+            webSearchBaseUrl: "https://changed-but-disabled.example.test/anthropic/v1",
+          }),
+          dependencies,
+        ),
+      ).resolves.toBeDefined();
+
+      await expect(
+        runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            dshExecutable: fixture.executable,
+            baseUrl: "https://chat.example.test/v1",
+          }),
+          dependencies,
+        ),
+      ).rejects.toThrow(/binding changed:.*chatBaseUrl/u);
+      await expect(
+        runDsh(
+          request({
+            workspacePath: alternateWorkspace,
+            dshExecutable: fixture.executable,
+            baseUrl: "https://api.deepseek.com/v1",
+          }),
+          dependencies,
+        ),
+      ).rejects.toThrow(/binding changed:.*workspacePath/u);
+      await expect(
+        runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            dshExecutable: alternateExecutable,
+            baseUrl: "https://api.deepseek.com/v1",
+          }),
+          dependencies,
+        ),
+      ).rejects.toThrow(/binding changed:.*dshExecutableIdentity/u);
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
+  });
+
   it("applies the Windows argv budget after JSON escaping and final prompt assembly", async () => {
     const fixture = await fixtures();
     const proxy = fakeProxy();
@@ -346,6 +440,76 @@ describe("runDsh", () => {
         { startProxy, executeProcess },
       ),
     ).rejects.toBeInstanceOf(DshConfigurationError);
+    expect(startProxy).not.toHaveBeenCalled();
+    expect(executeProcess).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before execution when Bash would share bridge extension egress", async () => {
+    const fixture = await fixtures();
+    const extensions = resolveExtensionPlan({
+      allowedTools: ["mcp.remote.search"],
+      mcp: parseMcpConfiguration(
+        JSON.stringify({
+          schemaVersion: 1,
+          servers: [
+            {
+              id: "remote",
+              transport: "streamable-http",
+              url: "https://mcp.example.test/rpc",
+              tools: [
+                {
+                  id: "search",
+                  name: "search",
+                  description: "Search",
+                  permissions: ["read", "workspace-write", "network"],
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      plugins: parsePluginConfiguration('{"schemaVersion":1,"bundles":[],"plugins":[]}'),
+      allowPluginInstall: false,
+      policy: {
+        trust: "trusted-write",
+        allowed: true,
+        reason: "test",
+        capabilities: {
+          readRepository: true,
+          readCi: false,
+          publishComments: true,
+          executeRepositoryCode: true,
+          loadExtensions: true,
+          accessNetwork: true,
+          modifyWorkspace: true,
+          commit: true,
+          push: true,
+          createPullRequest: true,
+        },
+      },
+    });
+    const startProxy = vi.fn();
+    const executeProcess = vi.fn();
+
+    await expect(
+      runDsh(
+        request({
+          operation: "fix",
+          trust: "trusted-write",
+          isolation: "docker",
+          containerImage: PINNED_NODE_IMAGE,
+          workspacePath: fixture.workspace,
+          nativeTools: ["native.bash"],
+          extensions,
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          startProxy,
+          executeProcess,
+        },
+      ),
+    ).rejects.toThrow(/native\.bash cannot share a worker with a bridge-networked extension/u);
     expect(startProxy).not.toHaveBeenCalled();
     expect(executeProcess).not.toHaveBeenCalled();
   });
@@ -900,6 +1064,9 @@ describe("runDsh", () => {
     const inspectNetworkSpec = observedSpecs[2];
     const removeNetworkSpec = observedSpecs[4];
     const internalNetwork = createNetworkSpec?.args.at(-1);
+    const installerCacheMount = installSpec?.args.find((argument) =>
+      argument.endsWith(":/tmp/npm-cache:rw"),
+    );
     expect(installSpec?.args).toContain("ci");
     expect(installSpec?.args).toContain("--ignore-scripts");
     expect(installSpec?.args).toContain("--omit=dev");
@@ -909,6 +1076,7 @@ describe("runDsh", () => {
     expect(installSpec?.args.some((argument) => argument.includes("@deepseek-ai/dsh@"))).toBe(
       false,
     );
+    expect(installerCacheMount).toBeDefined();
     expect(createNetworkSpec?.args.slice(0, 3)).toEqual(["network", "create", "--internal"]);
     expect(inspectNetworkSpec?.args.slice(0, 4)).toEqual([
       "network",
@@ -927,6 +1095,8 @@ describe("runDsh", () => {
     expect(Object.values(captured?.env ?? {})).not.toContain("controller-real-key");
     expect(captured?.args.some((argument) => argument.includes("controller-real-key"))).toBe(false);
     expect(captured?.args).toContain(`${fixture.workspace}:/workspace:rw`);
+    expect(captured?.args).not.toContain(installerCacheMount);
+    expect(captured?.args.some((argument) => argument.endsWith(":/tmp/npm-cache:rw"))).toBe(false);
     expect(captured?.args).toContain(
       `${join(fixture.assets, "action-policy.mjs")}:/opt/dsh-action/action-policy.mjs:ro`,
     );
@@ -1027,6 +1197,85 @@ describe("runDsh", () => {
     expect(captured?.args).toContain(createNetworkSpec?.args.at(-1));
     expect(captured?.args).toContain(CONTAINER_LAUNCHER);
     expect(captured?.args).not.toContain("--profile");
+  });
+
+  it("mediates web search through exact proxy options and worker-only proxy environment", async () => {
+    const fixture = await fixtures();
+    const runtime = await createDshRuntime(fixture.root);
+    const proxy = {
+      ...fakeProxy(),
+      workerWebSearchBaseUrl: "http://host.docker.internal:3456/anthropic/v1",
+    };
+    let proxyOptions: DeepSeekProxyOptions | undefined;
+    let captured: DshProcessSpec | undefined;
+
+    await runDsh(
+      request({
+        isolation: "docker",
+        workspacePath: fixture.workspace,
+        nativeTools: ["workspace.read", "native.web-search"],
+      }),
+      {
+        assetsDirectory: fixture.assets,
+        runtime,
+        startProxy: (options) => {
+          proxyOptions = options;
+          return Promise.resolve(proxy);
+        },
+        executeProcess: (spec) => {
+          const inspected = networkInspectResult(spec);
+          if (inspected !== undefined) return Promise.resolve(inspected);
+          const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
+          if (isDsh) captured = spec;
+          return Promise.resolve({
+            stdout: isDsh
+              ? JSON.stringify({
+                  protocolVersion: 1,
+                  operation: "review",
+                  state: "final",
+                  summary: "Done.",
+                  findings: [],
+                })
+              : "",
+            stderr: "",
+            exitCode: 0,
+            signal: null,
+          });
+        },
+      },
+    );
+
+    expect(proxyOptions).toMatchObject({
+      apiKey: "controller-real-key",
+      baseUrl: "https://api.deepseek.com",
+      webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
+      allowWebSearch: true,
+      bindHost: "0.0.0.0",
+      workerHost: "172.30.0.1",
+    });
+    expect(captured?.args).toContain(
+      "DEEPSEEK_SEARCH_BASE_URL=http://host.docker.internal:3456/anthropic/v1",
+    );
+    expect(captured?.args.join(" ")).not.toContain("https://api.deepseek.com/anthropic/v1");
+    expect(Object.values(captured?.env ?? {})).not.toContain("controller-real-key");
+    expect(runtime.binding?.binding.webSearchBaseUrl).toBe("https://api.deepseek.com/anthropic/v1");
+
+    await expect(
+      runDsh(
+        request({
+          isolation: "docker",
+          workspacePath: fixture.workspace,
+          nativeTools: ["workspace.read", "native.web-search"],
+          webSearchBaseUrl: "https://search.example.test/anthropic/v1",
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          runtime,
+          startProxy: vi.fn(),
+          executeProcess: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow(/binding changed:.*webSearchBaseUrl/u);
   });
 
   it("resolves the launcher and policy plugins from the action package instead of the caller workspace", async () => {

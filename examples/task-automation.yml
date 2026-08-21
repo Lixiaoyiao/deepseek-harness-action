@@ -1,5 +1,5 @@
-# v0.3.0 release example. The action runtime and validation image are pinned to
-# immutable references.
+# v0.5.0 profile-based example. Replace the action tag below with its full
+# release commit SHA before production use; keep the validation image immutable.
 name: DSH general task
 
 on:
@@ -40,35 +40,20 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           command: auto
           prompt: ${{ inputs.task }}
           task-access: ${{ inputs.access }}
+          # One preset provides the normal trusted Coding Agent tool set. The
+          # Controller still intersects it with actor/event/write policy.
+          permission-profile: standard
           allow-write: ${{ inputs.access == 'write' && 'true' || 'false' }}
           max-turns: "5"
-
-          # Adapt both the fixed command tool and final validation argv to your
-          # repository. The model can request command.bundle-syntax, but cannot
-          # add, remove, or replace any argv element.
-          allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.bundle-syntax"]'
-          tool-config: |
-            {
-              "schemaVersion": 1,
-              "commands": [{
-                "name": "bundle-syntax",
-                "description": "Check the bundled JavaScript syntax without installing dependencies",
-                "argv": ["node", "--check", "dist/index.js"],
-                "timeoutMinutes": 10,
-                "maxOutputBytes": 131072,
-                "maxCalls": 2,
-                "network": "none",
-                "workspaceAccess": "read"
-              }]
-            }
           run-tests: "true"
+          validation-integrity: strict
           test-commands: >-
             [
               ["npm","ci","--ignore-scripts"],

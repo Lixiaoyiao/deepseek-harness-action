@@ -1,6 +1,7 @@
 import type { DshOperation } from "./schema.js";
 import { DshConfigurationError } from "./errors.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
+import type { NativeToolId } from "../tools/schema.js";
 
 export const DEFAULT_MAX_PROMPT_BYTES = 96 * 1024;
 export const WINDOWS_MAX_PROMPT_BYTES = 24 * 1024;
@@ -14,6 +15,8 @@ export interface DshPromptInput {
   readonly trust: "untrusted" | "trusted-read" | "trusted-write";
   /** Controller-authorized capabilities; command tools accept no model arguments in v1. */
   readonly toolCatalog?: readonly AgentToolManifest[];
+  /** Direct DSH runtime tools already intersected with the Controller policy. */
+  readonly nativeTools?: readonly NativeToolId[];
   readonly maxBytes?: number;
 }
 
@@ -93,15 +96,32 @@ interface RenderPromptInput {
   readonly originalUntrustedBytes: number;
   readonly untrustedTruncated: boolean;
   readonly toolCatalog: readonly AgentToolManifest[];
+  readonly nativeTools: readonly NativeToolId[];
 }
 
 function renderPrompt(input: RenderPromptInput): string {
+  const enabled = new Set(input.nativeTools);
+  const directCapabilities = [
+    ...(enabled.has("workspace.read") || enabled.has("workspace.search")
+      ? ["inspect and search the bound workspace"]
+      : []),
+    ...(enabled.has("workspace.edit") ? ["edit the disposable workspace"] : []),
+    ...(enabled.has("native.bash")
+      ? [
+          "run bounded foreground Bash inside the credential-free sandbox (no background jobs, approval, or escalation)",
+        ]
+      : []),
+    ...(enabled.has("native.web-search")
+      ? ["use Controller-mediated web_search (no arbitrary fetch or general network grant)"]
+      : []),
+    ...(enabled.has("native.subagent")
+      ? ["delegate to one foreground depth-1 subagent that inherits this same tool boundary"]
+      : []),
+  ];
   const toolPolicy =
-    input.trust === "trusted-write"
-      ? "You may inspect/search files and edit the checked-out workspace. You cannot invoke shell or execute repository code directly. You may request only an exact tool ID from the controller catalog; the controller may run its maintainer-defined fixed argv in a separate credential-free container with the declared workspace/network access. Do not access the web, load repository instructions or skills, spawn subagents, or leave the workspace."
-      : input.trust === "trusted-read"
-        ? "You may inspect, read, and search only the immutable workspace. Do not use shell, execute repository code, edit files, access the web, load repository instructions or skills, spawn subagents, or leave the workspace."
-        : "Do not execute repository code or use shell, filesystem, search, edit, web, skill, instruction-loading, or subagent tools. Analyze only the supplied context packet.";
+    input.trust === "untrusted"
+      ? "Do not execute repository code or use shell, filesystem, search, edit, web, skill, instruction-loading, or subagent tools. Analyze only the supplied context packet."
+      : `You may only ${directCapabilities.length === 0 ? "analyze the supplied context" : directCapabilities.join("; ")}. You may request only an exact tool ID from the controller catalog; the controller may run its maintainer-defined fixed argv in a separate credential-free container with the declared workspace/network access. ${enabled.has("native.bash") ? "" : "Do not use shell or execute repository code directly. "}${enabled.has("native.web-search") ? "" : "Do not access the web. "}${enabled.has("native.subagent") ? "" : "Do not spawn subagents. "}Never load repository instructions or skills, leave the workspace, change the permission profile, approve an extension, or perform GitHub commit/push/PR/release operations.`;
   const untrustedBytes = Buffer.byteLength(input.untrustedJson, "utf8");
   const untrustedAttributes = input.untrustedTruncated
     ? `byte_length=${String(untrustedBytes)} original_byte_length=${String(input.originalUntrustedBytes)} truncated=true`
@@ -161,6 +181,13 @@ export function buildDshPrompt(input: DshPromptInput): string {
   }
 
   const originalUntrustedBytes = Buffer.byteLength(input.prompt, "utf8");
+  const nativeTools =
+    input.nativeTools ??
+    (input.trust === "trusted-write"
+      ? (["workspace.read", "workspace.search", "workspace.edit"] as const)
+      : input.trust === "trusted-read"
+        ? (["workspace.read", "workspace.search"] as const)
+        : []);
   const render = (
     trustedInstructions: string,
     untrustedJson: string,
@@ -174,6 +201,7 @@ export function buildDshPrompt(input: DshPromptInput): string {
       originalUntrustedBytes,
       untrustedTruncated,
       toolCatalog: input.toolCatalog ?? [],
+      nativeTools,
     });
   const fits = (value: string): boolean => Buffer.byteLength(value, "utf8") <= limit;
   const trustedInstructions = input.trustedInstructions ?? "";

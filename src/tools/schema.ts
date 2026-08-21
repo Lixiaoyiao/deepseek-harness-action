@@ -5,6 +5,12 @@ import { z } from "zod";
 export const workspaceToolSchema = z.enum(["workspace.read", "workspace.search", "workspace.edit"]);
 export type WorkspaceToolId = z.infer<typeof workspaceToolSchema>;
 
+/** Audited model-facing tools shipped by the exact DSH runtime lock. */
+export const autonomyToolSchema = z.enum(["native.bash", "native.web-search", "native.subagent"]);
+export type AutonomyToolId = z.infer<typeof autonomyToolSchema>;
+export const nativeToolSchema = z.union([workspaceToolSchema, autonomyToolSchema]);
+export type NativeToolId = z.infer<typeof nativeToolSchema>;
+
 const commandNameSchema = z
   .string()
   .regex(/^[a-z][a-z0-9-]{0,31}$/u, "must start with a letter and contain only a-z, 0-9, or -");
@@ -84,10 +90,10 @@ export type ToolConfiguration = z.infer<typeof toolConfigurationSchema>;
 export type CommandToolId = `command.${string}`;
 export type McpToolId = `mcp.${string}.${string}`;
 export type PluginToolId = `plugin.${string}.${string}`;
-export type AllowedToolId = WorkspaceToolId | CommandToolId | McpToolId | PluginToolId;
+export type AllowedToolId = NativeToolId | CommandToolId | McpToolId | PluginToolId;
 
 const allowedToolIdSchema = z.union([
-  workspaceToolSchema,
+  nativeToolSchema,
   z.string().regex(/^command\.[a-z][a-z0-9-]{0,31}$/u),
   z.string().regex(/^mcp\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
   z.string().regex(/^plugin\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
@@ -110,12 +116,21 @@ export function parseToolConfiguration(raw: string): ToolConfiguration {
 }
 
 export function parseAllowedTools(raw: string): readonly AllowedToolId[] {
-  const result = z.array(allowedToolIdSchema).max(64).safeParse(decodeJson(raw, "allowed-tools"));
+  return parseToolIds(raw, "allowed-tools");
+}
+
+export function parseDisallowedTools(raw: string): readonly AllowedToolId[] {
+  return parseToolIds(raw, "disallowed-tools");
+}
+
+function parseToolIds(raw: string, label: "allowed-tools" | "disallowed-tools") {
+  const result = z.array(allowedToolIdSchema).max(64).safeParse(decodeJson(raw, label));
   if (!result.success) {
-    throw new Error(`Invalid allowed-tools: ${z.prettifyError(result.error)}`);
+    throw new Error(`Invalid ${label}: ${z.prettifyError(result.error)}`);
   }
-  const unique = [...new Set(result.data)] as AllowedToolId[];
-  return unique;
+  const duplicate = result.data.find((id, index) => result.data.indexOf(id) !== index);
+  if (duplicate !== undefined) throw new Error(`Invalid ${label}: duplicate tool id ${duplicate}`);
+  return result.data as AllowedToolId[];
 }
 
 export function commandToolId(name: string): CommandToolId {
@@ -131,14 +146,15 @@ export function pluginToolId(extensionId: string, toolId: string): PluginToolId 
 }
 
 export function validateAllowedToolReferences(
-  allowedTools: readonly AllowedToolId[],
+  toolIds: readonly AllowedToolId[],
   configuration: ToolConfiguration,
+  label = "allowed-tools",
 ): void {
   const configured = new Set(configuration.commands.map(({ name }) => commandToolId(name)));
-  const missing = allowedTools.find(
+  const missing = toolIds.find(
     (id): id is CommandToolId => id.startsWith("command.") && !configured.has(id as CommandToolId),
   );
   if (missing !== undefined) {
-    throw new Error(`allowed-tools references undefined command tool: ${missing}`);
+    throw new Error(`${label} references undefined command tool: ${missing}`);
   }
 }

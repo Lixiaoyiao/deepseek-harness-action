@@ -13,7 +13,7 @@ import { finishDiagnosis } from "./commands/diagnose.js";
 import { finishImplementation } from "./commands/implement.js";
 import { finishReview } from "./commands/review.js";
 import { finishAutomationTask, publishTaskAnswer } from "./commands/task.js";
-import { runAgentLoop } from "./agent/loop.js";
+import { AgentDeadlineError, runAgentLoop } from "./agent/loop.js";
 import type { DshRunResult } from "./dsh/runner.js";
 import { formatCiEvidence } from "./ci/diagnose.js";
 import { fetchCiEvidence } from "./github/checks.js";
@@ -36,6 +36,7 @@ import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { sanitizeUntrustedText } from "./security/redaction.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
+import { buildPermissionAudit, type PermissionAudit } from "./permissions/profile.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
 import { ToolRouter } from "./tools/router.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
@@ -46,6 +47,12 @@ import {
   type RunOutcome,
   type ValidationSummary,
 } from "./result.js";
+import {
+  enforceValidationIntegrity,
+  inspectValidationIntegrity,
+  ValidationIntegrityError,
+  type ValidationIntegritySummary,
+} from "./write/validation-integrity.js";
 
 interface RunState {
   phase: ActionPhase;
@@ -55,6 +62,9 @@ interface RunState {
   runUrl?: string;
   agent?: AgentRunSummary;
   validationCommandCount?: number;
+  permission?: PermissionAudit;
+  validationIntegrity?: ValidationIntegritySummary;
+  validationIntegrityWarning?: string;
 }
 
 interface WriteOutcome {
@@ -69,7 +79,11 @@ interface WriteOutcome {
 type FinalizedOperation =
   | { readonly kind: "review"; readonly publication: Awaited<ReturnType<typeof finishReview>> }
   | { readonly kind: "diagnose" }
-  | { readonly kind: "answer" }
+  | {
+      readonly kind: "answer";
+      readonly noChanges?: boolean;
+      readonly commentId?: number;
+    }
   | { readonly kind: "blocked" }
   | { readonly kind: "write"; readonly write: WriteOutcome };
 
@@ -88,6 +102,7 @@ function taskIdentity(
   command: RoutedCommand,
   inputs: ActionInputs,
   extensionAuditDigest: string,
+  permissionDigest: string,
 ): string {
   return createHash("sha256")
     .update(
@@ -95,12 +110,16 @@ function taskIdentity(
         operation: command.operation,
         access: command.requestedAccess,
         instructions: command.instructions,
+        permissionProfile: inputs.permissionProfile,
         allowedTools: inputs.allowedTools,
+        disallowedTools: inputs.disallowedTools,
+        validationIntegrity: inputs.validationIntegrity,
         toolConfig: inputs.toolConfig,
         // This identity can influence public branch names and PR markers. Bind
         // it to the redacted audit surface, never the secret-bearing effective
         // MCP/Plugin configuration used by the private runtime lock.
         extensionAuditDigest,
+        permissionDigest,
         allowPluginInstall: inputs.allowPluginInstall,
       }),
       "utf8",
@@ -457,14 +476,19 @@ function outcomeContext(state: RunState, startedAt: number) {
     ...(state.runUrl === undefined ? {} : { runUrl: state.runUrl }),
     ...(state.policy === undefined ? {} : { policy: state.policy }),
     ...(state.agent === undefined ? {} : { agent: state.agent }),
+    ...(state.permission === undefined ? {} : { permission: state.permission }),
     ...(state.progress?.commentId === undefined ? {} : { commentId: state.progress.commentId }),
   };
 }
 
-function successfulValidation(inputs: ActionInputs): ValidationSummary {
+function successfulValidation(
+  inputs: ActionInputs,
+  integrity?: ValidationIntegritySummary,
+): ValidationSummary {
   return {
     status: "passed",
     commandCount: inputs.testCommands.length,
+    ...(integrity === undefined ? {} : { integrity }),
   };
 }
 
@@ -608,9 +632,17 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       agentWorkspace = tempRoot;
     }
     const packet = await buildContextPacket(client, context, command, snapshot, inputs);
-    const resolvedTools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy);
+    const resolvedTools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy, {
+      permissionProfile: inputs.permissionProfile,
+      disallowedTools: inputs.disallowedTools,
+      isolation: inputs.isolation,
+    });
+    const deniedTools = new Set(resolvedTools.permission.disallowedTools);
+    const extensionAllowedTools = resolvedTools.permission.requestedTools.filter(
+      (id) => !deniedTools.has(id),
+    );
     const extensions = resolveExtensionPlan({
-      allowedTools: inputs.allowedTools,
+      allowedTools: extensionAllowedTools,
       mcp: inputs.mcpConfig,
       plugins: inputs.pluginConfig,
       allowPluginInstall: inputs.allowPluginInstall,
@@ -621,9 +653,17 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       extensions,
       manifests: [...resolvedTools.manifests, ...extensions.manifests],
     };
+    if (extensions.network && tools.native.includes("native.bash")) {
+      state.phase = "authorization";
+      throw new Error(
+        "native.bash cannot share a worker with a bridge-networked extension; use mediated web-search or remove Bash",
+      );
+    }
     if (command.requestedAccess === "write" && !tools.workspace.includes("workspace.edit")) {
       state.phase = "authorization";
-      throw new Error("Write tasks require workspace.edit in allowed-tools");
+      throw new Error(
+        "Write tasks require effective workspace.edit permission; select standard or allow it in custom after all trust gates pass",
+      );
     }
     const redact = (value: string): string =>
       redactKnownSecrets(value, [inputs.deepseekApiKey, inputs.githubToken]);
@@ -645,7 +685,14 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
         ...(toolProvider?.manifest() ?? []),
       ],
     };
-    const operationIdentity = taskIdentity(command, inputs, extensions.digest);
+    const permission = buildPermissionAudit({
+      resolution: resolvedTools.permission,
+      manifests: agentTools.manifests,
+      additionalDenials: resolvedTools.permissionDenials,
+      extensions: extensions.audit,
+    });
+    state.permission = permission;
+    const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
     const deadlineMs = startedAt + inputs.timeoutMinutes * 60_000;
 
     const loop = await runAgentLoop(
@@ -732,6 +779,11 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
           return { kind: "blocked" };
         },
         finalize: async (agentResult, remainingMs): Promise<FinalizedOperation> => {
+          const remainingControllerMs = (): number => {
+            const remaining = Math.min(remainingMs, deadlineMs - Date.now());
+            if (remaining <= 0) throw new AgentDeadlineError();
+            return remaining;
+          };
           if (command.operation === "review" && snapshot?.kind === "pull_request") {
             state.phase = "publication";
             await state.progress?.update(
@@ -778,23 +830,58 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             return { kind: "diagnose" };
           }
 
-          if (command.operation === "task") {
-            const changes =
-              workspaceCopy === undefined
-                ? undefined
-                : await inspectWorkspaceChanges(workspaceCopy);
-            if ((changes?.all.length ?? 0) === 0) {
-              state.phase = "publication";
-              if (issueNumber !== undefined && !deferWriteProgress) {
-                await publishTaskAnswer(
-                  client,
-                  { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
-                  inputs.botUserId,
-                  agentResult,
-                  currentRunUrl,
+          const changes =
+            workspaceCopy === undefined ? undefined : await inspectWorkspaceChanges(workspaceCopy);
+          if (
+            changes !== undefined &&
+            workspaceCopy !== undefined &&
+            command.requestedAccess === "write"
+          ) {
+            state.phase = "validation";
+            remainingControllerMs();
+            const integrity = await inspectValidationIntegrity({
+              snapshot: workspaceCopy,
+              changes,
+              commands: inputs.testCommands,
+              mode: inputs.validationIntegrity,
+            });
+            state.validationIntegrity = integrity;
+            if (integrity.status === "warned") {
+              const warningKey = JSON.stringify(
+                integrity.changes.map(({ path, risk }) => [path, risk]),
+              );
+              if (state.validationIntegrityWarning !== warningKey) {
+                state.validationIntegrityWarning = warningKey;
+                core.warning(
+                  `Validation definitions changed in ${String(integrity.changeCount)} path(s); validation-integrity=warn records the changes without blocking them.`,
                 );
               }
-              return { kind: "answer" };
+            }
+          }
+
+          if (command.operation === "task") {
+            if ((changes?.all.length ?? 0) === 0) {
+              remainingControllerMs();
+              state.phase = "publication";
+              const commentId =
+                issueNumber === undefined
+                  ? undefined
+                  : await publishTaskAnswer(
+                      client,
+                      {
+                        owner: context.repository.owner,
+                        repo: context.repository.repo,
+                        issueNumber,
+                      },
+                      inputs.botUserId,
+                      agentResult,
+                      currentRunUrl,
+                    );
+              return {
+                kind: "answer",
+                ...(command.requestedAccess === "write" ? { noChanges: true } : {}),
+                ...(commentId === undefined ? {} : { commentId }),
+              };
             }
             if (!policy.capabilities.modifyWorkspace) {
               throw new Error("A read-only task produced workspace changes; refusing publication");
@@ -809,6 +896,25 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             "finalizing",
             "The structured change is ready. Running configured validation before any GitHub write.",
           );
+          if (state.validationIntegrity !== undefined) {
+            try {
+              state.validationIntegrity = await enforceValidationIntegrity({
+                snapshot: workspaceCopy,
+                commands: inputs.testCommands,
+                audit: state.validationIntegrity,
+                baselineReplay: {
+                  containerImage: inputs.containerImage,
+                  timeoutMs: remainingControllerMs(),
+                },
+              });
+            } catch (error: unknown) {
+              if (error instanceof ValidationIntegrityError) {
+                state.validationIntegrity = error.audit;
+              }
+              throw error;
+            }
+          }
+          const writeRemainingMs = remainingControllerMs();
           const write = await executeWrite(
             client,
             context,
@@ -819,7 +925,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             workspaceCopy,
             boundWriteSha,
             agentResult,
-            remainingMs,
+            writeRemainingMs,
             operationIdentity,
             (phase) => {
               state.phase = phase;
@@ -874,7 +980,19 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
         operation: command.operation,
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
-        validation: { status: "not-applicable", commandCount: 0 },
+        validation: {
+          status: "not-applicable",
+          commandCount: 0,
+          ...(state.validationIntegrity === undefined
+            ? {}
+            : { integrity: state.validationIntegrity }),
+        },
+        ...(finalized.kind !== "answer" || !finalized.noChanges
+          ? {}
+          : { writeStatus: "no-changes" as const, changedPaths: [] }),
+        ...(finalized.kind !== "answer" || finalized.commentId === undefined
+          ? {}
+          : { commentId: finalized.commentId }),
       };
     }
     const write = finalized.write;
@@ -896,7 +1014,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       operation: command.operation,
       summary: agentResult.output.summary,
       findingsCount: agentResult.output.findings.length,
-      validation: successfulValidation(inputs),
+      validation: successfulValidation(inputs, state.validationIntegrity),
       ...write,
     };
   } finally {
@@ -921,8 +1039,14 @@ export async function runAction(): Promise<RunOutcome> {
     const failure = describeActionFailure(error, state.phase);
     await state.progress?.fail(failure);
     const validation: ValidationSummary | undefined =
-      failure.phase === "validation"
-        ? { status: "failed", commandCount: state.validationCommandCount ?? 0 }
+      failure.phase === "validation" || state.validationIntegrity !== undefined
+        ? {
+            status: "failed",
+            commandCount: state.validationCommandCount ?? 0,
+            ...(state.validationIntegrity === undefined
+              ? {}
+              : { integrity: state.validationIntegrity }),
+          }
         : undefined;
     return {
       ...outcomeContext(state, startedAt),

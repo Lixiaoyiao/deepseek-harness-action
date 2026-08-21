@@ -1,5 +1,5 @@
-# Copy this file to .github/workflows/dsh-commands.yml. The action and
-# validation image are pinned to the v0.3.0 audited release inputs.
+# Copy this file to .github/workflows/dsh-commands.yml. Replace the v0.5.0 tag
+# below with its full release commit SHA before production use.
 name: DSH commands
 
 on:
@@ -29,10 +29,12 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-      - uses: Lixiaoyiao/deepseek-harness-action@8eaaa7777a4756c5e519e791b6613b302fc0a92e # v0.3.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          permission-profile: standard
           allow-write: "true"
           run-tests: "true"
+          validation-integrity: strict
           test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
           container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059

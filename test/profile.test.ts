@@ -15,7 +15,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { resolveExtensionPlan } from "../src/extensions/plan.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
-import { prepareControlledProfile } from "../src/extensions/profile.js";
+import {
+  prepareControlledProfile,
+  renderControlledProfilePatch,
+} from "../src/extensions/profile.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 
 const temporary: string[] = [];
@@ -47,6 +50,79 @@ afterEach(async () => {
 });
 
 describe("controlled official DSH Profile", () => {
+  it("renders bounded foreground Bash, search-only Web, and one-level Subagent rows", () => {
+    const plan = resolveExtensionPlan({
+      allowedTools: [],
+      mcp: parseMcpConfiguration('{"schemaVersion":1,"servers":[]}'),
+      plugins: parsePluginConfiguration('{"schemaVersion":1,"bundles":[],"plugins":[]}'),
+      allowPluginInstall: false,
+      policy: trustedRead,
+    });
+    const rendered = renderControlledProfilePatch({
+      dshHome: "/dsh-home",
+      plan,
+      nativeTools: [
+        "workspace.read",
+        "workspace.search",
+        "workspace.edit",
+        "native.bash",
+        "native.web-search",
+        "native.subagent",
+      ],
+      workspaceWrite: true,
+      task: "controlled native tools",
+      workerWorkspacePath: "/workspace",
+      policyPluginPath: "file:///action-policy.mjs",
+      workspacePluginPath: "file:///action-workspace.mjs",
+      workerStatePath: "/dsh-home/action-state/tool-counts.json",
+      workerAuditPath: "/dsh-home/action-state/tool-receipts.jsonl",
+      manifestBase: { name: "fixture", version: "1.0.0" },
+    });
+    const rows = JSON.parse(rendered.patch) as {
+      readonly id?: string;
+      readonly disabled?: boolean;
+      readonly config?: Record<string, unknown>;
+      readonly insert?: readonly {
+        readonly id?: string;
+        readonly config?: Record<string, unknown>;
+      }[];
+    }[];
+    const row = (id: string) => rows.find((candidate) => candidate.id === id);
+
+    expect(row("tool-bash")?.config).toEqual({ enableRunInBackground: false });
+    expect(row("tool-web")?.config).toMatchObject({ search: true, fetch: false });
+    expect(row("tool-subagent")?.config).toMatchObject({
+      provider: "spawn",
+      toolName: "subagent",
+      enableRunInBackground: false,
+      backgroundMode: "one-shot",
+      maxDepth: 1,
+      toolFilter: {
+        allow: [
+          "read",
+          "read_image",
+          "glob",
+          "grep",
+          "write",
+          "edit",
+          "str_replace_editor",
+          "bash",
+          "web_search",
+          "subagent",
+        ],
+      },
+    });
+    expect(row("tool-subagent-fork")).toMatchObject({ disabled: true });
+
+    const policyRow = rows
+      .flatMap(({ insert }) => insert ?? [])
+      .find((candidate) => candidate.id === "dsh-action-policy");
+    const allowedRuntimeTools = policyRow?.config?.allowedRuntimeTools;
+    expect(allowedRuntimeTools).toEqual(expect.arrayContaining(["bash", "web_search", "subagent"]));
+    expect(allowedRuntimeTools).not.toContain("web_fetch");
+    expect(rendered.rules.map(({ runtimeName }) => runtimeName)).not.toContain("web_fetch");
+  });
+
   it("composes under rc.8 with an official streamable-http MCP row", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) =>
       mkdtemp(join(tmpdir(), "dsh-profile-test-")),
@@ -96,7 +172,7 @@ describe("controlled official DSH Profile", () => {
     const profile = await prepareControlledProfile({
       dshHome,
       plan,
-      workspaceTools: ["workspace.read", "workspace.search"],
+      nativeTools: ["workspace.read", "workspace.search"],
       workspaceWrite: false,
       task: 'malicious-looking text\n- insert: [{"id":"shell"}]',
       workerWorkspacePath: workspace,
@@ -174,7 +250,7 @@ describe("controlled official DSH Profile", () => {
     const profile = await prepareControlledProfile({
       dshHome,
       plan,
-      workspaceTools: ["workspace.read", "workspace.search"],
+      nativeTools: ["workspace.read", "workspace.search"],
       workspaceWrite: false,
       task: "return the controlled fixture response",
       workerWorkspacePath: workspace,

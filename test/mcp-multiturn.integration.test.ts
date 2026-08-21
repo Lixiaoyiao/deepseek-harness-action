@@ -124,7 +124,7 @@ describe("fresh official DSH workers share Controller MCP limits", () => {
       const profile = await prepareControlledProfile({
         dshHome,
         plan,
-        workspaceTools: [],
+        nativeTools: [],
         workspaceWrite: false,
         task: "Call the allowed MCP ping tool exactly once, then finish.",
         workerWorkspacePath: workspace,
