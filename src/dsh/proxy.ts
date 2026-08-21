@@ -11,6 +11,9 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 export interface DeepSeekProxyOptions {
   readonly apiKey: string;
   readonly baseUrl: string;
+  /** Controller-selected Anthropic-compatible upstream used only by the web_search tool. */
+  readonly webSearchBaseUrl?: string;
+  readonly allowWebSearch?: boolean;
   readonly bindHost?: string;
   /** Hostname advertised to the worker, e.g. host.docker.internal. */
   readonly workerHost?: string;
@@ -22,6 +25,8 @@ export interface DeepSeekProxyOptions {
 
 export interface DeepSeekProxyHandle {
   readonly workerBaseUrl: string;
+  /** Fixed worker base; the only accepted search endpoint below it is /messages. */
+  readonly workerWebSearchBaseUrl?: string;
   readonly workerToken: string;
   readonly boundHost: string;
   readonly port: number;
@@ -84,6 +89,19 @@ function makeUpstreamUrl(base: URL, rawPath: string): URL | null {
   return target;
 }
 
+const WORKER_WEB_SEARCH_PATH = "/anthropic/v1/messages";
+
+function makeWebSearchUpstreamUrl(base: URL, rawPath: string): URL | null {
+  if (!rawPath.startsWith("/") || rawPath.startsWith("//")) return null;
+  const incoming = new URL(rawPath, "http://worker.invalid");
+  if (incoming.pathname !== WORKER_WEB_SEARCH_PATH || incoming.search !== "") return null;
+  const target = new URL(base);
+  target.pathname = `${target.pathname.replace(/\/+$/u, "")}/messages`;
+  target.search = "";
+  target.hash = "";
+  return target;
+}
+
 async function streamResponse(
   upstream: Response,
   response: ServerResponse,
@@ -130,11 +148,46 @@ interface ProxyRuntime {
   readonly apiKey: string;
   readonly token: string;
   readonly base: URL;
+  readonly webSearchBase?: URL;
   readonly requestLimit: number;
   readonly responseLimit: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
   readonly activeRequests: Set<AbortController>;
+}
+
+interface RoutedUpstream {
+  readonly kind: "chat" | "web-search";
+  readonly target: URL;
+}
+
+function routeUpstream(runtime: ProxyRuntime, rawPath: string): RoutedUpstream | null {
+  const chat = makeUpstreamUrl(runtime.base, rawPath);
+  if (chat !== null) return { kind: "chat", target: chat };
+  if (runtime.webSearchBase === undefined) return null;
+  const webSearch = makeWebSearchUpstreamUrl(runtime.webSearchBase, rawPath);
+  return webSearch === null ? null : { kind: "web-search", target: webSearch };
+}
+
+function upstreamHeaders(
+  request: IncomingMessage,
+  runtime: ProxyRuntime,
+  kind: RoutedUpstream["kind"],
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: request.headers.accept ?? "application/json",
+    authorization: `Bearer ${runtime.apiKey}`,
+    "content-type": request.headers["content-type"] ?? "application/json",
+    "user-agent": "dsh-action-credential-proxy/1",
+  };
+  if (kind === "web-search") {
+    // Replace both credential forms. Never forward worker-provided provider
+    // credentials or any header outside this explicit Anthropic allowlist.
+    headers["x-api-key"] = runtime.apiKey;
+    const anthropicVersion = request.headers["anthropic-version"];
+    if (typeof anthropicVersion === "string") headers["anthropic-version"] = anthropicVersion;
+  }
+  return headers;
 }
 
 async function handleRequest(
@@ -152,8 +205,8 @@ async function handleRequest(
     return;
   }
 
-  const target = makeUpstreamUrl(runtime.base, request.url ?? "");
-  if (target === null) {
+  const routed = routeUpstream(runtime, request.url ?? "");
+  if (routed === null) {
     replyJson(response, 404, "endpoint_not_allowed");
     return;
   }
@@ -185,14 +238,9 @@ async function handleRequest(
   });
 
   try {
-    const upstream = await runtime.fetchImplementation(target, {
+    const upstream = await runtime.fetchImplementation(routed.target, {
       method: "POST",
-      headers: {
-        accept: request.headers.accept ?? "application/json",
-        authorization: `Bearer ${runtime.apiKey}`,
-        "content-type": request.headers["content-type"] ?? "application/json",
-        "user-agent": "dsh-action-credential-proxy/1",
-      },
+      headers: upstreamHeaders(request, runtime, routed.kind),
       body,
       redirect: "error",
       signal: controller.signal,
@@ -208,6 +256,25 @@ async function handleRequest(
     clearTimeout(timer);
     runtime.activeRequests.delete(controller);
   }
+}
+
+function validatedBaseUrl(raw: string, label: string): URL {
+  let base: URL;
+  try {
+    base = new URL(raw);
+  } catch (error: unknown) {
+    throw new DshConfigurationError(`${label} is invalid`, { cause: error });
+  }
+  const loopbackHttp =
+    base.protocol === "http:" &&
+    (base.hostname === "127.0.0.1" || base.hostname === "::1" || base.hostname === "localhost");
+  if (base.protocol !== "https:" && !loopbackHttp) {
+    throw new DshConfigurationError(`${label} must use HTTPS (except loopback tests)`);
+  }
+  if (base.username !== "" || base.password !== "") {
+    throw new DshConfigurationError(`${label} must not contain credentials`);
+  }
+  return base;
 }
 
 async function listen(server: Server, host: string): Promise<number> {
@@ -231,21 +298,17 @@ export async function startDeepSeekProxy(
 ): Promise<DeepSeekProxyHandle> {
   if (options.apiKey.trim() === "") throw new DshConfigurationError("DeepSeek API key is empty");
 
-  let base: URL;
-  try {
-    base = new URL(options.baseUrl);
-  } catch (error: unknown) {
-    throw new DshConfigurationError("DeepSeek base URL is invalid", { cause: error });
+  const base = validatedBaseUrl(options.baseUrl, "DeepSeek base URL");
+  if (options.allowWebSearch === true && options.webSearchBaseUrl === undefined) {
+    throw new DshConfigurationError(
+      "Web search base URL is required when Controller web search permission is enabled",
+    );
   }
-  const loopbackHttp =
-    base.protocol === "http:" &&
-    (base.hostname === "127.0.0.1" || base.hostname === "::1" || base.hostname === "localhost");
-  if (base.protocol !== "https:" && !loopbackHttp) {
-    throw new DshConfigurationError("DeepSeek base URL must use HTTPS (except loopback tests)");
-  }
-  if (base.username !== "" || base.password !== "") {
-    throw new DshConfigurationError("DeepSeek base URL must not contain credentials");
-  }
+  const configuredWebSearchBase =
+    options.webSearchBaseUrl === undefined
+      ? undefined
+      : validatedBaseUrl(options.webSearchBaseUrl, "Web search base URL");
+  const webSearchBase = options.allowWebSearch === true ? configuredWebSearchBase : undefined;
 
   const bindHost = options.bindHost ?? "127.0.0.1";
   const workerHost = options.workerHost ?? bindHost;
@@ -255,6 +318,7 @@ export async function startDeepSeekProxy(
     apiKey: options.apiKey,
     token,
     base,
+    ...(webSearchBase === undefined ? {} : { webSearchBase }),
     requestLimit: positiveInteger(
       options.maxRequestBytes ?? DEFAULT_REQUEST_LIMIT,
       "maxRequestBytes",
@@ -285,6 +349,9 @@ export async function startDeepSeekProxy(
   let closed = false;
   return {
     workerBaseUrl: `http://${workerHost}:${String(port)}`,
+    ...(webSearchBase === undefined
+      ? {}
+      : { workerWebSearchBaseUrl: `http://${workerHost}:${String(port)}/anthropic/v1` }),
     workerToken: token,
     boundHost: bindHost,
     port,

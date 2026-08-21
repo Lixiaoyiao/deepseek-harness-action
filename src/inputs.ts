@@ -7,7 +7,12 @@ import {
 } from "./extensions/plan.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "./extensions/schema.js";
 import {
+  assertPermissionProfileConfiguration,
+  permissionProfileSchema,
+} from "./permissions/profile.js";
+import {
   parseAllowedTools,
+  parseDisallowedTools,
   parseToolConfiguration,
   validateAllowedToolReferences,
 } from "./tools/schema.js";
@@ -57,13 +62,27 @@ const actionInputsSchema = z.object({
   runTests: booleanInput,
   testCommands: argvListInput,
   baseUrl: z.url(),
+  webSearchBaseUrl: z.url(),
   botUserId: integerInput(1, 2_147_483_647),
   progressComment: booleanInput,
   maxTurns: integerInput(1, 10),
+  permissionProfile: permissionProfileSchema,
+  validationIntegrity: z.enum(["off", "warn", "strict"]),
   allowPluginInstall: booleanInput,
   allowedTools: z.string().transform((value, context) => {
     try {
       return parseAllowedTools(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  }),
+  disallowedTools: z.string().transform((value, context) => {
+    try {
+      return parseDisallowedTools(value);
     } catch (error: unknown) {
       context.addIssue({
         code: "custom",
@@ -126,11 +145,15 @@ const defaults = {
   runTests: "true",
   testCommands: "[]",
   baseUrl: "https://api.deepseek.com",
+  webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
   botUserId: "41898282",
   progressComment: "true",
   maxTurns: "3",
+  permissionProfile: "strict",
+  validationIntegrity: "warn",
   allowPluginInstall: "false",
-  allowedTools: '["workspace.read","workspace.search","workspace.edit"]',
+  allowedTools: "[]",
+  disallowedTools: "[]",
   toolConfig: '{"schemaVersion":1,"commands":[]}',
   mcpConfig: '{"schemaVersion":1,"servers":[]}',
   pluginConfig: '{"schemaVersion":1,"bundles":[],"plugins":[]}',
@@ -176,11 +199,19 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     runTests: optionalInput(reader, "run-tests", defaults.runTests),
     testCommands: optionalInput(reader, "test-commands", defaults.testCommands),
     baseUrl: optionalInput(reader, "base-url", defaults.baseUrl),
+    webSearchBaseUrl: optionalInput(reader, "web-search-base-url", defaults.webSearchBaseUrl),
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
     progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
     maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
+    permissionProfile: optionalInput(reader, "permission-profile", defaults.permissionProfile),
+    validationIntegrity: optionalInput(
+      reader,
+      "validation-integrity",
+      defaults.validationIntegrity,
+    ),
     allowPluginInstall: optionalInput(reader, "allow-plugin-install", defaults.allowPluginInstall),
     allowedTools: optionalInput(reader, "allowed-tools", defaults.allowedTools),
+    disallowedTools: optionalInput(reader, "disallowed-tools", defaults.disallowedTools),
     toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
     mcpConfig: optionalInput(reader, "mcp-config", defaults.mcpConfig),
     pluginConfig: optionalInput(reader, "plugin-config", defaults.pluginConfig),
@@ -190,11 +221,23 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     throw new Error(`Invalid action inputs: ${z.prettifyError(parsed.error)}`);
   }
   try {
+    assertPermissionProfileConfiguration(parsed.data.permissionProfile, parsed.data.allowedTools);
     validateAllowedToolReferences(parsed.data.allowedTools, parsed.data.toolConfig);
+    validateAllowedToolReferences(
+      parsed.data.disallowedTools,
+      parsed.data.toolConfig,
+      "disallowed-tools",
+    );
     validateExtensionToolReferences(
       parsed.data.allowedTools,
       parsed.data.mcpConfig,
       parsed.data.pluginConfig,
+    );
+    validateExtensionToolReferences(
+      parsed.data.disallowedTools,
+      parsed.data.mcpConfig,
+      parsed.data.pluginConfig,
+      "disallowed-tools",
     );
     assertControllerCredentialsAbsentFromExtensions(
       parsed.data.mcpConfig,
@@ -210,6 +253,16 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   assertControllerSecretsAbsentFromArgv(parsed.data);
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
     throw new Error("Invalid action inputs: prompt is required when command is task");
+  }
+  if (
+    parsed.data.permissionProfile === "standard" &&
+    (parsed.data.mcpConfig.servers.length > 0 ||
+      parsed.data.pluginConfig.bundles.length > 0 ||
+      parsed.data.pluginConfig.plugins.length > 0)
+  ) {
+    throw new Error(
+      "Invalid action inputs: MCP, Bundle, and Plugin configuration requires permission-profile custom (strict remains accepted for v0.4 compatibility)",
+    );
   }
   return parsed.data;
 }

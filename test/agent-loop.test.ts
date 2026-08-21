@@ -26,7 +26,12 @@ const isolation: DshTurnMetadata["isolationReport"] = {
   limitations: [],
 };
 
-const runtime: DshRuntime = { root: "runtime", dshHome: "home", packageRoot: "package" };
+const runtime: DshRuntime = {
+  root: "runtime",
+  dshHome: "home",
+  packageRoot: "package",
+  npmCache: "npm-cache",
+};
 
 function output(state: DshOutput["state"], extra: Partial<DshOutput> = {}): DshOutput {
   return {
@@ -64,6 +69,7 @@ function task(contextPacket: unknown = { identity: "TASK-ID" }): AgentTask {
     instructions: "repair the task",
     workspacePath: "workspace",
     tools: {
+      native: ["workspace.read", "workspace.edit"],
       workspace: ["workspace.read", "workspace.edit"],
       manifests: [
         {
@@ -75,6 +81,13 @@ function task(contextPacket: unknown = { identity: "TASK-ID" }): AgentTask {
         },
       ],
       commands: [],
+      permission: {
+        profile: "strict",
+        requestedTools: ["workspace.read", "workspace.edit"],
+        disallowedTools: [],
+        deniedTools: [],
+      },
+      permissionDenials: [],
     },
   };
 }

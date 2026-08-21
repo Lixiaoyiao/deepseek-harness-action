@@ -129,9 +129,10 @@ export function mcpPublicToolName(serverName: string, rawName: string): string {
 }
 
 export function validateExtensionToolReferences(
-  allowedTools: readonly AllowedToolId[],
+  toolIds: readonly AllowedToolId[],
   mcp: McpConfiguration,
   plugins: PluginConfiguration,
+  label = "allowed-tools",
 ): void {
   const configured = new Set<string>();
   for (const server of mcp.servers) {
@@ -140,11 +141,11 @@ export function validateExtensionToolReferences(
   for (const extension of [...plugins.bundles, ...plugins.plugins]) {
     for (const tool of extension.tools) configured.add(pluginToolId(extension.id, tool.id));
   }
-  const missing = allowedTools.find(
+  const missing = toolIds.find(
     (id) => (id.startsWith("mcp.") || id.startsWith("plugin.")) && !configured.has(id),
   );
   if (missing !== undefined) {
-    throw new Error(`allowed-tools references undefined extension tool: ${missing}`);
+    throw new Error(`${label} references undefined extension tool: ${missing}`);
   }
 }
 

@@ -30,7 +30,7 @@ inputs:
     required: false
     default: ""
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version. v0.4.0 accepts only the audited 0.1.0-rc.8 runtime."
+    description: "Pinned @deepseek-ai/dsh version. v0.5.0 accepts only the audited 0.1.0-rc.8 runtime."
     required: false
     default: "0.1.0-rc.8"
   dsh-executable:
@@ -61,10 +61,18 @@ inputs:
     description: 'Non-empty JSON array of credential-free argv arrays required for every write, e.g. [["npm","test"]]. Every command must pass; Controller credentials in argv are rejected.'
     required: false
     default: "[]"
+  validation-integrity:
+    description: "Controller-owned validation-definition policy: off records, warn reports, strict blocks high-confidence weakening and replays baseline controls when needed."
+    required: false
+    default: "warn"
   base-url:
     description: "Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content."
     required: false
     default: "https://api.deepseek.com"
+  web-search-base-url:
+    description: "Trusted credential-routing input for the Controller-mediated DeepSeek Anthropic Messages web-search endpoint."
+    required: false
+    default: "https://api.deepseek.com/anthropic/v1"
   bot-user-id:
     description: "Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot]."
     required: false
@@ -77,10 +85,18 @@ inputs:
     description: "Maximum fresh DSH turns across tool requests and validation repair attempts."
     required: false
     default: "3"
-  allowed-tools:
-    description: "JSON allowlist of workspace.*, command.<name>, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
+  permission-profile:
+    description: "Agent tool preset: strict preserves v0.4 behavior, standard grants trusted coding conveniences, and custom uses the exact allow/deny lists."
     required: false
-    default: '["workspace.read","workspace.search","workspace.edit"]'
+    default: "strict"
+  allowed-tools:
+    description: "JSON allowlist of workspace.*, native.*, command.<name>, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
+    required: false
+    default: "[]"
+  disallowed-tools:
+    description: "JSON deny list using the same exact tool IDs as allowed-tools. Deny always wins after preset expansion."
+    required: false
+    default: "[]"
   tool-config:
     description: "Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv and controller credentials in argv are rejected; common direct shell executables are also denied."
     required: false
@@ -116,6 +132,16 @@ outputs:
     description: "Commit created by a successful fix operation"
   trust:
     description: "Resolved execution profile: untrusted, trusted-read, trusted-write, or none"
+  permission-profile:
+    description: "Resolved Agent permission profile: strict, standard, custom, or none"
+  effective-tools:
+    description: "JSON array of exact tools granted after preset, deny, trust, and extension policy intersection"
+  network-access:
+    description: "Effective worker network: host-gateway, mediated-web, bridge, or none before permission resolution"
+  workspace-write:
+    description: "Whether the effective Agent tools can modify the disposable workspace"
+  trusted-extensions:
+    description: "JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for this run"
   duration-ms:
     description: "Total controller duration in milliseconds"
   comment-id:
@@ -129,7 +155,7 @@ outputs:
   tool-receipts:
     description: "JSON object with bounded controller/DSH receipt arrays and truncation metadata; never an authorization input"
   result-json:
-    description: "Versioned JSON envelope containing status, result, policy, extension audit, tool receipts, timing, publication, validation, write, and error details"
+    description: "Versioned JSON envelope containing status, result, policy, permissions, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
 
 runs:
   using: "node24"

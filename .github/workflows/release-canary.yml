@@ -1,0 +1,70 @@
+name: v0.5 release canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-v050-release-canary
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.repository == 'Lixiaoyiao/deepseek-harness-action'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_SHA: ${{ vars.DSH_V050_CANARY_SHA }}
+    steps:
+      - name: Validate immutable release ref
+        run: |
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Set repository variable DSH_V050_CANARY_SHA to the full v0.5.0 release commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Checkout the fixed v0.5.0 action
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Lixiaoyiao/deepseek-harness-action
+          ref: ${{ env.RELEASE_SHA }}
+          path: release-action
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run one read-only smoke task
+        id: dsh
+        uses: ./release-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          command: task
+          prompt: "Return one concise sentence confirming that the v0.5.0 canary reached a final answer. Do not request tools."
+          task-access: read
+          allow-write: "false"
+          permission-profile: strict
+          allowed-tools: "[]"
+          disallowed-tools: "[]"
+          progress-comment: "false"
+          max-turns: "1"
+
+      - name: Assert the smoke result
+        env:
+          DSH_RESULT_JSON: ${{ steps.dsh.outputs['result-json'] }}
+          DSH_PERMISSION_PROFILE: ${{ steps.dsh.outputs['permission-profile'] }}
+          DSH_EFFECTIVE_TOOLS: ${{ steps.dsh.outputs['effective-tools'] }}
+          DSH_NETWORK_ACCESS: ${{ steps.dsh.outputs['network-access'] }}
+          DSH_WORKSPACE_WRITE: ${{ steps.dsh.outputs['workspace-write'] }}
+        run: |
+          test "$DSH_PERMISSION_PROFILE" = strict
+          test "$DSH_NETWORK_ACCESS" = host-gateway
+          test "$DSH_WORKSPACE_WRITE" = false
+          jq -e 'type == "array"' <<<"$DSH_EFFECTIVE_TOOLS" >/dev/null
+          jq -e '
+            .schemaVersion == 1 and
+            .status == "success" and
+            .operation == "task"
+          ' <<<"$DSH_RESULT_JSON" >/dev/null

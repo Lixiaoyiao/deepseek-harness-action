@@ -8,10 +8,15 @@ import {
 import { DshError } from "./dsh/errors.js";
 import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
 import type { ExtensionAudit } from "./extensions/plan.js";
+import type { PermissionAudit } from "./permissions/profile.js";
 import type { PublicationResult } from "./review/publisher.js";
 import { stripTrackingMarkers } from "./review/tracking.js";
 import type { SecurityPolicy } from "./security/policy.js";
 import { redactSecrets, sanitizeUntrustedText } from "./security/redaction.js";
+import {
+  ValidationIntegrityError,
+  type ValidationIntegritySummary,
+} from "./write/validation-integrity.js";
 import { ValidationFailureError } from "./write/validate.js";
 
 export type ActionConclusion = "success" | "neutral" | "failure";
@@ -50,6 +55,7 @@ export interface AgentRunSummary {
 export interface ValidationSummary {
   readonly status: "passed" | "failed" | "skipped" | "not-applicable";
   readonly commandCount: number;
+  readonly integrity?: ValidationIntegritySummary;
 }
 
 export interface RunOutcome {
@@ -61,10 +67,11 @@ export interface RunOutcome {
   readonly durationMs: number;
   readonly runUrl?: string;
   readonly policy?: SecurityPolicy;
+  readonly permission?: PermissionAudit;
   readonly agent?: AgentRunSummary;
   readonly publication?: PublicationResult;
   readonly validation?: ValidationSummary;
-  readonly writeStatus?: "success" | "partial-success";
+  readonly writeStatus?: "success" | "partial-success" | "no-changes";
   readonly commitSha?: string;
   readonly changedPaths?: readonly string[];
   readonly branchName?: string;
@@ -216,6 +223,17 @@ export function describeActionFailure(error: unknown, phase: ActionPhase): Actio
       retryable: true,
     };
   }
+  if (error instanceof AgentNoProgressError && error.cause instanceof ValidationIntegrityError) {
+    return {
+      code: error.cause.integrityCode,
+      phase: "validation",
+      title: "Validation integrity policy blocked the write",
+      message: safeMessage(error.cause),
+      guidance:
+        "Review the validation-definition audit, restore or strengthen weakened scripts, tests, entrypoints, or configuration, and rerun. The Agent cannot lower validation-integrity; only trusted workflow configuration can change the policy.",
+      retryable: false,
+    };
+  }
   if (error instanceof AgentNoProgressError || error instanceof AgentLoopLimitError) {
     return {
       code: error.code,
@@ -229,6 +247,17 @@ export function describeActionFailure(error: unknown, phase: ActionPhase): Actio
         error instanceof AgentNoProgressError
           ? "Inspect the repeated validation failure and adjust the task, tools, or repository setup."
           : "Increase max-turns or reduce the task scope, then rerun.",
+      retryable: false,
+    };
+  }
+  if (error instanceof ValidationIntegrityError) {
+    return {
+      code: error.integrityCode,
+      phase: "validation",
+      title: "Validation integrity policy blocked the write",
+      message: safeMessage(error),
+      guidance:
+        "Review the validation-definition audit, restore or strengthen weakened scripts, tests, entrypoints, or configuration, and rerun. The Agent cannot lower validation-integrity; only trusted workflow configuration can change the policy.",
       retryable: false,
     };
   }
@@ -302,6 +331,7 @@ function structuredResult(
             capabilities: outcome.policy.capabilities,
           },
         }),
+    ...(outcome.permission === undefined ? {} : { permissions: outcome.permission }),
     ...(outcome.agent === undefined
       ? {}
       : {
@@ -428,6 +458,11 @@ export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string,
     "error-code": outcome.error?.code ?? "",
     "error-message": outcome.error?.message ?? "",
     "extension-profile-digest": outcome.agent?.extensionAudit?.digest ?? "",
+    "permission-profile": outcome.permission?.profile ?? "none",
+    "effective-tools": JSON.stringify(outcome.permission?.effectiveTools ?? []),
+    "network-access": outcome.permission?.network ?? "none",
+    "workspace-write": outcome.permission?.workspaceWrite === true ? "true" : "false",
+    "trusted-extensions": JSON.stringify(outcome.permission?.trustedExtensions ?? []),
     "tool-receipts": JSON.stringify(receipts),
     "result-json": JSON.stringify(structuredResult(outcome, receipts)),
   };
@@ -437,14 +472,101 @@ function safeMarkdown(value: string): string {
   return sanitizeUntrustedText(stripTrackingMarkers(value));
 }
 
+const MAX_STEP_SUMMARY_AUDIT_ITEMS = 20;
+const MAX_STEP_SUMMARY_AUDIT_ITEM_CHARACTERS = 256;
+
+function safeInline(value: string): string {
+  return safeMarkdown(value)
+    .replaceAll("`", "'")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, MAX_STEP_SUMMARY_AUDIT_ITEM_CHARACTERS);
+}
+
+function inlineCode(value: string): string {
+  return `\`${safeInline(value)}\``;
+}
+
+function boundedInlineList(values: readonly string[]): string {
+  if (values.length === 0) return "none";
+  const shown = values.slice(0, MAX_STEP_SUMMARY_AUDIT_ITEMS).map((value) => inlineCode(value));
+  const hidden = values.length - shown.length;
+  return `${shown.join(", ")}${hidden === 0 ? "" : ` (+${String(hidden)} more)`}`;
+}
+
+function permissionSummaryLines(permission: PermissionAudit | undefined): readonly string[] {
+  const profile = permission?.profile ?? "not resolved";
+  const network = permission?.network ?? "none";
+  const workspaceWrite = permission?.workspaceWrite === true ? "enabled" : "disabled";
+  const trustedExtensions =
+    permission?.trustedExtensions.map(
+      (extension) =>
+        `${extension.kind}:${extension.id} (network=${extension.network ? "yes" : "no"}, workspace-write=${extension.workspaceWrite ? "yes" : "no"})`,
+    ) ?? [];
+  const lines = [
+    "",
+    "### Effective Agent permissions",
+    "",
+    `**Profile:** ${inlineCode(profile)}`,
+    `**Effective tools:** ${boundedInlineList(permission?.effectiveTools ?? [])}`,
+    `**Network:** ${inlineCode(network)}`,
+    `**Workspace write:** ${inlineCode(workspaceWrite)}`,
+    `**Trusted extensions:** ${boundedInlineList(trustedExtensions)}`,
+  ];
+  const denials = permission?.deniedTools ?? [];
+  if (denials.length === 0) {
+    lines.push("**Denials:** none");
+    return lines;
+  }
+  lines.push(`**Denials (${String(denials.length)}):**`);
+  for (const denial of denials.slice(0, MAX_STEP_SUMMARY_AUDIT_ITEMS)) {
+    lines.push(`- ${inlineCode(denial.id)} — ${inlineCode(denial.reason)}`);
+  }
+  if (denials.length > MAX_STEP_SUMMARY_AUDIT_ITEMS) {
+    lines.push(
+      `- ${String(denials.length - MAX_STEP_SUMMARY_AUDIT_ITEMS)} additional denial(s) omitted`,
+    );
+  }
+  return lines;
+}
+
+function validationSummaryLines(validation: ValidationSummary | undefined): readonly string[] {
+  if (validation === undefined) return [];
+  const lines = [
+    "",
+    "### Validation",
+    "",
+    `**Status:** ${inlineCode(validation.status)}`,
+    `**Commands:** ${String(validation.commandCount)}`,
+  ];
+  const integrity = validation.integrity;
+  if (integrity === undefined) {
+    lines.push("**Integrity:** not evaluated");
+    return lines;
+  }
+  lines.push(
+    `**Integrity:** mode ${inlineCode(integrity.mode)} · status ${inlineCode(integrity.status)}`,
+    `**Definition changes:** ${String(integrity.changeCount)} total · ${String(integrity.dangerousChangeCount)} dangerous · ${String(integrity.controlPlaneChangeCount)} control-plane · ${String(integrity.testChangeCount)} test`,
+    `**Baseline replay:** ${
+      integrity.baselineReplay === undefined
+        ? "not run"
+        : `${inlineCode(integrity.baselineReplay.status)} (${String(integrity.baselineReplay.commandCount)} command(s))`
+    }`,
+  );
+  return lines;
+}
+
 export function formatStepSummary(outcome: RunOutcome): string {
   const lines = [
     `**Status:** ${outcome.conclusion}`,
     `**Operation:** ${outcome.operation ?? "none"}`,
     `**Trust:** ${outcome.policy?.trust ?? "not resolved"}`,
+    ...(outcome.writeStatus === undefined ? [] : [`**Write:** ${outcome.writeStatus}`]),
     `**Duration:** ${(outcome.durationMs / 1_000).toFixed(1)}s`,
     "",
     safeMarkdown(outcome.summary),
+    ...permissionSummaryLines(outcome.permission),
+    ...validationSummaryLines(outcome.validation),
   ];
   if (outcome.error !== undefined) {
     lines.push(

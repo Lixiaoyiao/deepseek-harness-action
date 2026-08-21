@@ -3,17 +3,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { isIP } from "node:net";
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  realpath,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +41,7 @@ import {
 import type { EffectiveExtensionPlan, ExtensionAudit } from "../extensions/plan.js";
 import {
   CONTROLLED_PROFILE_NAME,
+  nativeRuntimeToolNames,
   prepareControlledProfile,
   resolveInstalledPluginModuleSpecifiers,
   type ControlledProfilePaths,
@@ -60,10 +51,12 @@ import {
   assertExtensionPackagesAbsentFromRuntimeLock,
   auditExtensionRuntimeLock,
   snapshotRuntimeLock,
-  type ExtensionRuntimeLockAudit,
-  type RuntimeLockBaseline,
 } from "../extensions/runtime-lock.js";
-import type { WorkspaceToolId } from "../tools/schema.js";
+import type { NativeToolId } from "../tools/schema.js";
+import { bindDshRuntime, createDshRuntime, disposeDshRuntime, type DshRuntime } from "./runtime.js";
+
+export { createDshRuntime, disposeDshRuntime } from "./runtime.js";
+export type { DshRuntime } from "./runtime.js";
 
 const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/u;
 export const SUPPORTED_DSH_VERSIONS = ["0.1.0-rc.8"] as const;
@@ -75,6 +68,7 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const MAX_STDERR_BYTES = 2 * 1024 * 1024;
 const MAX_RECEIPT_LOG_BYTES = 16 * 1024 * 1024;
 const MAX_INVOCATION_STATE_BYTES = 1024 * 1024;
+const CONTROLLED_PROFILE_SCHEMA_VERSION = 1;
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_DSH_HOME = "/dsh-home";
 const CONTAINER_PACKAGE_ROOT = "/opt/dsh-action/package";
@@ -109,26 +103,15 @@ export interface DshRunRequest {
   /** Controller-only credential. It is never put in a worker env or argv. */
   readonly apiKey: string;
   readonly baseUrl: string;
+  readonly webSearchBaseUrl: string;
   readonly dshVersion: string;
   /** Absolute path to @deepseek-ai/dsh/lib/bin.js for isolation=none. */
   readonly dshExecutable?: string;
   readonly containerImage: string;
   readonly toolCatalog?: readonly AgentToolManifest[];
-  readonly workspaceTools?: readonly WorkspaceToolId[];
+  readonly nativeTools?: readonly NativeToolId[];
   readonly extensions?: EffectiveExtensionPlan;
   readonly signal?: AbortSignal;
-}
-
-/** Run-scoped installation/home reused across fresh headless turns. */
-export interface DshRuntime {
-  readonly root: string;
-  readonly dshHome: string;
-  readonly packageRoot: string;
-  installedVersion?: string;
-  installedExtensionDigest?: string;
-  installedPackageInventory?: Readonly<Record<string, string>>;
-  installedPackageLockBaseline?: RuntimeLockBaseline;
-  installedExtensionRuntimeLock?: ExtensionRuntimeLockAudit;
 }
 
 export interface DshIsolationReport {
@@ -209,25 +192,6 @@ export interface DshRunDependencies {
   readonly platform?: NodeJS.Platform;
   readonly now?: () => number;
   readonly runtime?: DshRuntime;
-}
-
-export async function createDshRuntime(temporaryDirectory = tmpdir()): Promise<DshRuntime> {
-  const root = await mkdtemp(join(temporaryDirectory, "dsh-action-"));
-  const dshHome = join(root, "home");
-  const packageRoot = join(dshHome, "profiles", CONTROLLED_PROFILE_NAME);
-  await Promise.all(
-    [
-      packageRoot,
-      join(dshHome, "action-state"),
-      join(dshHome, "sessions"),
-      join(dshHome, "attachments"),
-    ].map((directory) => mkdir(directory, { recursive: true })),
-  );
-  return { root, dshHome, packageRoot };
-}
-
-export async function disposeDshRuntime(runtime: DshRuntime): Promise<void> {
-  await rm(runtime.root, { force: true, recursive: true });
 }
 
 /** Bind policy patches to DSH versions whose complete native tool surface was audited. */
@@ -677,6 +641,21 @@ function resolveInstalledDshBin(): string {
   }
 }
 
+async function resolveHostDshExecutableIdentity(
+  request: DshRunRequest,
+): Promise<string | undefined> {
+  if (request.isolation !== "none") return undefined;
+  const executable =
+    request.dshExecutable === undefined || request.dshExecutable === ""
+      ? resolveInstalledDshBin()
+      : request.dshExecutable;
+  if (!isAbsolute(executable)) {
+    throw new DshConfigurationError("dshExecutable must be an absolute path to lib/bin.js");
+  }
+  await assertFile(executable, "dshExecutable");
+  return await realpath(executable);
+}
+
 function dockerControllerEnvironment(
   source: NodeJS.ProcessEnv,
   worker: NodeJS.ProcessEnv,
@@ -710,6 +689,9 @@ function containerEnvironment(
     DSH_TOOLS_MODE: "native",
     DEEPSEEK_API_KEY: proxy.workerToken,
     DEEPSEEK_BASE_URL: proxy.workerBaseUrl,
+    ...(proxy.workerWebSearchBaseUrl === undefined
+      ? {}
+      : { DEEPSEEK_SEARCH_BASE_URL: proxy.workerWebSearchBaseUrl }),
   };
 }
 
@@ -812,6 +794,7 @@ function dockerInstallSpec(
   request: DshRunRequest,
   workspace: string,
   packageRoot: string,
+  npmCache: string,
   environment: NodeJS.ProcessEnv,
 ): DshProcessSpec {
   const containerName = `dsh-action-install-${randomUUID()}`;
@@ -843,6 +826,8 @@ function dockerInstallSpec(
       hostUserForContainer(),
       "--volume",
       `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:rw`,
+      "--volume",
+      `${npmCache}:/tmp/npm-cache:rw`,
       "--workdir",
       CONTAINER_PACKAGE_ROOT,
       "--env",
@@ -875,6 +860,7 @@ function dockerExtensionInstallSpec(
   request: DshRunRequest,
   workspace: string,
   packageRoot: string,
+  npmCache: string,
   environment: NodeJS.ProcessEnv,
 ): DshProcessSpec {
   const containerName = `dsh-action-extension-install-${randomUUID()}`;
@@ -906,6 +892,8 @@ function dockerExtensionInstallSpec(
       hostUserForContainer(),
       "--volume",
       `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:rw`,
+      "--volume",
+      `${npmCache}:/tmp/npm-cache:rw`,
       "--workdir",
       CONTAINER_PACKAGE_ROOT,
       "--env",
@@ -939,19 +927,15 @@ function dockerExtensionInstallSpec(
 }
 
 function localSpec(
-  request: DshRunRequest,
+  executable: string | undefined,
   workspace: string,
   patchPath: string,
   toolPolicyPath: string,
   prompt: string,
   workerEnvironment: NodeJS.ProcessEnv,
 ): DshProcessSpec {
-  const executable =
-    request.dshExecutable === undefined || request.dshExecutable === ""
-      ? resolveInstalledDshBin()
-      : request.dshExecutable;
-  if (!isAbsolute(executable)) {
-    throw new DshConfigurationError("dshExecutable must be an absolute path to lib/bin.js");
+  if (executable === undefined) {
+    throw new DshConfigurationError("Resolved host dshExecutable identity is missing");
   }
   return {
     command: process.execPath,
@@ -1010,7 +994,7 @@ function parseInternalNetworkGateway(stdout: string): string {
 }
 
 function isolationReport(request: DshRunRequest): DshIsolationReport {
-  const repoToolsEnabled = effectiveWorkspaceTools(request).length > 0;
+  const repoToolsEnabled = effectiveNativeTools(request).length > 0;
   const plan = effectiveExtensionPlan(request);
   if (request.isolation === "docker") {
     return {
@@ -1049,7 +1033,7 @@ function isolationReport(request: DshRunRequest): DshIsolationReport {
   };
 }
 
-function defaultWorkspaceTools(request: DshRunRequest): readonly WorkspaceToolId[] {
+function defaultNativeTools(request: DshRunRequest): readonly NativeToolId[] {
   if (request.trust === "trusted-write") {
     return ["workspace.read", "workspace.search", "workspace.edit"];
   }
@@ -1059,16 +1043,21 @@ function defaultWorkspaceTools(request: DshRunRequest): readonly WorkspaceToolId
   return [];
 }
 
-function effectiveWorkspaceTools(request: DshRunRequest): readonly WorkspaceToolId[] {
-  const requested = request.workspaceTools ?? defaultWorkspaceTools(request);
+function effectiveNativeTools(request: DshRunRequest): readonly NativeToolId[] {
+  const requested = request.nativeTools ?? defaultNativeTools(request);
   if (request.trust === "untrusted") return [];
   if (request.trust === "trusted-read" && request.isolation !== "docker") return [];
-  return requested.filter((tool) => tool !== "workspace.edit" || request.trust === "trusted-write");
+  return requested.filter(
+    (tool) =>
+      request.isolation === "docker" &&
+      (request.trust === "trusted-write" ||
+        (tool !== "workspace.edit" && tool !== "native.bash" && tool !== "native.subagent")),
+  );
 }
 
 function workerWorkspaceWrite(request: DshRunRequest): boolean {
   return (
-    effectiveWorkspaceTools(request).includes("workspace.edit") ||
+    effectiveNativeTools(request).includes("workspace.edit") ||
     effectiveExtensionPlan(request).tools.some((tool) =>
       tool.permissions.includes("workspace-write"),
     )
@@ -1076,7 +1065,7 @@ function workerWorkspaceWrite(request: DshRunRequest): boolean {
 }
 
 async function writeToolPolicy(runtime: DshRuntime, request: DshRunRequest): Promise<string> {
-  const enabled = new Set(effectiveWorkspaceTools(request));
+  const enabled = new Set(effectiveNativeTools(request));
   const rows: string[] = [];
   for (const [tool, row] of [
     ["workspace.read", "tool-fs"],
@@ -1414,8 +1403,9 @@ export async function runDsh(
   const platform = dependencies.platform ?? process.platform;
   const now = dependencies.now ?? Date.now;
   const startedAt = now();
-  const workspace = resolve(request.workspacePath ?? process.cwd());
-  await assertDirectory(workspace, "workspacePath");
+  const requestedWorkspace = resolve(request.workspacePath ?? process.cwd());
+  await assertDirectory(requestedWorkspace, "workspacePath");
+  const workspace = await realpath(requestedWorkspace);
 
   const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory();
   const patchName =
@@ -1435,21 +1425,16 @@ export async function runDsh(
       : { trustedInstructions: request.trustedInstructions }),
     trust: request.trust,
     toolCatalog: request.toolCatalog ?? [],
+    nativeTools: effectiveNativeTools(request),
     maxBytes: platform === "win32" ? WINDOWS_MAX_PROMPT_BYTES : DEFAULT_MAX_PROMPT_BYTES,
   });
 
+  const effectiveTools = effectiveNativeTools(request);
+  const webSearchEnabled = effectiveTools.includes("native.web-search");
+  const dshExecutableIdentity = await resolveHostDshExecutableIdentity(request);
   const ownsRuntime = dependencies.runtime === undefined;
   const runtime =
     dependencies.runtime ?? (await createDshRuntime(dependencies.temporaryDirectory ?? tmpdir()));
-  if (runtime.installedVersion !== undefined && runtime.installedVersion !== request.dshVersion) {
-    throw new DshConfigurationError("A reused DSH runtime cannot change dshVersion");
-  }
-  if (
-    runtime.installedExtensionDigest !== undefined &&
-    runtime.installedExtensionDigest !== extensions.configurationDigest
-  ) {
-    throw new DshConfigurationError("A reused DSH runtime cannot change its extension lock");
-  }
   let proxy: DeepSeekProxyHandle | undefined;
   let internalNetwork: string | undefined;
   let internalNetworkGateway: string | undefined;
@@ -1457,8 +1442,36 @@ export async function runDsh(
   let turnReceipts: readonly DshToolReceipt[] = [];
   let executeForCleanup:
     ((spec: DshProcessSpec, limits: DshProcessLimits) => Promise<DshProcessResult>) | undefined;
-  const secrets = controllerSecrets(request, environment);
   try {
+    if (extensions.network && effectiveTools.includes("native.bash")) {
+      throw new DshConfigurationError(
+        "native.bash cannot share a worker with a bridge-networked extension; remove native.bash or the networked extension",
+      );
+    }
+    bindDshRuntime(runtime, {
+      dshVersion: request.dshVersion,
+      containerImage: request.containerImage,
+      isolation: request.isolation,
+      workspacePath: workspace,
+      chatBaseUrl: request.baseUrl,
+      ...(webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
+      ...(dshExecutableIdentity === undefined ? {} : { dshExecutableIdentity }),
+      extensionConfigurationDigest: extensions.configurationDigest,
+      nativeRuntimeTools: nativeRuntimeToolNames(effectiveTools),
+      workspaceWrite: workerWorkspaceWrite(request),
+      network: extensions.network,
+      profileSchemaVersion: CONTROLLED_PROFILE_SCHEMA_VERSION,
+    });
+    if (runtime.installedVersion !== undefined && runtime.installedVersion !== request.dshVersion) {
+      throw new DshConfigurationError("A reused DSH runtime cannot change dshVersion");
+    }
+    if (
+      runtime.installedExtensionDigest !== undefined &&
+      runtime.installedExtensionDigest !== extensions.configurationDigest
+    ) {
+      throw new DshConfigurationError("A reused DSH runtime cannot change its extension lock");
+    }
+    const secrets = controllerSecrets(request, environment);
     const docker = request.isolation === "docker";
     const localDshHome = runtime.dshHome;
     const packageRoot = runtime.packageRoot;
@@ -1498,7 +1511,9 @@ export async function runDsh(
     let manifestBase: Record<string, unknown> | undefined;
     if (docker && runtime.installedVersion === undefined) {
       manifestBase = await prepareLockedRuntimeFiles(runtime, request.dshVersion);
-      await executeSetup(dockerInstallSpec(request, workspace, packageRoot, environment));
+      await executeSetup(
+        dockerInstallSpec(request, workspace, packageRoot, runtime.npmCache, environment),
+      );
       runtime.installedVersion = request.dshVersion;
       if (Object.keys(extensions.packageDependencies).length > 0) {
         runtime.installedPackageInventory = await installedTopLevelPackageInventory(packageRoot);
@@ -1522,7 +1537,7 @@ export async function runDsh(
       const profileOptions = {
         dshHome: localDshHome,
         plan: extensions,
-        workspaceTools: effectiveWorkspaceTools(request),
+        nativeTools: effectiveNativeTools(request),
         workspaceWrite: workerWorkspaceWrite(request),
         task: prompt,
         workerWorkspacePath: CONTAINER_WORKSPACE,
@@ -1531,6 +1546,9 @@ export async function runDsh(
         workerStatePath: CONTAINER_STATE,
         workerAuditPath: CONTAINER_AUDIT,
         manifestBase,
+        ...(runtime.verifiedPluginModuleSpecifiers === undefined
+          ? {}
+          : { pluginModuleSpecifiers: runtime.verifiedPluginModuleSpecifiers }),
       } as const;
       controlledProfile = await prepareControlledProfile(profileOptions);
       if (resolve(controlledProfile.profileDir) !== resolve(packageRoot)) {
@@ -1553,7 +1571,13 @@ export async function runDsh(
             extensions.packageDependencies,
           );
           await executeSetup(
-            dockerExtensionInstallSpec(request, workspace, packageRoot, environment),
+            dockerExtensionInstallSpec(
+              request,
+              workspace,
+              packageRoot,
+              runtime.npmCache,
+              environment,
+            ),
           );
           assertInstalledRuntimeInventoryUnchanged(
             baseline,
@@ -1587,23 +1611,28 @@ export async function runDsh(
         }
       }
       if (extensions.plugins.length > 0) {
-        let pluginModuleSpecifiers: Readonly<Record<string, string>>;
-        try {
-          pluginModuleSpecifiers = await resolveInstalledPluginModuleSpecifiers({
-            packageRoot,
-            workerProfilePath: CONTAINER_PROFILE_ROOT,
-            plan: extensions,
-          });
-        } catch (error: unknown) {
-          throw new DshConfigurationError(
-            "Installed direct Plugin entry failed Controller containment validation",
-            { cause: error },
-          );
+        let pluginModuleSpecifiers = runtime.verifiedPluginModuleSpecifiers;
+        if (pluginModuleSpecifiers === undefined) {
+          try {
+            pluginModuleSpecifiers = await resolveInstalledPluginModuleSpecifiers({
+              packageRoot,
+              workerProfilePath: CONTAINER_PROFILE_ROOT,
+              plan: extensions,
+            });
+          } catch (error: unknown) {
+            throw new DshConfigurationError(
+              "Installed direct Plugin entry failed Controller containment validation",
+              { cause: error },
+            );
+          }
+          runtime.verifiedPluginModuleSpecifiers = pluginModuleSpecifiers;
         }
-        controlledProfile = await prepareControlledProfile({
-          ...profileOptions,
-          pluginModuleSpecifiers,
-        });
+        if (profileOptions.pluginModuleSpecifiers === undefined) {
+          controlledProfile = await prepareControlledProfile({
+            ...profileOptions,
+            pluginModuleSpecifiers,
+          });
+        }
       }
       // Keep the launcher inside the populated package root so its bare imports
       // resolve against the locked runtime. A separate child bind mount below
@@ -1623,11 +1652,18 @@ export async function runDsh(
     proxy = await proxyFactory({
       apiKey: request.apiKey,
       baseUrl: request.baseUrl,
+      ...(webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
+      allowWebSearch: webSearchEnabled,
       bindHost: docker ? "0.0.0.0" : "127.0.0.1",
       workerHost: docker ? (internalNetworkGateway ?? "host.docker.internal") : "127.0.0.1",
       requestTimeoutMs: request.timeoutMs,
       maxResponseBytes: request.maxOutputBytes,
     });
+    if (webSearchEnabled && proxy.workerWebSearchBaseUrl === undefined) {
+      throw new DshConfigurationError(
+        "The Controller proxy did not expose the required mediated web-search route",
+      );
+    }
     const workerSecrets = [...secrets, proxy.workerToken];
     const workerEnvironment = buildDshWorkerEnvironment({
       source: environment,
@@ -1662,7 +1698,7 @@ export async function runDsh(
           proxy,
         )
       : localSpec(
-          request,
+          dshExecutableIdentity,
           workspace,
           patchPath,
           toolPolicyPath ?? patchPath,

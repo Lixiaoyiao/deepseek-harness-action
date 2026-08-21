@@ -229,8 +229,8 @@ function turnContext(
 }
 
 /**
- * Controller-owned outer loop. DSH stays unable to execute shell commands;
- * command tools and mandatory validation run only through trusted callbacks.
+ * Controller-owned outer loop. DSH receives only the resolved native runtime
+ * tools; controller command tools and mandatory validation remain trusted callbacks.
  */
 export async function runAgentLoop<TFinal>(
   task: AgentTask,

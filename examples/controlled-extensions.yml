@@ -1,7 +1,6 @@
-# v0.4 controlled-extension template. The example package and endpoint names are
+# v0.5 custom controlled-extension template. The package and endpoint names are
 # intentionally non-routable placeholders: replace them with extensions you have
-# audited. After v0.4.0 is published, pin this Action to its full release commit
-# SHA instead of the tag used while the release is being prepared.
+# audited. Pin this Action to the full v0.5.0 release commit SHA in production.
 name: DSH controlled MCP and Profile
 
 on:
@@ -30,7 +29,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.4.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -38,6 +37,7 @@ jobs:
           prompt: ${{ inputs.task }}
           task-access: read
           allow-write: "false"
+          permission-profile: custom
           dsh-version: 0.1.0-rc.8
           isolation: docker
           container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
@@ -52,6 +52,9 @@ jobs:
               "mcp.knowledge.search",
               "plugin.repo-audit.scan"
             ]
+          # Exact denies always win, including over future preset changes.
+          disallowed-tools: >-
+            ["workspace.edit","native.bash","native.web-search","native.subagent"]
 
           # Official @deepseek-ai/dsh-mcp-client transport. Streamable HTTP
           # always requires network on both the server and every exposed tool.

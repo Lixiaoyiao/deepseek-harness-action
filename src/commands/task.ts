@@ -30,7 +30,7 @@ export async function publishTaskAnswer(
   expectedAuthorId: number,
   result: DshRunResult,
   runUrl: string,
-): Promise<void> {
+): Promise<number> {
   const summary = sanitizeUntrustedText(stripTrackingMarkers(result.output.summary)).slice(
     0,
     60_000,
@@ -43,7 +43,7 @@ export async function publishTaskAnswer(
     "",
     `<sub>[Workflow run](${runUrl}) · dsh-action</sub>`,
   ].join("\n");
-  await upsertTrackingComment(client, target, expectedAuthorId, "task", body);
+  return await upsertTrackingComment(client, target, expectedAuthorId, "task", body);
 }
 
 export interface FinishAutomationTaskInput {

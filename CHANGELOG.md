@@ -3,6 +3,78 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.5.0] - 2026-08-22
+
+### Added
+
+- Agent permission profiles: `strict` preserves the v0.4 safety default,
+  `standard` provides the common trusted-maintainer coding set, and `custom`
+  starts from an empty preset for exact advanced configuration. The stable
+  native autonomy IDs are `native.bash`, `native.web-search`, and
+  `native.subagent`.
+- Exact `disallowed-tools` support across `workspace.*`, `native.*`,
+  `command.<name>`, `mcp.<server>.<tool>`, and
+  `plugin.<extension>.<tool>` IDs. Deny entries always win after preset and
+  explicit allow expansion.
+- Controller-owned `validation-integrity` modes. `off` records validation
+  definition changes, `warn` reports them, and `strict` blocks
+  high-confidence weakening or replays changed controls against their bound
+  baseline. Normal implementation and test changes remain supported.
+- Permission observability in Action outputs, `result-json`, and the step
+  summary: resolved profile, effective tools, the physical `host-gateway`,
+  `mediated-web`, or `bridge` worker path, workspace write, trusted extensions,
+  denied tools, and their reasons.
+- A lightweight weekly/manual release canary with one read-only smoke job and
+  no test matrix or GitHub mutation authority.
+
+### Changed
+
+- Trusted coding workflows can opt into DSH-native Bash, mediated web search,
+  and a bounded subagent through `standard`; review remains near-zero
+  configuration on `strict`. MCP, Bundle, Plugin, and other precise policies
+  use `custom`.
+- `native.web-search` is mediated through a Controller proxy. The worker never
+  receives the real DeepSeek key, and this path does not grant arbitrary bridge
+  egress. Any full bridge network remains an explicit Controller policy choice.
+- An authorized `@dsh task --write` that produces no repository change now
+  publishes its final answer to the resolved Issue/PR after actual-change
+  inspection, while creating no commit, ref, pull request, or release mutation.
+- Run-scoped DSH work can reuse only a runtime whose exact version, image,
+  isolation, real workspace, chat/search endpoint, host executable identity,
+  extension digest, native tools, workspace/network mode, and Profile schema
+  binding match. An ephemeral npm cache avoids duplicate acquisition work
+  within that bound run; lock and inventory audits remain in force.
+- `allowed-tools` is additive after a `strict` or `standard` preset expands.
+  Workflows that relied on a smaller exact v0.4 allowlist should select
+  `custom`, or add exact `disallowed-tools` entries, instead of assuming that an
+  allowlist replaces a preset.
+- README, Chinese README, security guidance, and all current examples now start
+  new users on v0.5.0. Historical v0.3/v0.4 release behavior remains recorded
+  below.
+
+### Security
+
+- Permission profiles govern only Agent tools inside the sandbox. The Agent
+  cannot raise its profile, approve extensions, receive the real
+  `GITHUB_TOKEN` or DeepSeek key, or perform commit/push/PR/release operations.
+  Every GitHub mutation remains Controller-only after actor, origin, identity,
+  actual-change, validation, and validation-integrity gates.
+- MCP, Bundle, and Plugin startup remains trusted code execution behind exact
+  manifests, Docker isolation, positive tool policy, installation opt-in,
+  package inventory checks, and immutable pins.
+- v0.5.0 deliberately retains exact `@deepseek-ai/dsh@0.1.0-rc.8`,
+  `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`, and the committed dependency lock.
+  No DSH or application dependency pin changed for this release.
+
+### Compatibility and deferred work
+
+- The default `strict` profile keeps v0.4 review, diagnose, fix, implement,
+  auto/task, multi-turn, sticky-comment, and Controller-owned GitHub write
+  behavior. Existing inputs, legacy scalar outputs, and the schema-v1
+  `result-json` envelope remain available.
+- Session/resume, Label or Assignee triggers, custom trigger phrases, branch
+  templates, Agent Teams, and unrelated platform expansion remain out of scope.
+
 ## [0.4.0] - 2026-08-21
 
 ### Added
@@ -307,6 +379,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.5.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0

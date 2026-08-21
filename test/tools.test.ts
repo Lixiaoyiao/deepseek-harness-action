@@ -7,15 +7,19 @@ import { CommandToolProvider, resolveEffectiveTools } from "../src/tools/registr
 import { ToolRouter } from "../src/tools/router.js";
 import {
   parseAllowedTools,
+  parseDisallowedTools,
   parseToolConfiguration,
   validateAllowedToolReferences,
 } from "../src/tools/schema.js";
 
 const PINNED_IMAGE = `docker.io/library/node@sha256:${"a".repeat(64)}`;
 
-function policy(overrides: Partial<SecurityPolicy["capabilities"]> = {}): SecurityPolicy {
+function policy(
+  overrides: Partial<SecurityPolicy["capabilities"]> = {},
+  trust: SecurityPolicy["trust"] = "trusted-write",
+): SecurityPolicy {
   return {
-    trust: "trusted-write",
+    trust,
     allowed: true,
     reason: "test",
     capabilities: {
@@ -90,6 +94,89 @@ describe("maintainer-defined command tools", () => {
     );
     expect(effective.workspace).not.toContain("workspace.edit");
     expect(effective.commands.map(({ name }) => name)).toEqual(["read"]);
+    expect(effective.permissionDenials).toEqual(
+      expect.arrayContaining([
+        {
+          id: "workspace.edit",
+          reason: "Workspace editing requires trusted-write policy with Docker isolation",
+        },
+        {
+          id: "command.write",
+          reason:
+            "The Controller trust policy denied this command's execution, write, or network grant",
+        },
+        {
+          id: "command.network",
+          reason:
+            "The Controller trust policy denied this command's execution, write, or network grant",
+        },
+      ]),
+    );
+  });
+
+  it("lets explicit deny remove a standard-profile tool before manifest creation", () => {
+    const effective = resolveEffectiveTools(
+      [],
+      parseToolConfiguration('{"schemaVersion":1,"commands":[]}'),
+      policy(),
+      {
+        permissionProfile: "standard",
+        disallowedTools: parseDisallowedTools('["native.bash"]'),
+      },
+    );
+
+    expect(effective.native).toEqual([
+      "workspace.read",
+      "workspace.search",
+      "workspace.edit",
+      "native.web-search",
+      "native.subagent",
+    ]);
+    expect(effective.manifests.map(({ id }) => id)).not.toContain("native.bash");
+    expect(effective.permissionDenials).toContainEqual({
+      id: "native.bash",
+      reason: "Explicit disallowed-tools entry; deny always wins",
+    });
+  });
+
+  it("downgrades standard through Controller policy and explains every removed capability", () => {
+    const effective = resolveEffectiveTools(
+      [],
+      parseToolConfiguration('{"schemaVersion":1,"commands":[]}'),
+      policy(
+        {
+          executeRepositoryCode: false,
+          accessNetwork: false,
+          modifyWorkspace: false,
+          commit: false,
+          push: false,
+        },
+        "trusted-read",
+      ),
+      { permissionProfile: "standard" },
+    );
+
+    expect(effective.native).toEqual(["workspace.read", "workspace.search"]);
+    expect(effective.permissionDenials).toEqual(
+      expect.arrayContaining([
+        {
+          id: "workspace.edit",
+          reason: "Workspace editing requires trusted-write policy with Docker isolation",
+        },
+        {
+          id: "native.bash",
+          reason: "Bash requires trusted-write repository-code execution in Docker",
+        },
+        {
+          id: "native.web-search",
+          reason: "Web search requires a trusted same-repository actor and Docker",
+        },
+        {
+          id: "native.subagent",
+          reason: "Subagent delegation requires trusted-write policy in Docker",
+        },
+      ]),
+    );
   });
 
   it("runs exact argv in a named read-only container and force-cleans timeouts", async () => {
