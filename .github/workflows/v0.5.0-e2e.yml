@@ -1,0 +1,665 @@
+# Disposable release harness. This workflow exists only on the stacked E2E PR
+# and must never be merged into the product branch or main.
+name: v0.5.0 core real E2E
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [agent/v0.5.0-agent-freedom]
+
+permissions: {}
+
+concurrency:
+  group: v0.5-e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  core:
+    if: >-
+      github.event.label.name == 'v0.5-e2e-bb8988e' &&
+      github.repository_id == '1333633428' &&
+      github.event.sender.id == 223438451 &&
+      github.event.pull_request.user.id == 223438451 &&
+      github.event.pull_request.head.repo.id == 1333633428 &&
+      github.event.pull_request.base.repo.id == 1333633428 &&
+      github.event.pull_request.head.ref == 'e2e/v0.5.0-pr22-bb8988e' &&
+      github.event.pull_request.base.ref == 'agent/v0.5.0-agent-freedom' &&
+      github.event.pull_request.base.sha == 'bb8988e1945a60439073d63c5abba25870cd3004' &&
+      github.head_ref == 'e2e/v0.5.0-pr22-bb8988e' &&
+      github.base_ref == 'agent/v0.5.0-agent-freedom'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check out the disposable E2E branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Assert immutable product candidate and disposable-only diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate=bb8988e1945a60439073d63c5abba25870cd3004
+          test "$(git rev-parse HEAD^)" = "$candidate"
+          git diff --name-only "$candidate"...HEAD | sort > "$RUNNER_TEMP/e2e-paths.actual"
+          cat > "$RUNNER_TEMP/e2e-paths.expected" <<'EOF'
+          .github/workflows/v0.5.0-e2e.yml
+          e2e-trusted-write.txt
+          e2e-validation-failure.txt
+          test/e2e/mcp-http-server.mjs
+          EOF
+          sort -o "$RUNNER_TEMP/e2e-paths.expected" "$RUNNER_TEMP/e2e-paths.expected"
+          diff -u "$RUNNER_TEMP/e2e-paths.expected" "$RUNNER_TEMP/e2e-paths.actual"
+          test "$(git rev-parse "$candidate:dist/index.js")" = "$(git rev-parse 'HEAD:dist/index.js')"
+          test -n "$DEEPSEEK_API_KEY"
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: Set up Node for the MCP fixture
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install the fixture's locked SDK dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run strict basic task
+        id: strict
+        uses: Lixiaoyiao/deepseek-harness-action@bb8988e1945a60439073d63c5abba25870cd3004
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: read
+          allow-write: "false"
+          permission-profile: strict
+          progress-comment: "false"
+          max-turns: "3"
+          timeout-minutes: "25"
+          prompt: >-
+            Inspect README.md with the approved workspace tools. Finish successfully and include
+            the exact marker DSH_V050_STRICT_OK in the final summary. Do not modify any file.
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert strict permission UX and task result
+        shell: bash
+        env:
+          CONCLUSION: ${{ steps.strict.outputs.conclusion }}
+          OPERATION: ${{ steps.strict.outputs.operation }}
+          TRUST: ${{ steps.strict.outputs.trust }}
+          PERMISSION_PROFILE: ${{ steps.strict.outputs.permission-profile }}
+          EFFECTIVE_TOOLS: ${{ steps.strict.outputs.effective-tools }}
+          NETWORK_ACCESS: ${{ steps.strict.outputs.network-access }}
+          WORKSPACE_WRITE: ${{ steps.strict.outputs.workspace-write }}
+          TRUSTED_EXTENSIONS: ${{ steps.strict.outputs.trusted-extensions }}
+          RESULT_JSON: ${{ steps.strict.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          test "$CONCLUSION" = success
+          test "$OPERATION" = task
+          test "$TRUST" = trusted-read
+          test "$PERMISSION_PROFILE" = strict
+          test "$NETWORK_ACCESS" = host-gateway
+          test "$WORKSPACE_WRITE" = false
+          jq -e 'sort == ["workspace.read", "workspace.search"]' <<<"$EFFECTIVE_TOOLS"
+          jq -e 'length == 0' <<<"$TRUSTED_EXTENSIONS"
+          jq -e '
+            .status == "success" and
+            .operation == "task" and
+            .policy.trust == "trusted-read" and
+            .policy.allowed == true and
+            .permissions.profile == "strict" and
+            .permissions.network == "host-gateway" and
+            .permissions.workspaceWrite == false and
+            (.permissions.effectiveTools | sort) == ["workspace.read", "workspace.search"] and
+            any(.permissions.deniedTools[]; .id == "workspace.edit") and
+            .permissions.trustedExtensions == [] and
+            .isolation.backend == "docker" and
+            .loop.turns >= 1 and
+            (.summary | contains("DSH_V050_STRICT_OK"))
+          ' <<<"$RESULT_JSON"
+
+      - name: Start the Streamable HTTP MCP fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/mcp-calls.jsonl"
+          MCP_AUDIT_PATH="$RUNNER_TEMP/mcp-calls.jsonl" MCP_PORT=32123             node test/e2e/mcp-http-server.mjs > "$RUNNER_TEMP/mcp-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/mcp-server.pid"
+          for attempt in {1..30}; do
+            if node -e "fetch('http://127.0.0.1:32123/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/mcp-server.log"
+          exit 1
+
+      - name: Run custom MCP allow and explicit deny
+        id: mcp
+        uses: Lixiaoyiao/deepseek-harness-action@bb8988e1945a60439073d63c5abba25870cd3004
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: read
+          allow-write: "false"
+          permission-profile: custom
+          progress-comment: "false"
+          max-turns: "3"
+          timeout-minutes: "25"
+          prompt: >-
+            Call the approved MCP echo tool exactly once with marker DSH_V050_MCP_OK, then finish
+            successfully and include its returned marker in the final summary. The hidden MCP tool
+            is explicitly denied and must remain unavailable; do not request it.
+          allowed-tools: '["mcp.release-e2e.echo","mcp.release-e2e.hidden"]'
+          disallowed-tools: '["mcp.release-e2e.hidden"]'
+          mcp-config: |
+            {
+              "schemaVersion": 1,
+              "servers": [{
+                "id": "release-e2e",
+                "transport": "streamable-http",
+                "url": "http://host.docker.internal:32123/mcp",
+                "headers": {"X-DSH-E2E": "v0.5.0-public-fixture"},
+                "network": true,
+                "maxCalls": 2,
+                "reconnect": {"enabled": false},
+                "tools": [
+                  {
+                    "id": "echo",
+                    "name": "echo",
+                    "description": "Return the controlled v0.5 release marker; call exactly once",
+                    "permissions": ["read", "network"],
+                    "timeoutMs": 5000,
+                    "maxOutputBytes": 4096,
+                    "maxCalls": 1
+                  },
+                  {
+                    "id": "hidden",
+                    "name": "hidden",
+                    "description": "Configured but explicitly Controller-denied",
+                    "permissions": ["read", "network"],
+                    "timeoutMs": 5000,
+                    "maxOutputBytes": 4096,
+                    "maxCalls": 1
+                  }
+                ]
+              }]
+            }
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert custom allow deny and MCP regression
+        shell: bash
+        env:
+          CONCLUSION: ${{ steps.mcp.outputs.conclusion }}
+          PERMISSION_PROFILE: ${{ steps.mcp.outputs.permission-profile }}
+          EFFECTIVE_TOOLS: ${{ steps.mcp.outputs.effective-tools }}
+          NETWORK_ACCESS: ${{ steps.mcp.outputs.network-access }}
+          WORKSPACE_WRITE: ${{ steps.mcp.outputs.workspace-write }}
+          PROFILE_DIGEST: ${{ steps.mcp.outputs.extension-profile-digest }}
+          TRUSTED_EXTENSIONS: ${{ steps.mcp.outputs.trusted-extensions }}
+          RESULT_JSON: ${{ steps.mcp.outputs.result-json }}
+          TOOL_RECEIPTS: ${{ steps.mcp.outputs.tool-receipts }}
+        run: |
+          set -euo pipefail
+          test "$CONCLUSION" = success
+          test "$PERMISSION_PROFILE" = custom
+          test "$NETWORK_ACCESS" = bridge
+          test "$WORKSPACE_WRITE" = false
+          [[ "$PROFILE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          jq -e '. == ["mcp.release-e2e.echo"]' <<<"$EFFECTIVE_TOOLS"
+          jq -e '
+            length == 1 and
+            .[0].id == "release-e2e" and
+            .[0].kind == "mcp" and
+            .[0].network == true and
+            .[0].workspaceWrite == false
+          ' <<<"$TRUSTED_EXTENSIONS"
+          jq -e --arg digest "$PROFILE_DIGEST" '
+            .status == "success" and
+            .permissions.profile == "custom" and
+            .permissions.requestedTools == ["mcp.release-e2e.echo", "mcp.release-e2e.hidden"] and
+            .permissions.disallowedTools == ["mcp.release-e2e.hidden"] and
+            .permissions.effectiveTools == ["mcp.release-e2e.echo"] and
+            .permissions.network == "bridge" and
+            .permissions.workspaceWrite == false and
+            .permissions.extensionDigest == $digest and
+            any(.permissions.deniedTools[];
+              .id == "mcp.release-e2e.hidden" and
+              (.reason | contains("Explicit disallowed-tools entry"))
+            ) and
+            .extensions.digest == $digest and
+            any(.extensions.entries[];
+              .kind == "mcp" and .id == "release-e2e" and .transport == "streamable-http"
+            ) and
+            (.summary | contains("MCP_ECHO_OK:DSH_V050_MCP_OK"))
+          ' <<<"$RESULT_JSON"
+          jq -e '
+            .truncated == false and
+            any(.dsh[];
+              .id == "mcp.release-e2e.echo" and
+              .runtimeName == "mcp__release-e2e__echo" and
+              .provider == "mcp" and
+              .counted == true and
+              .completed == true and
+              .ok == true
+            ) and
+            all(.dsh[]; .id != "mcp.release-e2e.hidden")
+          ' <<<"$TOOL_RECEIPTS"
+          test "$(jq -r 'select(.tool == "echo") | .tool' "$RUNNER_TEMP/mcp-calls.jsonl" | wc -l)" -eq 1
+          test "$(jq -r 'select(.tool == "hidden") | .tool' "$RUNNER_TEMP/mcp-calls.jsonl" | wc -l)" -eq 0
+          jq -e '
+            select(
+              .tool == "echo" and
+              .argument == "DSH_V050_MCP_OK" and
+              .marker == "v0.5.0-public-fixture"
+            )
+          ' "$RUNNER_TEMP/mcp-calls.jsonl"
+
+      - name: Stop the MCP fixture
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if test -f "$RUNNER_TEMP/mcp-server.pid"; then
+            kill "$(cat "$RUNNER_TEMP/mcp-server.pid")" 2>/dev/null || true
+          fi
+          tail -n 50 "$RUNNER_TEMP/mcp-server.log" 2>/dev/null || true
+
+      - name: Snapshot GitHub state before Controller validation gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha > "$RUNNER_TEMP/pre-head"
+          gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha > "$RUNNER_TEMP/pre-main"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -S '[.[] | {id, updated_at, body}]' > "$RUNNER_TEMP/pre-comments.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"             | jq -S '[.[] | {number, state, head: .head.sha, base: .base.ref}]' > "$RUNNER_TEMP/pre-pulls.json"
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/dsh/"             | jq -S '[.[] | {ref, sha: .object.sha}]' > "$RUNNER_TEMP/pre-dsh-refs.json"
+          test "$(cat "$RUNNER_TEMP/pre-head")" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Trigger strict Validation Integrity
+        id: integrity
+        continue-on-error: true
+        uses: Lixiaoyiao/deepseek-harness-action@bb8988e1945a60439073d63c5abba25870cd3004
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: write
+          allow-write: "true"
+          permission-profile: strict
+          validation-integrity: strict
+          progress-comment: "false"
+          max-turns: "1"
+          timeout-minutes: "25"
+          prompt: >-
+            Edit only package.json. Change only scripts.test from vitest run to true, preserve the
+            rest of the JSON and the final newline, then return state final. Do not edit any other
+            path. This validation weakening is intentional so the Controller must block it.
+          run-tests: "true"
+          test-commands: '[["npm","test"]]'
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert Validation Integrity blocked the weakening without mutation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          STEP_OUTCOME: ${{ steps.integrity.outcome }}
+          CONCLUSION: ${{ steps.integrity.outputs.conclusion }}
+          ERROR_CODE: ${{ steps.integrity.outputs.error-code }}
+          COMMENT_ID: ${{ steps.integrity.outputs.comment-id }}
+          COMMIT_SHA: ${{ steps.integrity.outputs.commit-sha }}
+          BRANCH_NAME: ${{ steps.integrity.outputs.branch-name }}
+          PULL_REQUEST_URL: ${{ steps.integrity.outputs.pull-request-url }}
+          RESULT_JSON: ${{ steps.integrity.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          test "$STEP_OUTCOME" = failure
+          test "$CONCLUSION" = failure
+          test "$ERROR_CODE" = VALIDATION_INTEGRITY
+          test -z "$COMMENT_ID"
+          test -z "$COMMIT_SHA"
+          test -z "$BRANCH_NAME"
+          test -z "$PULL_REQUEST_URL"
+          jq -e '
+            .status == "validation_failed" and
+            .operation == "task" and
+            .policy.trust == "trusted-write" and
+            .permissions.profile == "strict" and
+            .permissions.workspaceWrite == true and
+            .error.code == "VALIDATION_INTEGRITY" and
+            .error.phase == "validation" and
+            .validation.status == "failed" and
+            .validation.commandCount == 1 and
+            .validation.integrity.mode == "strict" and
+            .validation.integrity.status == "blocked" and
+            .validation.integrity.dangerousChangeCount >= 1 and
+            any(.validation.integrity.changes[];
+              .path == "package.json" and
+              .category == "entrypoint" and
+              .risk == "dangerous" and
+              .controlPlane == true
+            ) and
+            .loop.validationRetries == 1 and
+            (.write == null)
+          ' <<<"$RESULT_JSON"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$(cat "$RUNNER_TEMP/pre-head")"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$(cat "$RUNNER_TEMP/pre-main")"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -S '[.[] | {id, updated_at, body}]' > "$RUNNER_TEMP/post-integrity-comments.json"
+          cmp "$RUNNER_TEMP/pre-comments.json" "$RUNNER_TEMP/post-integrity-comments.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"             | jq -S '[.[] | {number, state, head: .head.sha, base: .base.ref}]' > "$RUNNER_TEMP/post-integrity-pulls.json"
+          cmp "$RUNNER_TEMP/pre-pulls.json" "$RUNNER_TEMP/post-integrity-pulls.json"
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/dsh/"             | jq -S '[.[] | {ref, sha: .object.sha}]' > "$RUNNER_TEMP/post-integrity-dsh-refs.json"
+          cmp "$RUNNER_TEMP/pre-dsh-refs.json" "$RUNNER_TEMP/post-integrity-dsh-refs.json"
+
+      - name: Restore the locally rejected integrity change
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = package.json
+          git restore --source=HEAD --worktree -- package.json
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Make a change whose ordinary validation must fail
+        id: validation_failure
+        continue-on-error: true
+        uses: Lixiaoyiao/deepseek-harness-action@bb8988e1945a60439073d63c5abba25870cd3004
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: write
+          allow-write: "true"
+          permission-profile: strict
+          validation-integrity: strict
+          progress-comment: "false"
+          max-turns: "1"
+          timeout-minutes: "25"
+          prompt: >-
+            Edit only e2e-validation-failure.txt. Replace phase=pending with
+            phase=must-not-publish, preserve the final newline, and return state final. Do not
+            edit any other path. The Controller validation failure is intentional.
+          run-tests: "true"
+          test-commands: '[["node","-e","console.error("DSH_E2E_EXPECTED_VALIDATION_FAILURE");process.exit(23)"]]'
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert validation failure made no GitHub mutation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          STEP_OUTCOME: ${{ steps.validation_failure.outcome }}
+          CONCLUSION: ${{ steps.validation_failure.outputs.conclusion }}
+          ERROR_CODE: ${{ steps.validation_failure.outputs.error-code }}
+          COMMENT_ID: ${{ steps.validation_failure.outputs.comment-id }}
+          COMMIT_SHA: ${{ steps.validation_failure.outputs.commit-sha }}
+          BRANCH_NAME: ${{ steps.validation_failure.outputs.branch-name }}
+          PULL_REQUEST_URL: ${{ steps.validation_failure.outputs.pull-request-url }}
+          RESULT_JSON: ${{ steps.validation_failure.outputs.result-json }}
+        run: |
+          set -euo pipefail
+          test "$STEP_OUTCOME" = failure
+          test "$CONCLUSION" = failure
+          test "$ERROR_CODE" = VALIDATION_FAILED
+          test -z "$COMMENT_ID"
+          test -z "$COMMIT_SHA"
+          test -z "$BRANCH_NAME"
+          test -z "$PULL_REQUEST_URL"
+          jq -e '
+            .status == "validation_failed" and
+            .operation == "task" and
+            .policy.trust == "trusted-write" and
+            .permissions.profile == "strict" and
+            .error.code == "VALIDATION_FAILED" and
+            .error.phase == "validation" and
+            .validation.status == "failed" and
+            .validation.commandCount == 1 and
+            .validation.integrity.mode == "strict" and
+            .validation.integrity.status == "clean" and
+            .loop.validationRetries == 1 and
+            (.write == null)
+          ' <<<"$RESULT_JSON"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$(cat "$RUNNER_TEMP/pre-head")"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$(cat "$RUNNER_TEMP/pre-main")"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -S '[.[] | {id, updated_at, body}]' > "$RUNNER_TEMP/post-comments.json"
+          cmp "$RUNNER_TEMP/pre-comments.json" "$RUNNER_TEMP/post-comments.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"             | jq -S '[.[] | {number, state, head: .head.sha, base: .base.ref}]' > "$RUNNER_TEMP/post-pulls.json"
+          cmp "$RUNNER_TEMP/pre-pulls.json" "$RUNNER_TEMP/post-pulls.json"
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/dsh/"             | jq -S '[.[] | {ref, sha: .object.sha}]' > "$RUNNER_TEMP/post-dsh-refs.json"
+          cmp "$RUNNER_TEMP/pre-dsh-refs.json" "$RUNNER_TEMP/post-dsh-refs.json"
+          remote_value="$(gh api "repos/$GITHUB_REPOSITORY/contents/e2e-validation-failure.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)"
+          test "$remote_value" = phase=pending
+
+      - name: Restore the locally rejected validation change
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = e2e-validation-failure.txt
+          git restore --source=HEAD --worktree -- e2e-validation-failure.txt
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Run standard Bash trusted-write with successful validation
+        id: trusted_write
+        uses: Lixiaoyiao/deepseek-harness-action@bb8988e1945a60439073d63c5abba25870cd3004
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: write
+          allow-write: "true"
+          permission-profile: standard
+          disallowed-tools: '["workspace.edit","native.web-search","native.subagent"]'
+          validation-integrity: strict
+          progress-comment: "false"
+          max-turns: "3"
+          timeout-minutes: "25"
+          prompt: >-
+            You must call the native Bash tool exactly once. In that Bash call, run exactly the
+            command printf 'phase=published\n' > e2e-trusted-write.txt to replace the fixture
+            content while preserving its final newline. Do not call any other tool and do not edit
+            any other path. After the Bash result succeeds, return state final.
+          run-tests: "true"
+          test-commands: >-
+            [["node","-e","const fs=require('node:fs');const v=fs.readFileSync('e2e-trusted-write.txt','utf8');if(v!=='phase=published'+String.fromCharCode(10)){console.error(JSON.stringify(v));process.exit(31)}"]]
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert standard Bash and trusted-write publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CONCLUSION: ${{ steps.trusted_write.outputs.conclusion }}
+          OPERATION: ${{ steps.trusted_write.outputs.operation }}
+          TRUST: ${{ steps.trusted_write.outputs.trust }}
+          PERMISSION_PROFILE: ${{ steps.trusted_write.outputs.permission-profile }}
+          EFFECTIVE_TOOLS: ${{ steps.trusted_write.outputs.effective-tools }}
+          NETWORK_ACCESS: ${{ steps.trusted_write.outputs.network-access }}
+          WORKSPACE_WRITE: ${{ steps.trusted_write.outputs.workspace-write }}
+          TRUSTED_EXTENSIONS: ${{ steps.trusted_write.outputs.trusted-extensions }}
+          COMMENT_ID: ${{ steps.trusted_write.outputs.comment-id }}
+          COMMIT_SHA: ${{ steps.trusted_write.outputs.commit-sha }}
+          RESULT_JSON: ${{ steps.trusted_write.outputs.result-json }}
+          TOOL_RECEIPTS: ${{ steps.trusted_write.outputs.tool-receipts }}
+        run: |
+          set -euo pipefail
+          test "$CONCLUSION" = success
+          test "$OPERATION" = task
+          test "$TRUST" = trusted-write
+          test "$PERMISSION_PROFILE" = standard
+          test "$NETWORK_ACCESS" = host-gateway
+          test "$WORKSPACE_WRITE" = true
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMMENT_ID" =~ ^[0-9]+$ ]]
+          jq -e '
+            sort == ["native.bash", "workspace.read", "workspace.search"]
+          ' <<<"$EFFECTIVE_TOOLS"
+          jq -e 'length == 0' <<<"$TRUSTED_EXTENSIONS"
+          jq -e --arg commit "$COMMIT_SHA" '
+            .status == "success" and
+            .operation == "task" and
+            .policy.trust == "trusted-write" and
+            .permissions.profile == "standard" and
+            .permissions.network == "host-gateway" and
+            .permissions.workspaceWrite == true and
+            (.permissions.effectiveTools | sort) ==
+              ["native.bash", "workspace.read", "workspace.search"] and
+            all(.permissions.deniedTools[];
+              if (.id == "workspace.edit" or .id == "native.web-search" or .id == "native.subagent")
+              then (.reason | contains("Explicit disallowed-tools entry"))
+              else true
+              end
+            ) and
+            .permissions.trustedExtensions == [] and
+            .validation.status == "passed" and
+            .validation.commandCount == 1 and
+            .validation.integrity.mode == "strict" and
+            .validation.integrity.status == "clean" and
+            .write.status == "success" and
+            .write.commitSha == $commit and
+            .write.changedPaths == ["e2e-trusted-write.txt"]
+          ' <<<"$RESULT_JSON"
+          jq -e '
+            .truncated == false and
+            ([.dsh[] | select(
+              .id == "native.bash" and
+              .runtimeName == "bash" and
+              .provider == "builtin" and
+              .counted == true and
+              .completed == true and
+              .ok == true
+            )] | length) == 1
+          ' <<<"$TOOL_RECEIPTS"
+
+          observed_head=""
+          for attempt in {1..30}; do
+            observed_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || true)"
+            test "$observed_head" = "$COMMIT_SHA" && break
+            sleep 2
+          done
+          test "$observed_head" = "$COMMIT_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT_SHA" --jq '.parents | length')" -eq 1
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT_SHA" --jq '.parents[0].sha')" = "$(cat "$RUNNER_TEMP/pre-head")"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$(cat "$RUNNER_TEMP/pre-main")"
+          remote_value="$(gh api "repos/$GITHUB_REPOSITORY/contents/e2e-trusted-write.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)"
+          test "$remote_value" = phase=published
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments/$COMMENT_ID"             --jq '.body | contains("<!-- dsh-action:v1 kind=task -->") and contains("Configured validation passed.")'             | grep -qx true
+
+  release_smoke:
+    if: >-
+      github.event.label.name == 'v0.5-release-smoke' &&
+      github.repository_id == '1333633428' &&
+      github.event.sender.id == 223438451 &&
+      github.event.pull_request.user.id == 223438451 &&
+      github.event.pull_request.head.repo.id == 1333633428 &&
+      github.event.pull_request.base.repo.id == 1333633428 &&
+      github.event.pull_request.head.ref == 'e2e/v0.5.0-pr22-bb8988e' &&
+      github.event.pull_request.base.ref == 'agent/v0.5.0-agent-freedom' &&
+      github.event.pull_request.base.sha == 'bb8988e1945a60439073d63c5abba25870cd3004' &&
+      github.head_ref == 'e2e/v0.5.0-pr22-bb8988e' &&
+      github.base_ref == 'agent/v0.5.0-agent-freedom'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check out release smoke harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Assert formal tag and release target current main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidate=bb8988e1945a60439073d63c5abba25870cd3004
+          git merge-base --is-ancestor "$candidate" HEAD
+          test "$(git rev-parse "$candidate:dist/index.js")" = "$(git rev-parse 'HEAD:dist/index.js')"
+          tag_type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.5.0" --jq .object.type)"
+          tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.5.0" --jq .object.sha)"
+          if test "$tag_type" = tag; then
+            tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)"
+          else
+            test "$tag_type" = commit
+            tag_commit="$tag_object"
+          fi
+          main_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$tag_commit" = "$main_commit"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.5.0"             --jq '.tag_name == "v0.5.0" and .draft == false and .prerelease == false'             | grep -qx true
+
+      - name: Run formal-tag DeepSeek web-search smoke
+        id: release_smoke
+        uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: read
+          allow-write: "false"
+          permission-profile: standard
+          disallowed-tools: '["workspace.edit","native.bash","native.subagent"]'
+          progress-comment: "false"
+          max-turns: "3"
+          timeout-minutes: "25"
+          prompt: >-
+            Call the Controller-mediated web search tool exactly once for DeepSeek Harness v0.5.0.
+            After observing the result, finish successfully and include the exact marker
+            DSH_V050_RELEASE_SMOKE_OK in the final summary. Do not call another tool or modify files.
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+
+      - name: Assert formal-tag Action and core new tool
+        shell: bash
+        env:
+          CONCLUSION: ${{ steps.release_smoke.outputs.conclusion }}
+          TRUST: ${{ steps.release_smoke.outputs.trust }}
+          PERMISSION_PROFILE: ${{ steps.release_smoke.outputs.permission-profile }}
+          EFFECTIVE_TOOLS: ${{ steps.release_smoke.outputs.effective-tools }}
+          NETWORK_ACCESS: ${{ steps.release_smoke.outputs.network-access }}
+          WORKSPACE_WRITE: ${{ steps.release_smoke.outputs.workspace-write }}
+          RESULT_JSON: ${{ steps.release_smoke.outputs.result-json }}
+          TOOL_RECEIPTS: ${{ steps.release_smoke.outputs.tool-receipts }}
+        run: |
+          set -euo pipefail
+          test "$CONCLUSION" = success
+          test "$TRUST" = trusted-read
+          test "$PERMISSION_PROFILE" = standard
+          test "$NETWORK_ACCESS" = mediated-web
+          test "$WORKSPACE_WRITE" = false
+          jq -e '
+            sort == ["native.web-search", "workspace.read", "workspace.search"]
+          ' <<<"$EFFECTIVE_TOOLS"
+          jq -e '
+            .status == "success" and
+            .policy.trust == "trusted-read" and
+            .permissions.profile == "standard" and
+            .permissions.network == "mediated-web" and
+            .permissions.workspaceWrite == false and
+            (.summary | contains("DSH_V050_RELEASE_SMOKE_OK"))
+          ' <<<"$RESULT_JSON"
+          jq -e '
+            .truncated == false and
+            ([.dsh[] | select(
+              .id == "native.web-search" and
+              .runtimeName == "web_search" and
+              .provider == "builtin" and
+              .counted == true and
+              .completed == true and
+              .ok == true
+            )] | length) == 1
+          ' <<<"$TOOL_RECEIPTS"
