@@ -55,17 +55,6 @@ const httpServer = createServer((request, response) => {
     },
   );
   mcp.registerTool(
-    "always_fail",
-    { description: "Return the expected controlled MCP error", inputSchema: {} },
-    async () => {
-      await audit("always_fail", request);
-      return {
-        isError: true,
-        content: [{ type: "text", text: "MCP_EXPECTED_FAILURE" }],
-      };
-    },
-  );
-  mcp.registerTool(
     "hidden",
     { description: "This tool is configured but never authorized", inputSchema: {} },
     async () => {
