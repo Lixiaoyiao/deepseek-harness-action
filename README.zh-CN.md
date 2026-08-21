@@ -68,7 +68,7 @@ jobs:
 
 完整模板见 [`examples/fork-review.yml`](examples/fork-review.yml)。这个 workflow 使用 `pull_request_target`，只 checkout 受信任的 base SHA，不会运行 fork 里的代码。
 
-> v0.4.0 正在开发。在它正式发布前，上面的兼容性 Quick start 继续固定到不可变的 v0.3.0 runtime commit。生产环境中的 v0.4 扩展 workflow 应固定到发布后的 v0.4.0 commit SHA，而不是浮动分支或 Tag。开发说明见 [`CHANGELOG.md`](CHANGELOG.md)。
+> v0.4.0 已发布。上面的兼容性 Quick start 有意继续固定到不可变的 v0.3.0 runtime commit。若要使用受控 MCP 或 Plugin/Profile 扩展，请从 [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) 开始，并在生产使用前把其中的 release Tag 替换为 v0.4.0 Release 对应的不可变 commit SHA。发布说明见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 能做什么
 

@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-08-21
 
 ### Added
 
@@ -307,7 +307,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
-[0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.1.0

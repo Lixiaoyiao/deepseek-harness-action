@@ -68,7 +68,7 @@ Open a non-draft pull request. The action reads the diff and repository context,
 
 See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
-> v0.4.0 is under development. Until it is released, the compatibility Quick start above remains pinned to the immutable v0.3.0 runtime commit. A production v0.4 extension workflow should pin the published v0.4.0 commit SHA, not a moving branch or tag. See [`CHANGELOG.md`](CHANGELOG.md) for the development notes.
+> v0.4.0 is released. The compatibility Quick start above intentionally remains pinned to the immutable v0.3.0 runtime commit. To use controlled MCP or Plugin/Profile extensions, start from [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) and replace its release tag with the immutable commit SHA from the v0.4.0 release before production use. See [`CHANGELOG.md`](CHANGELOG.md) for the release notes.
 
 ## What it does
 
