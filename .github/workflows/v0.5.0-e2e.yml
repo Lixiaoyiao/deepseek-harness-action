@@ -617,8 +617,14 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$(cat "$RUNNER_TEMP/pre-main")"
           remote_value="$(gh api "repos/$GITHUB_REPOSITORY/contents/e2e-trusted-write.txt?ref=${{ github.head_ref }}" --jq .content | tr -d '\n' | base64 --decode)"
           test "$remote_value" = phase=published
-          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -S '[.[] | select(.body | contains("<!-- dsh-action:v1 kind=task -->")) | {id, updated_at, body}]' > "$RUNNER_TEMP/post-write-comments.json"
-          cmp "$RUNNER_TEMP/pre-comments.json" "$RUNNER_TEMP/post-write-comments.json"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"             | jq -e --arg commit "$COMMIT_SHA" --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '
+              ([.[] | select(
+                (.body | contains("<!-- dsh-action:v1 kind=task -->")) and
+                (.body | contains("Configured validation passed.")) and
+                (.body | contains($commit)) and
+                (.body | contains($run))
+              )] | length) == 1
+            '
 
   release_smoke:
     if: >-
