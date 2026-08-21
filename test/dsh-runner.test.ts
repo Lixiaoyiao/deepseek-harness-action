@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,7 @@ import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensio
 
 const temporaryPaths: string[] = [];
 const PINNED_NODE_IMAGE = `node@sha256:${"a".repeat(64)}`;
+const CONTAINER_PACKAGE_ROOT = "/opt/dsh-action/package";
 const CONTAINER_LAUNCHER = "/opt/dsh-action/package/action-launcher.mjs";
 
 afterEach(async () => {
@@ -834,6 +835,7 @@ describe("runDsh", () => {
     const fixture = await fixtures();
     const proxy = fakeProxy();
     let captured: DshProcessSpec | undefined;
+    let copiedLauncher: string | undefined;
     const observedSpecs: DshProcessSpec[] = [];
     const result = await runDsh(
       request({
@@ -851,7 +853,7 @@ describe("runDsh", () => {
           expect(options.workerHost).toBe("172.30.0.1");
           return Promise.resolve(proxy);
         },
-        executeProcess: (spec) => {
+        executeProcess: async (spec) => {
           observedSpecs.push(spec);
           if (spec.args[1] === "inspect") {
             return Promise.resolve({
@@ -865,6 +867,17 @@ describe("runDsh", () => {
             return Promise.resolve({ stdout: "", stderr: "", exitCode: 0, signal: null });
           }
           captured = spec;
+          const packageMount = spec.args.find((argument) =>
+            argument.endsWith(`:${CONTAINER_PACKAGE_ROOT}:ro`),
+          );
+          if (packageMount === undefined) throw new Error("missing package-root mount");
+          copiedLauncher = await readFile(
+            join(
+              packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
+              "action-launcher.mjs",
+            ),
+            "utf8",
+          );
           return Promise.resolve({
             stdout: JSON.stringify({
               protocolVersion: 1,
@@ -920,9 +933,10 @@ describe("runDsh", () => {
     expect(captured?.args).toContain(
       `${join(fixture.assets, "action-workspace.mjs")}:/opt/dsh-action/action-workspace.mjs:ro`,
     );
-    expect(captured?.args).toContain(
+    expect(captured?.args).not.toContain(
       `${join(fixture.assets, "action-launcher.mjs")}:${CONTAINER_LAUNCHER}:ro`,
     );
+    expect(copiedLauncher).toBe("export default async function main() {}\n");
     expect(captured?.args.some((argument) => argument.endsWith(":/dsh-home:ro"))).toBe(true);
     expect(captured?.args.some((argument) => argument.endsWith(":/dsh-home/action-state:rw"))).toBe(
       true,
@@ -1026,12 +1040,13 @@ describe("runDsh", () => {
     await writeFile(join(callerAssets, "action-launcher.mjs"), "malicious caller launcher\n");
     vi.spyOn(process, "cwd").mockReturnValue(callerWorkspace);
     let captured: DshProcessSpec | undefined;
+    let copiedLauncher: string | undefined;
 
     await runDsh(request({ isolation: "docker", workspacePath: fixture.workspace }), {
       temporaryDirectory: fixture.root,
       environment: { PATH: process.env.PATH, GITHUB_ACTION_PATH: callerWorkspace },
       startProxy: () => Promise.resolve(proxy),
-      executeProcess: (spec) => {
+      executeProcess: async (spec) => {
         if (spec.args[1] === "inspect") {
           return Promise.resolve({
             stdout: "172.30.0.1\n",
@@ -1041,7 +1056,20 @@ describe("runDsh", () => {
           });
         }
         const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
-        if (isDsh) captured = spec;
+        if (isDsh) {
+          captured = spec;
+          const packageMount = spec.args.find((argument) =>
+            argument.endsWith(`:${CONTAINER_PACKAGE_ROOT}:ro`),
+          );
+          if (packageMount === undefined) throw new Error("missing package-root mount");
+          copiedLauncher = await readFile(
+            join(
+              packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
+              "action-launcher.mjs",
+            ),
+            "utf8",
+          );
+        }
         return Promise.resolve({
           stdout: isDsh
             ? JSON.stringify({
@@ -1072,7 +1100,8 @@ describe("runDsh", () => {
     expect(captured?.args).toContain(
       `${packagedWorkspace}:/opt/dsh-action/action-workspace.mjs:ro`,
     );
-    expect(captured?.args).toContain(`${packagedLauncher}:${CONTAINER_LAUNCHER}:ro`);
+    expect(captured?.args).not.toContain(`${packagedLauncher}:${CONTAINER_LAUNCHER}:ro`);
+    await expect(readFile(packagedLauncher, "utf8")).resolves.toBe(copiedLauncher);
     expect(captured?.args.join(" ")).not.toContain(callerWorkspace);
   });
 });

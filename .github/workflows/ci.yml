@@ -28,9 +28,9 @@ jobs:
           set -euo pipefail
           runtime_dir="$(mktemp -d)"
           run_as="$(id -u):$(id -g)"
-          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json || true; rmdir "$runtime_dir" || true; }
+          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json /cleanup/action-launcher.mjs || true; rmdir "$runtime_dir" || true; }
           trap cleanup EXIT
-          cp package.json package-lock.json "$runtime_dir/"
+          cp package.json package-lock.json assets/dsh/action-launcher.mjs "$runtime_dir/"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$run_as" \
             --memory 4g --cpus 2 \
@@ -112,6 +112,13 @@ jobs:
             "/opt/dsh-action/assets/action-launcher.mjs",
             "utf8",
           );
+          const packagedLauncher = await readFile(
+            "/opt/dsh-action/package/action-launcher.mjs",
+            "utf8",
+          );
+          if (packagedLauncher !== launcher) {
+            throw new Error("controlled launcher was not copied into the locked package root");
+          }
           for (const packageName of [
             "@deepseek-ai/dsh-app-boot",
             "@deepseek-ai/dsh-cmdline",

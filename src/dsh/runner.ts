@@ -718,7 +718,6 @@ function dockerSpec(
   workspace: string,
   dshHome: string,
   packageRoot: string,
-  launcherPath: string,
   policyPluginPath: string,
   workspacePluginPath: string,
   networkName: string,
@@ -779,8 +778,6 @@ function dockerSpec(
     `${workspacePluginPath}:${CONTAINER_WORKSPACE_PLUGIN}:ro`,
     "--volume",
     `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:ro`,
-    "--volume",
-    `${launcherPath}:${CONTAINER_LAUNCHER}:ro`,
     "--workdir",
     "/tmp",
   ];
@@ -1608,6 +1605,10 @@ export async function runDsh(
           pluginModuleSpecifiers,
         });
       }
+      // Keep the launcher inside the populated package root so its bare imports
+      // resolve against the locked runtime. A separate child bind mount below
+      // the read-only package bind cannot create its mountpoint under Linux runc.
+      await copyFile(launcherPath, join(packageRoot, basename(CONTAINER_LAUNCHER)));
       if (!extensions.network) {
         internalNetwork = `dsh-action-internal-${randomUUID()}`;
         await executeSetup(dockerNetworkSpec("create", internalNetwork, workspace, environment));
@@ -1651,7 +1652,6 @@ export async function runDsh(
           workspace,
           localDshHome,
           packageRoot,
-          launcherPath,
           policyPluginPath,
           workspacePluginPath,
           internalNetwork ?? "bridge",
