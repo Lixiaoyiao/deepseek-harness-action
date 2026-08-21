@@ -6,6 +6,7 @@ import type {
   ToolProvider,
 } from "../agent/contracts.js";
 import type { SecurityPolicy } from "../security/policy.js";
+import type { EffectiveExtensionPlan } from "../extensions/plan.js";
 import { executeCommandTool } from "./executor.js";
 import {
   commandToolId,
@@ -26,6 +27,7 @@ export interface EffectiveTools {
   readonly workspace: readonly WorkspaceToolId[];
   readonly manifests: readonly AgentToolManifest[];
   readonly commands: readonly CommandToolDefinition[];
+  readonly extensions?: EffectiveExtensionPlan;
 }
 
 export function resolveEffectiveTools(

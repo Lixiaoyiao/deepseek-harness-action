@@ -10,7 +10,7 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     command: "auto",
     taskAccess: "read",
     prompt: "",
-    dshVersion: "0.1.0-rc.6",
+    dshVersion: "0.1.0-rc.8",
     dshExecutable: "",
     isolation: "docker",
     containerImage: "node:24-bookworm",
@@ -22,8 +22,11 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     botUserId: 41898282,
     progressComment: true,
     maxTurns: 3,
+    allowPluginInstall: false,
     allowedTools: ["workspace.read", "workspace.search", "workspace.edit"],
     toolConfig: { schemaVersion: 1, commands: [] },
+    mcpConfig: { schemaVersion: 1, servers: [] },
+    pluginConfig: { schemaVersion: 1, bundles: [], plugins: [] },
     ...overrides,
   };
 }

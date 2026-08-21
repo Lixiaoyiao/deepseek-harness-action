@@ -92,13 +92,6 @@ export interface ToolProvider {
   dispose?(): Promise<void>;
 }
 
-export interface ExtensionProvider {
-  readonly id: string;
-  readonly version: string;
-  readonly source: "builtin" | "mcp" | "plugin";
-  register(providers: readonly ToolProvider[]): Promise<readonly ToolProvider[]>;
-}
-
 export interface SessionStore {
   load(binding: AgentSessionBinding): Promise<AgentSessionHandle | null>;
   save(session: AgentSessionHandle, expectedRevision: number | null): Promise<void>;

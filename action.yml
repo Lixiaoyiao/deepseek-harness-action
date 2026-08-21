@@ -1,5 +1,5 @@
 name: "DeepSeek Harness for GitHub"
-description: "DeepSeek coding tasks, review, diagnosis, repair loops, and safe GitHub automation"
+description: "DeepSeek coding tasks with controlled DSH MCP, Bundle, Profile, and GitHub automation"
 author: "Lixiaoyiao"
 branding:
   icon: "code"
@@ -30,19 +30,19 @@ inputs:
     required: false
     default: ""
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version."
+    description: "Pinned @deepseek-ai/dsh version. v0.4.0 accepts only the audited 0.1.0-rc.8 runtime."
     required: false
-    default: "0.1.0-rc.6"
+    default: "0.1.0-rc.8"
   dsh-executable:
-    description: "Optional absolute path to a preinstalled dsh executable."
+    description: "Trusted capability input. Optional absolute path to a preinstalled DSH executable; host mode executes it without a container boundary."
     required: false
     default: ""
   isolation:
-    description: "DSH isolation backend. 'docker' is required for untrusted review data."
+    description: "Trusted capability input selecting the DSH isolation backend. 'none' removes the OS/container boundary; Docker is required for untrusted review data, writes, and extensions."
     required: false
     default: "docker"
   container-image:
-    description: "Node 24 image used for DSH isolation. Trusted-write requires a full name@sha256 digest; review/diagnose may use a tag."
+    description: "Trusted worker-code input. Every value must be one Docker/OCI image reference and cannot be parsed as a Docker option; extensions and writes require a full name@sha256 digest."
     required: false
     default: "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
   timeout-minutes:
@@ -54,15 +54,15 @@ inputs:
     required: false
     default: "20"
   run-tests:
-    description: "Run trusted validation commands for same-repository write operations."
+    description: "Must be true for every code, Git ref, and pull-request mutation. false denies the mutation and is not a validation waiver."
     required: false
     default: "true"
   test-commands:
-    description: 'JSON array of credential-free argv arrays for trusted validation, e.g. [["npm","test"]]. Controller credentials in argv are rejected.'
+    description: 'Non-empty JSON array of credential-free argv arrays required for every write, e.g. [["npm","test"]]. Every command must pass; Controller credentials in argv are rejected.'
     required: false
     default: "[]"
   base-url:
-    description: "DeepSeek API base URL used by the controller-side proxy."
+    description: "Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content."
     required: false
     default: "https://api.deepseek.com"
   bot-user-id:
@@ -78,13 +78,25 @@ inputs:
     required: false
     default: "3"
   allowed-tools:
-    description: "JSON allowlist of workspace.read, workspace.search, workspace.edit, and configured command.<name> IDs."
+    description: "JSON allowlist of workspace.*, command.<name>, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
     required: false
     default: '["workspace.read","workspace.search","workspace.edit"]'
   tool-config:
     description: "Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv and controller credentials in argv are rejected; common direct shell executables are also denied."
     required: false
     default: '{"schemaVersion":1,"commands":[]}'
+  mcp-config:
+    description: "Versioned maintainer-owned allowlist for official DSH MCP servers and tools. stdio startup executes trusted worker code; both transports require explicit read/workspace-write/network, timeout, output, and invocation limits."
+    required: false
+    default: '{"schemaVersion":1,"servers":[]}'
+  plugin-config:
+    description: "Versioned maintainer-owned DSH Bundle/Plugin allowlist. Startup executes trusted worker code; every package must use an exact semver or a GitHub git+https URL pinned to a 40-character commit."
+    required: false
+    default: '{"schemaVersion":1,"bundles":[],"plugins":[]}'
+  allow-plugin-install:
+    description: "Allow startup of explicitly configured and pinned third-party DSH Bundles/Plugins. Disabled by default because installation and startup execute trusted code."
+    required: false
+    default: "false"
 outputs:
   conclusion:
     description: "success, neutral, or failure"
@@ -112,8 +124,12 @@ outputs:
     description: "Stable failure code, empty on success or neutral completion"
   error-message:
     description: "Redacted and bounded failure message"
+  extension-profile-digest:
+    description: "SHA-256 digest of the redacted controller-generated DSH extension audit profile, empty when unavailable"
+  tool-receipts:
+    description: "JSON object with bounded controller/DSH receipt arrays and truncation metadata; never an authorization input"
   result-json:
-    description: "Versioned JSON envelope containing status, result, policy, timing, publication, validation, write, and error details"
+    description: "Versioned JSON envelope containing status, result, policy, extension audit, tool receipts, timing, publication, validation, write, and error details"
 
 runs:
   using: "node24"

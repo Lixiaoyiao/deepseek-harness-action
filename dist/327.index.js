@@ -59,14 +59,9 @@ async function finishFix(input) {
     if (changes.all.length === 0) {
         throw new Error(`DSH reported a ${label} but produced no file changes`);
     }
-    if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
-        throw new Error("run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write");
-    }
-    const verified = input.inputs.runTests;
-    if (verified) {
-        const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, input.validationTimeoutMs);
-        (0,validate/* assertValidationSucceeded */.Ph)(tests);
-    }
+    (0,validate/* assertWriteValidationConfigured */.BM)(input.inputs.runTests, input.inputs.testCommands);
+    const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, input.validationTimeoutMs);
+    (0,validate/* assertValidationSucceeded */.Ph)(tests);
     input.onPhase?.("write");
     await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
     const created = await (0,github.createGitHubCommitFromWorkspace)(input.client, {
@@ -79,9 +74,7 @@ async function finishFix(input) {
     await (0,github.assertRemoteBranchHead)(input.client, input.target.owner, input.target.repo, input.headBranch, input.boundHeadSha);
     await (0,github.updateRemoteBranch)(input.client, input.target.owner, input.target.repo, input.headBranch, created.sha);
     try {
-        await publishStatusComment(input.client, input.target, input.expectedAuthorId, verified
-            ? `DeepSeek Harness ${label} prepared`
-            : `DeepSeek Harness ${label} prepared (unverified)`, `${input.result.output.summary}\n\n${verified ? "Configured validation passed." : "No validation commands were configured; this change is unverified."}\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl, task ? "task" : "write");
+        await publishStatusComment(input.client, input.target, input.expectedAuthorId, `DeepSeek Harness ${label} prepared`, `${input.result.output.summary}\n\nConfigured validation passed.\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl, task ? "task" : "write");
         return { commitSha: created.sha, paths: created.paths, status: "success" };
     }
     catch {

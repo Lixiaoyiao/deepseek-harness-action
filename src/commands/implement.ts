@@ -14,7 +14,11 @@ import {
 } from "../write/implementation.js";
 import { revalidateIssueIdentity, type BoundIssueIdentity } from "../write/issue.js";
 import { createPullRequest, findPullRequestByOperationKey } from "../write/pr.js";
-import { assertValidationSucceeded, runValidationCommandsInDocker } from "../write/validate.js";
+import {
+  assertValidationSucceeded,
+  assertWriteValidationConfigured,
+  runValidationCommandsInDocker,
+} from "../write/validate.js";
 import type { WorkspaceSnapshot } from "../write/workspace.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
 import { stripTrackingMarkers } from "../review/tracking.js";
@@ -81,21 +85,14 @@ export async function finishImplementation(
   );
   await revalidateForImplementation(input);
   input.onPhase?.("validation");
-  if (input.inputs.runTests && input.inputs.testCommands.length === 0) {
-    throw new Error(
-      "run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write",
-    );
-  }
-  const verified = input.inputs.runTests;
-  if (verified) {
-    const tests = await runValidationCommandsInDocker(
-      input.snapshot.workerRoot,
-      input.inputs.testCommands,
-      input.inputs.containerImage,
-      input.validationTimeoutMs,
-    );
-    assertValidationSucceeded(tests);
-  }
+  assertWriteValidationConfigured(input.inputs.runTests, input.inputs.testCommands);
+  const tests = await runValidationCommandsInDocker(
+    input.snapshot.workerRoot,
+    input.inputs.testCommands,
+    input.inputs.containerImage,
+    input.validationTimeoutMs,
+  );
+  assertValidationSucceeded(tests);
   input.onPhase?.("write");
   await revalidateForImplementation(input);
 
@@ -132,7 +129,7 @@ export async function finishImplementation(
     operation.pullRequestMarker,
     sanitizeUntrustedText(stripTrackingMarkers(input.result.output.summary)).slice(0, 40_000),
     "",
-    `Validation: ${verified ? "configured commands passed" : "unverified (run-tests=false)"}.`,
+    "Validation: configured commands passed.",
     "",
     `Closes #${String(input.issueNumber)}`,
     "",

@@ -1,0 +1,3 @@
+- insert:
+    - id: official-profile-bundle-fixture
+      name: "./node_modules/@dsh-action/official-profile-bundle/index.mjs"

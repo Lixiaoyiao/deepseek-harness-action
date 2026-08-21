@@ -17,7 +17,11 @@ import {
   buildAutomationTaskOperation,
   findReconciledTaskCommit,
 } from "../write/task.js";
-import { assertValidationSucceeded, runValidationCommandsInDocker } from "../write/validate.js";
+import {
+  assertValidationSucceeded,
+  assertWriteValidationConfigured,
+  runValidationCommandsInDocker,
+} from "../write/validate.js";
 import type { WorkspaceSnapshot } from "../write/workspace.js";
 
 export async function publishTaskAnswer(
@@ -107,20 +111,14 @@ export async function finishAutomationTask(input: FinishAutomationTaskInput): Pr
 
   await revalidateAutomationTask(input, baseSha);
   input.onPhase?.("validation");
-  if (input.runTests && input.testCommands.length === 0) {
-    throw new Error(
-      "run-tests is true but test-commands is empty; set run-tests=false for an explicit unverified write",
-    );
-  }
-  if (input.runTests) {
-    const tests = await runValidationCommandsInDocker(
-      input.snapshot.workerRoot,
-      input.testCommands,
-      input.containerImage,
-      input.validationTimeoutMs,
-    );
-    assertValidationSucceeded(tests);
-  }
+  assertWriteValidationConfigured(input.runTests, input.testCommands);
+  const tests = await runValidationCommandsInDocker(
+    input.snapshot.workerRoot,
+    input.testCommands,
+    input.containerImage,
+    input.validationTimeoutMs,
+  );
+  assertValidationSucceeded(tests);
 
   input.onPhase?.("write");
   await revalidateAutomationTask(input, baseSha);
@@ -167,7 +165,7 @@ export async function finishAutomationTask(input: FinishAutomationTaskInput): Pr
       operation.pullRequestMarker,
       summary,
       "",
-      `Validation: ${input.runTests ? "configured commands passed" : "unverified (run-tests=false)"}.`,
+      "Validation: configured commands passed.",
       ...(input.relatedIssue === undefined
         ? []
         : ["", `Related to #${String(input.relatedIssue.number)}.`]),

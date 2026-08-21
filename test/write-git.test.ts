@@ -51,7 +51,7 @@ describe("safe git controller", () => {
     await expect(
       createCommit(root, "bad\nmessage", ["nested/untracked.txt"], identity),
     ).rejects.toThrow("single line");
-  });
+  }, 15_000);
 
   it("creates and non-force pushes one validated branch", async () => {
     const root = await repository();

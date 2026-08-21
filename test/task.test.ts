@@ -38,6 +38,10 @@ vi.mock("../src/write/task.js", () => ({
 vi.mock("../src/write/issue.js", () => ({ revalidateIssueIdentity: mocks.revalidateIssue }));
 vi.mock("../src/write/validate.js", () => ({
   assertValidationSucceeded: mocks.assertValidation,
+  assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
+    if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
+    if (commands.length === 0) throw new Error("test-commands must contain at least one command");
+  },
   runValidationCommandsInDocker: mocks.runValidation,
 }));
 vi.mock("../src/github/comments.js", () => ({ upsertTrackingComment: mocks.upsertComment }));
@@ -75,6 +79,7 @@ const result: DshRunResult = {
     processIsolated: true,
     networkIsolated: false,
     workspaceAccess: "read-write",
+    extensionProfile: "github-action",
     limitations: [],
   },
 };
@@ -204,11 +209,44 @@ describe("generic automation task finalizer", () => {
     expect(mocks.assertValidation).toHaveBeenCalledWith([]);
   });
 
-  it("requires an explicit validation suite unless unverified writes are opted into", async () => {
+  it("requires an explicit validation suite and rejects an unverified-write waiver", async () => {
     await expect(finishAutomationTask({ ...taskInput(), testCommands: [] })).rejects.toThrow(
-      "test-commands is empty",
+      "test-commands must contain at least one command",
+    );
+    await expect(finishAutomationTask({ ...taskInput(), runTests: false })).rejects.toThrow(
+      "run-tests=false cannot authorize a repository write",
     );
     expect(mocks.runValidation).not.toHaveBeenCalled();
     expect(mocks.createCommit).not.toHaveBeenCalled();
+  });
+
+  it("performs no GitHub write when the final controller validation fails", async () => {
+    const validationFailure = Object.assign(new Error("npm test failed"), {
+      code: "VALIDATION_FAILED",
+    });
+    mocks.runValidation.mockResolvedValue([
+      {
+        argv: ["npm", "test"],
+        result: {
+          exitCode: 1,
+          stdout: "",
+          stderr: "failed",
+          timedOut: false,
+          outputTruncated: false,
+        },
+      },
+    ]);
+    mocks.assertValidation.mockImplementationOnce(() => {
+      throw validationFailure;
+    });
+
+    await expect(finishAutomationTask(taskInput())).rejects.toBe(validationFailure);
+
+    expect(mocks.runValidation).toHaveBeenCalledOnce();
+    expect(mocks.assertValidation).toHaveBeenCalledOnce();
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.createRemoteBranch).not.toHaveBeenCalled();
+    expect(mocks.createPullRequest).not.toHaveBeenCalled();
+    expect(mocks.upsertComment).not.toHaveBeenCalled();
   });
 });

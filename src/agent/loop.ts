@@ -11,7 +11,9 @@ import {
   disposeDshRuntime,
   type DshRunResult,
   type DshRuntime,
+  type DshToolReceipt,
 } from "../dsh/runner.js";
+import { DshError, type DshFailureTelemetry } from "../dsh/errors.js";
 import { parseDshOutput, type DshOutput } from "../dsh/schema.js";
 import type { ActionInputs } from "../inputs.js";
 import { DshAgentEngine, type AgentTask, type DshTurnMetadata } from "../review/run.js";
@@ -84,6 +86,10 @@ export interface AgentLoopHooks<TFinal> {
     error: ValidationFailureError,
   ) => void | Promise<void>;
   readonly onState?: (agent: DshRunResult, stats: AgentLoopStats) => void | Promise<void>;
+  readonly onEngineFailure?: (
+    failure: DshFailureTelemetry,
+    stats: AgentLoopStats,
+  ) => void | Promise<void>;
   readonly onCleanupError?: (
     component: "tool-provider" | "engine" | "runtime",
     error: unknown,
@@ -255,6 +261,7 @@ export async function runAgentLoop<TFinal>(
     jsonPrefix: bounded(serializedTaskContext, 4 * 1024),
   };
   let totalDurationMs = 0;
+  const dshToolReceipts: DshToolReceipt[] = [];
   let toolCalls = 0;
   let validationRetries = 0;
   let lastValidationFingerprint: string | undefined;
@@ -267,23 +274,40 @@ export async function runAgentLoop<TFinal>(
   try {
     engine =
       (await dependencies.createEngine?.(runtime)) ??
-      new DshAgentEngine(inputs, task.policy, runtime);
+      new DshAgentEngine(inputs, task.policy, runtime, task.tools.extensions);
     for (let turn = 1; turn <= inputs.maxTurns; turn += 1) {
       if (hooks.deadlineMs - now() <= 0) throw new AgentDeadlineError();
       await hooks.onTurn?.(turn, inputs.maxTurns);
       const remainingBeforeTurn = hooks.deadlineMs - now();
       if (remainingBeforeTurn <= 0) throw new AgentDeadlineError();
-      const response = await engine.runTurn({
-        schemaVersion: AGENT_PROTOCOL_VERSION,
-        operation: task.operation,
-        requestedAccess: task.requestedAccess,
-        instructions: task.instructions,
-        context: turnContext(task.contextPacket, taskContextAnchor, turn, feedback),
-        tools: task.tools.manifests,
-        workspacePath: task.workspacePath,
-        timeoutMs: remainingBeforeTurn,
-      });
+      let response;
+      try {
+        response = await engine.runTurn({
+          schemaVersion: AGENT_PROTOCOL_VERSION,
+          operation: task.operation,
+          requestedAccess: task.requestedAccess,
+          instructions: task.instructions,
+          context: turnContext(task.contextPacket, taskContextAnchor, turn, feedback),
+          tools: task.tools.manifests,
+          workspacePath: task.workspacePath,
+          timeoutMs: remainingBeforeTurn,
+        });
+      } catch (error: unknown) {
+        if (error instanceof DshError && error.telemetry !== undefined) {
+          totalDurationMs += error.telemetry.durationMs;
+          dshToolReceipts.push(...(error.telemetry.toolReceipts ?? []));
+          const aggregateFailure: DshFailureTelemetry = {
+            ...error.telemetry,
+            durationMs: totalDurationMs,
+            ...(dshToolReceipts.length === 0 ? {} : { toolReceipts: [...dshToolReceipts] }),
+          };
+          error.attachTelemetry(aggregateFailure);
+          await hooks.onEngineFailure?.(aggregateFailure, stats(turn));
+        }
+        throw error;
+      }
       const validatedOutput = parseDshOutput(JSON.stringify(response.output), task.operation);
+      dshToolReceipts.push(...(response.metadata.toolReceipts ?? []));
       const result: DshRunResult = {
         output: validatedOutput,
         durationMs: response.durationMs,
@@ -291,6 +315,10 @@ export async function runAgentLoop<TFinal>(
         ...(response.metadata.rawStdout === undefined
           ? {}
           : { rawStdout: response.metadata.rawStdout }),
+        ...(response.metadata.extensionAudit === undefined
+          ? {}
+          : { extensionAudit: response.metadata.extensionAudit }),
+        ...(dshToolReceipts.length === 0 ? {} : { toolReceipts: [...dshToolReceipts] }),
       };
       totalDurationMs += result.durationMs;
       const aggregate = { ...result, durationMs: totalDurationMs };

@@ -35,6 +35,7 @@ import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { sanitizeUntrustedText } from "./security/redaction.js";
 import { redactKnownSecrets } from "./security/env.js";
+import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
 import { ToolRouter } from "./tools/router.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
@@ -77,7 +78,17 @@ function runUrl(context: GitHubContext): string {
   return `${server}/${context.repository.fullName}/actions/runs/${context.runId}`;
 }
 
-function taskIdentity(command: RoutedCommand, inputs: ActionInputs): string {
+export function deferProgressUntilWriteValidation(
+  command: Pick<RoutedCommand, "requestedAccess">,
+): boolean {
+  return command.requestedAccess === "write";
+}
+
+function taskIdentity(
+  command: RoutedCommand,
+  inputs: ActionInputs,
+  extensionAuditDigest: string,
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -86,6 +97,11 @@ function taskIdentity(command: RoutedCommand, inputs: ActionInputs): string {
         instructions: command.instructions,
         allowedTools: inputs.allowedTools,
         toolConfig: inputs.toolConfig,
+        // This identity can influence public branch names and PR markers. Bind
+        // it to the redacted audit surface, never the secret-bearing effective
+        // MCP/Plugin configuration used by the private runtime lock.
+        extensionAuditDigest,
+        allowPluginInstall: inputs.allowPluginInstall,
       }),
       "utf8",
     )
@@ -447,7 +463,7 @@ function outcomeContext(state: RunState, startedAt: number) {
 
 function successfulValidation(inputs: ActionInputs): ValidationSummary {
   return {
-    status: inputs.runTests ? "passed" : "skipped",
+    status: "passed",
     commandCount: inputs.testCommands.length,
   };
 }
@@ -459,6 +475,9 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
   state.validationCommandCount = inputs.testCommands.length;
   core.setSecret(inputs.githubToken);
   core.setSecret(inputs.deepseekApiKey);
+  for (const secret of configuredExtensionSecrets(inputs.mcpConfig, inputs.pluginConfig)) {
+    core.setSecret(secret);
+  }
 
   state.phase = "routing";
   const payload = await readEventPayload(process.env.GITHUB_EVENT_PATH);
@@ -530,8 +549,10 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
   if (!policy.allowed) throw new Error(policy.reason);
 
   const issueNumber = snapshot?.number ?? pullRequest?.number;
-  if (inputs.progressComment && issueNumber !== undefined) {
-    state.progress = new StickyProgressReporter({
+  const deferWriteProgress = deferProgressUntilWriteValidation(command);
+  const initializeProgress = (): StickyProgressReporter | undefined => {
+    if (!inputs.progressComment || issueNumber === undefined) return undefined;
+    state.progress ??= new StickyProgressReporter({
       client,
       target: { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
       expectedAuthorId: inputs.botUserId,
@@ -539,7 +560,10 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       policy,
       runUrl: currentRunUrl,
     });
-    await state.progress.update(
+    return state.progress;
+  };
+  if (!deferWriteProgress) {
+    await initializeProgress()?.update(
       "context",
       "Permission checks passed. Preparing a bounded, immutable context snapshot.",
     );
@@ -584,7 +608,19 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       agentWorkspace = tempRoot;
     }
     const packet = await buildContextPacket(client, context, command, snapshot, inputs);
-    const tools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy);
+    const resolvedTools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy);
+    const extensions = resolveExtensionPlan({
+      allowedTools: inputs.allowedTools,
+      mcp: inputs.mcpConfig,
+      plugins: inputs.pluginConfig,
+      allowPluginInstall: inputs.allowPluginInstall,
+      policy,
+    });
+    const tools = {
+      ...resolvedTools,
+      extensions,
+      manifests: [...resolvedTools.manifests, ...extensions.manifests],
+    };
     if (command.requestedAccess === "write" && !tools.workspace.includes("workspace.edit")) {
       state.phase = "authorization";
       throw new Error("Write tasks require workspace.edit in allowed-tools");
@@ -605,11 +641,11 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
     const agentTools = {
       ...tools,
       manifests: [
-        ...tools.manifests.filter(({ provider }) => provider === "builtin"),
+        ...tools.manifests.filter(({ provider }) => provider !== "command"),
         ...(toolProvider?.manifest() ?? []),
       ],
     };
-    const operationIdentity = taskIdentity(command, inputs);
+    const operationIdentity = taskIdentity(command, inputs, extensions.digest);
     const deadlineMs = startedAt + inputs.timeoutMinutes * 60_000;
 
     const loop = await runAgentLoop(
@@ -649,6 +685,28 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             toolCalls: stats.toolCalls,
             validationRetries: stats.validationRetries,
             toolReceipts: stats.toolReceipts,
+            ...(agentResult.toolReceipts === undefined
+              ? {}
+              : { dshToolReceipts: agentResult.toolReceipts }),
+            ...(agentResult.extensionAudit === undefined
+              ? {}
+              : { extensionAudit: agentResult.extensionAudit }),
+          };
+        },
+        onEngineFailure: (failure, stats) => {
+          state.agent = {
+            durationMs: failure.durationMs,
+            isolation: failure.isolationReport,
+            turns: stats.turns,
+            toolCalls: stats.toolCalls,
+            validationRetries: stats.validationRetries,
+            toolReceipts: stats.toolReceipts,
+            ...(failure.toolReceipts === undefined
+              ? {}
+              : { dshToolReceipts: failure.toolReceipts }),
+            ...(failure.extensionAudit === undefined
+              ? { extensionAudit: extensions.audit }
+              : { extensionAudit: failure.extensionAudit }),
           };
         },
         onCleanupError: (component, error) => {
@@ -660,7 +718,8 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
           if (
             command.operation === "task" &&
             issueNumber !== undefined &&
-            state.progress === undefined
+            state.progress === undefined &&
+            !deferWriteProgress
           ) {
             await publishTaskAnswer(
               client,
@@ -726,7 +785,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
                 : await inspectWorkspaceChanges(workspaceCopy);
             if ((changes?.all.length ?? 0) === 0) {
               state.phase = "publication";
-              if (issueNumber !== undefined) {
+              if (issueNumber !== undefined && !deferWriteProgress) {
                 await publishTaskAnswer(
                   client,
                   { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
@@ -748,9 +807,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
           state.phase = "validation";
           await state.progress?.update(
             "finalizing",
-            inputs.runTests
-              ? "The structured change is ready. Running configured validation before any GitHub write."
-              : "The structured change is ready. Applying the explicitly unverified trusted write.",
+            "The structured change is ready. Running configured validation before any GitHub write.",
           );
           const write = await executeWrite(
             client,
@@ -780,6 +837,12 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       toolCalls: loop.stats.toolCalls,
       validationRetries: loop.stats.validationRetries,
       toolReceipts: loop.stats.toolReceipts,
+      ...(agentResult.toolReceipts === undefined
+        ? {}
+        : { dshToolReceipts: agentResult.toolReceipts }),
+      ...(agentResult.extensionAudit === undefined
+        ? {}
+        : { extensionAudit: agentResult.extensionAudit }),
     };
     const finalized = loop.finalization;
     if (finalized.kind === "blocked") {
@@ -816,7 +879,10 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
     }
     const write = finalized.write;
     if (command.operation === "implement" || write.pullRequestUrl !== undefined) {
-      await state.progress?.complete(
+      // Write operations deliberately create no lifecycle comment before the
+      // Controller validation gate. Only after the validated write returns may
+      // the final result be published to its Issue or pull request.
+      await initializeProgress()?.complete(
         `Task completed and pull request ${write.pullRequestUrl ?? "was created"}.`,
       );
     } else if (write.writeStatus === "partial-success") {

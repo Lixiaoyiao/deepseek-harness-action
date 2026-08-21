@@ -23,6 +23,7 @@ function policy(overrides: Partial<SecurityPolicy["capabilities"]> = {}): Securi
       readCi: false,
       publishComments: true,
       executeRepositoryCode: true,
+      loadExtensions: true,
       accessNetwork: true,
       modifyWorkspace: true,
       commit: true,
@@ -134,6 +135,42 @@ describe("maintainer-defined command tools", () => {
     );
   });
 
+  it.each(["--privileged", "--network=host", " node:24", "node:24\n--privileged"])(
+    "rejects a command-tool image argument before starting Docker: %s",
+    async (containerImage) => {
+      const definition = parseToolConfiguration(
+        JSON.stringify({
+          schemaVersion: 1,
+          commands: [{ name: "test", description: "test", argv: ["npm", "test"] }],
+        }),
+      ).commands[0];
+      if (definition === undefined) throw new Error("missing fixture");
+      const runner: CommandToolProcessRunner = vi.fn(() =>
+        Promise.resolve({
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          outputTruncated: false,
+        }),
+      );
+      await expect(
+        executeCommandTool(
+          {
+            callId: "call-image",
+            id: "command.test",
+            definition,
+            workspacePath: "C:/workspace",
+            containerImage,
+            timeoutMs: 30_000,
+          },
+          runner,
+        ),
+      ).rejects.toThrow(/containerImage/u);
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects model argv, enforces maxCalls, redacts output, and routes exact IDs", async () => {
     const definition = parseToolConfiguration(
       JSON.stringify({
@@ -181,21 +218,21 @@ describe("maintainer-defined command tools", () => {
 
   it("fails closed when a provider returns a mismatched call receipt", async () => {
     const provider: ToolProvider = {
-      id: "plugin",
+      id: "command",
       manifest: () => [
         {
-          id: "plugin.test",
+          id: "command.test",
           description: "test",
-          provider: "plugin",
-          permissions: ["read"],
+          provider: "command",
+          permissions: ["execute"],
           inputSchema: { type: "object" },
         },
       ],
-      invoke: () => Promise.resolve({ callId: "wrong", id: "plugin.test", ok: true, output: {} }),
+      invoke: () => Promise.resolve({ callId: "wrong", id: "command.test", ok: true, output: {} }),
     };
     await expect(
       new ToolRouter([provider]).invoke(
-        { callId: "expected", id: "plugin.test", input: {} },
+        { callId: "expected", id: "command.test", input: {} },
         { workspacePath: "workspace", timeoutMs: 1_000 },
       ),
     ).rejects.toThrow(/mismatched result/u);
@@ -203,10 +240,10 @@ describe("maintainer-defined command tools", () => {
 
   it("enforces controller provider namespace ownership", () => {
     const manifest = {
-      id: "plugin.test",
+      id: "command.test",
       description: "test",
-      provider: "plugin" as const,
-      permissions: ["read" as const],
+      provider: "command" as const,
+      permissions: ["execute" as const],
       inputSchema: { type: "object" },
     };
     const provider = (id: string, tool: AgentToolManifest = manifest): ToolProvider => ({
@@ -220,6 +257,10 @@ describe("maintainer-defined command tools", () => {
         new ToolRouter([
           provider("builtin", { ...manifest, id: "builtin.read", provider: "builtin" }),
         ]),
-    ).toThrow(/cannot claim a native DSH tool/u);
+    ).toThrow(/must run through the official DSH ToolRuntime/u);
+    expect(
+      () =>
+        new ToolRouter([provider("mcp", { ...manifest, id: "mcp.docs.lookup", provider: "mcp" })]),
+    ).toThrow(/must run through the official DSH ToolRuntime/u);
   });
 });

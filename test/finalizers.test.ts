@@ -49,6 +49,7 @@ const result: DshRunResult = {
     processIsolated: true,
     networkIsolated: false,
     workspaceAccess: "read-only",
+    extensionProfile: "github-action",
     limitations: [],
   },
 };
@@ -121,6 +122,7 @@ describe("operation finalizers", () => {
         readCi: false,
         publishComments: true,
         executeRepositoryCode: false,
+        loadExtensions: false,
         accessNetwork: false,
         modifyWorkspace: false,
         commit: false,

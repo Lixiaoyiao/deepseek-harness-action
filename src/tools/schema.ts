@@ -82,11 +82,15 @@ const toolConfigurationSchema = z
 export type CommandToolDefinition = z.infer<typeof commandToolSchema>;
 export type ToolConfiguration = z.infer<typeof toolConfigurationSchema>;
 export type CommandToolId = `command.${string}`;
-export type AllowedToolId = WorkspaceToolId | CommandToolId;
+export type McpToolId = `mcp.${string}.${string}`;
+export type PluginToolId = `plugin.${string}.${string}`;
+export type AllowedToolId = WorkspaceToolId | CommandToolId | McpToolId | PluginToolId;
 
 const allowedToolIdSchema = z.union([
   workspaceToolSchema,
   z.string().regex(/^command\.[a-z][a-z0-9-]{0,31}$/u),
+  z.string().regex(/^mcp\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
+  z.string().regex(/^plugin\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
 ]);
 
 function decodeJson(raw: string, label: string): unknown {
@@ -116,6 +120,14 @@ export function parseAllowedTools(raw: string): readonly AllowedToolId[] {
 
 export function commandToolId(name: string): CommandToolId {
   return `command.${commandNameSchema.parse(name)}`;
+}
+
+export function mcpToolId(serverId: string, toolId: string): McpToolId {
+  return `mcp.${serverId}.${toolId}`;
+}
+
+export function pluginToolId(extensionId: string, toolId: string): PluginToolId {
+  return `plugin.${extensionId}.${toolId}`;
 }
 
 export function validateAllowedToolReferences(

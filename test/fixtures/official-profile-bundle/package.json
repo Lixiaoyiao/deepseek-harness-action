@@ -1,0 +1,11 @@
+{
+  "name": "@dsh-action/official-profile-bundle",
+  "version": "1.2.3",
+  "type": "module",
+  "exports": "./index.mjs",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

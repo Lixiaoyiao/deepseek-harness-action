@@ -9,6 +9,7 @@ export interface Capabilities {
   readonly readCi: boolean;
   readonly publishComments: boolean;
   readonly executeRepositoryCode: boolean;
+  readonly loadExtensions: boolean;
   readonly accessNetwork: boolean;
   readonly modifyWorkspace: boolean;
   readonly commit: boolean;
@@ -43,6 +44,7 @@ const noCapabilities: Capabilities = {
   readCi: false,
   publishComments: false,
   executeRepositoryCode: false,
+  loadExtensions: false,
   accessNetwork: false,
   modifyWorkspace: false,
   commit: false,
@@ -80,6 +82,8 @@ export function evaluatePolicy(input: PolicyInput): SecurityPolicy {
     readRepository: true,
     readCi: operation === "diagnose" || operation === "fix",
     publishComments: true,
+    loadExtensions: sameRepository && actorCanWrite,
+    accessNetwork: sameRepository && actorCanWrite,
   };
 
   if (input.commandSource === "mention" && !actorCanWrite) {
@@ -155,6 +159,7 @@ export function evaluatePolicy(input: PolicyInput): SecurityPolicy {
       readCi: operation === "fix",
       publishComments: true,
       executeRepositoryCode: true,
+      loadExtensions: true,
       accessNetwork: true,
       modifyWorkspace: true,
       commit: true,

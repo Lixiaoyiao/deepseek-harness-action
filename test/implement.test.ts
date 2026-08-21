@@ -38,6 +38,10 @@ vi.mock("../src/write/pr.js", () => ({
 }));
 vi.mock("../src/write/validate.js", () => ({
   assertValidationSucceeded: mocks.assertValidation,
+  assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
+    if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
+    if (commands.length === 0) throw new Error("test-commands must contain at least one command");
+  },
   runValidationCommandsInDocker: mocks.runValidation,
 }));
 
@@ -59,6 +63,7 @@ const result: DshRunResult = {
     processIsolated: true,
     networkIsolated: false,
     workspaceAccess: "read-write",
+    extensionProfile: "github-action",
     limitations: [],
   },
 };
@@ -113,7 +118,7 @@ describe("finishImplementation validation gate", () => {
         result,
         inputs: inputs(),
       }),
-    ).rejects.toThrow("run-tests is true but test-commands is empty");
+    ).rejects.toThrow("test-commands must contain at least one command");
 
     expect(mocks.runValidation).not.toHaveBeenCalled();
     expect(mocks.revalidateIssue).toHaveBeenCalledOnce();
@@ -186,7 +191,7 @@ describe("finishImplementation validation gate", () => {
           summary: "done @team ![pixel](https://tracker.invalid) <!-- dsh-action:summary:v1 -->",
         },
       },
-      inputs: inputs({ runTests: false }),
+      inputs: inputs({ testCommands: [["npm", "test"]] }),
     });
 
     const call = mocks.createPullRequest.mock.calls.at(-1);

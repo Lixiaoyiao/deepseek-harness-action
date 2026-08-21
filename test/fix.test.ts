@@ -48,6 +48,10 @@ vi.mock("../src/write/github.js", () => ({
 }));
 vi.mock("../src/write/validate.js", () => ({
   assertValidationSucceeded: mocks.assertValidation,
+  assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
+    if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
+    if (commands.length === 0) throw new Error("test-commands must contain at least one command");
+  },
   runValidationCommandsInDocker: mocks.runValidation,
 }));
 vi.mock("../src/write/workspace.js", () => ({ inspectWorkspaceChanges: mocks.inspectChanges }));
@@ -71,6 +75,7 @@ const result: DshRunResult = {
     processIsolated: true,
     networkIsolated: false,
     workspaceAccess: "read-write",
+    extensionProfile: "github-action",
     limitations: [],
   },
 };
@@ -117,7 +122,7 @@ describe("finishFix recovery", () => {
         runUrl: "https://github.com/octo/repo/actions/runs/1",
         onPhase,
       }),
-    ).rejects.toThrow("run-tests is true but test-commands is empty");
+    ).rejects.toThrow("test-commands must contain at least one command");
 
     expect(mocks.runValidation).not.toHaveBeenCalled();
     expect(mocks.createCommit).not.toHaveBeenCalled();
@@ -144,7 +149,7 @@ describe("finishFix recovery", () => {
         baseRepositoryId: 1,
       },
       result,
-      inputs: inputs({ runTests: false }),
+      inputs: inputs({ testCommands: [["npm", "test"]] }),
       runUrl: "https://github.com/octo/repo/actions/runs/1",
       onPhase,
     });
@@ -174,7 +179,7 @@ describe("finishFix recovery", () => {
         ...result,
         output: { ...result.output, operation: "task", summary: "Updated the cache" },
       },
-      inputs: inputs({ runTests: false }),
+      inputs: inputs({ testCommands: [["npm", "test"]] }),
       runUrl: "https://github.com/octo/repo/actions/runs/1",
     });
     expect(mocks.createCommit).toHaveBeenCalledWith(
@@ -191,5 +196,30 @@ describe("finishFix recovery", () => {
       expect.any(String),
       "task",
     );
+  });
+
+  it("rejects an explicit unverified write before validation or mutation", async () => {
+    await expect(
+      finishFix({
+        client: {} as GitHubClient,
+        target: { owner: "octo", repo: "repo", issueNumber: 7 },
+        expectedAuthorId: 1,
+        snapshot,
+        boundHeadSha: "a".repeat(40),
+        headBranch: "feature",
+        identity: {
+          headSha: "a".repeat(40),
+          headRef: "feature",
+          headRepositoryId: 1,
+          baseRepositoryId: 1,
+        },
+        result,
+        inputs: inputs({ runTests: false, testCommands: [["npm", "test"]] }),
+        runUrl: "https://github.com/octo/repo/actions/runs/1",
+      }),
+    ).rejects.toThrow("run-tests=false cannot authorize a repository write");
+    expect(mocks.runValidation).not.toHaveBeenCalled();
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.updateRemoteBranch).not.toHaveBeenCalled();
   });
 });
