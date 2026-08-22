@@ -426,8 +426,8 @@ jobs:
           [[ "$EXPECTED_FAILURE" == "true" ]]
           jq -e '
             .conclusion == "failure" and .status == "validation_failed" and
-            .error.code == "VALIDATION_INTEGRITY" and .error.phase == "validation" and
-            .error.retryable == false and
+            .error.code == "VALIDATION_INTEGRITY" and .error.category == "domain" and
+            .error.phase == "agent" and .error.retryable == false and
             .validation.status == "failed" and
             .validation.integrity.mode == "strict" and
             .validation.integrity.status == "blocked" and
@@ -498,7 +498,8 @@ jobs:
           [[ "$EXPECTED_FAILURE" == "true" ]]
           jq -e '
             .conclusion == "failure" and .status == "validation_failed" and
-            .error.code == "VALIDATION_FAILED" and .error.phase == "validation" and
+            .error.code == "VALIDATION_FAILED" and .error.category == "domain" and
+            .error.phase == "agent" and .error.retryable == false and
             .validation.status == "failed" and
             .validation.integrity.mode == "strict" and
             .validation.integrity.status == "clean" and
