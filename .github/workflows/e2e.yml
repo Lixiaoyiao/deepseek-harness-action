@@ -29,6 +29,7 @@ jobs:
     outputs:
       run_e2e: ${{ steps.bind.outputs.run_e2e }}
       candidate_sha: ${{ steps.bind.outputs.candidate_sha }}
+      candidate_branch: ${{ steps.bind.outputs.candidate_branch }}
       pull_request: ${{ steps.bind.outputs.pull_request }}
       harness_sha: ${{ steps.bind.outputs.harness_sha }}
     steps:
@@ -97,6 +98,7 @@ jobs:
           }
           echo "run_e2e=true" >> "$GITHUB_OUTPUT"
           echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "candidate_branch=$(jq -r .head.ref <<<"$pr_json")" >> "$GITHUB_OUTPUT"
           echo "pull_request=$CANDIDATE_PR" >> "$GITHUB_OUTPUT"
           echo "harness_sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"
           echo "Bound PR #$CANDIDATE_PR to candidate $CANDIDATE_SHA from the trusted default-branch workflow" >> "$GITHUB_STEP_SUMMARY"
@@ -568,6 +570,9 @@ jobs:
           command: task
           task-access: write
           allow-write: "true"
+          base-branch: ${{ needs.gate.outputs.candidate_branch }}
+          branch-prefix: dsh-e2e/
+          branch-name-template: "{{prefix}}task-{{key}}"
           prompt: Use native.bash exactly once to create dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt containing exactly trusted-write followed by a newline. Make no other change.
           permission-profile: standard
           disallowed-tools: '["native.web-search","native.subagent"]'
@@ -585,6 +590,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_BRANCH: ${{ needs.gate.outputs.candidate_branch }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           RESULT_JSON: ${{ steps.trusted.outputs['result-json'] }}
@@ -595,22 +601,22 @@ jobs:
             .conclusion == "success" and .policy.trust == "trusted-write" and
             .validation.status == "passed" and .validation.integrity.mode == "strict" and
             .write.status == "success" and
-            (.write.branchName | test("^dsh/task-[a-f0-9]{24}$")) and
+            (.write.branchName | test("^dsh-e2e/task-[a-f0-9]{24}$")) and
             (.write.pullRequestNumber | type == "number") and
             (.loop.dshToolReceipts | any(.id == "native.bash" and .completed == true and .ok == true))
           ' <<<"$RESULT_JSON" >/dev/null
 
           branch="$(jq -r .write.branchName <<<"$RESULT_JSON")"
           pull="$(jq -r .write.pullRequestNumber <<<"$RESULT_JSON")"
-          [[ "$branch" =~ ^dsh/task-[a-f0-9]{24}$ ]]
+          [[ "$branch" =~ ^dsh-e2e/task-[a-f0-9]{24}$ ]]
           [[ "$pull" =~ ^[1-9][0-9]*$ ]]
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "pull=$pull" >> "$GITHUB_OUTPUT"
-          operation="${branch#dsh/task-}"
+          operation="${branch#dsh-e2e/task-}"
           pr_json="$(gh api "repos/$REPOSITORY/pulls/$pull")"
           head_sha="$(jq -r .head.sha <<<"$pr_json")"
-          base_sha="$(cat "$RUNNER_TEMP/dsh-e2e-baseline.main")"
-          jq -e --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" --arg branch "$branch" '
+          base_sha="$CANDIDATE_SHA"
+          jq -e --arg repo "${REPOSITORY,,}" --arg base "$BASE_BRANCH" --arg branch "$branch" '
             .state == "open" and (.head.repo.full_name | ascii_downcase) == $repo and
             (.base.repo.full_name | ascii_downcase) == $repo and
             .head.ref == $branch and .base.ref == $base
@@ -639,38 +645,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_BRANCH: ${{ needs.gate.outputs.candidate_branch }}
           BRANCH: ${{ steps.verify_write.outputs.branch }}
           PULL: ${{ steps.verify_write.outputs.pull }}
           RESULT_JSON: ${{ steps.trusted.outputs['result-json'] }}
-          BASE_SHA: ${{ steps.baseline.outputs.main_sha }}
+          BASE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           FILE_PATH: dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt
         run: |
           set -euo pipefail
           branch="$BRANCH"
           pull="$PULL"
-          if [[ ! "$branch" =~ ^dsh/task-[a-f0-9]{24}$ ]] || [[ ! "$pull" =~ ^[1-9][0-9]*$ ]]; then
+          if [[ ! "$branch" =~ ^dsh-e2e/task-[a-f0-9]{24}$ ]] || [[ ! "$pull" =~ ^[1-9][0-9]*$ ]]; then
             if jq -e '
-              (.write.branchName | type == "string" and test("^dsh/task-[a-f0-9]{24}$")) and
+              (.write.branchName | type == "string" and test("^dsh-e2e/task-[a-f0-9]{24}$")) and
               (.write.pullRequestNumber | type == "number" and . >= 1 and floor == .)
             ' <<<"$RESULT_JSON" >/dev/null 2>&1; then
               branch="$(jq -r .write.branchName <<<"$RESULT_JSON")"
               pull="$(jq -r .write.pullRequestNumber <<<"$RESULT_JSON")"
             else
-              echo "::warning::Could not recover a verified E2E branch/PR identity from the trusted-write result; inspect run $GITHUB_RUN_ID for a dsh/task-* PR containing $FILE_PATH. No broad cleanup was attempted."
+              echo "::warning::Could not recover a verified E2E branch/PR identity from the trusted-write result; inspect run $GITHUB_RUN_ID for a dsh-e2e/task-* PR containing $FILE_PATH. No broad cleanup was attempted."
               {
                 echo "### E2E cleanup requires inspection"
                 echo
-                echo "The trusted-write result did not expose a strictly valid branch and PR number. Inspect this run for a same-repository \`dsh/task-*\` PR whose only added file is \`$FILE_PATH\`. The harness deliberately did not delete any unverified ref."
+                echo "The trusted-write result did not expose a strictly valid branch and PR number. Inspect this run for a same-repository \`dsh-e2e/task-*\` PR whose only added file is \`$FILE_PATH\`. The harness deliberately did not delete any unverified ref."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
           fi
-          [[ "$branch" =~ ^dsh/task-[a-f0-9]{24}$ ]] || exit 1
+          [[ "$branch" =~ ^dsh-e2e/task-[a-f0-9]{24}$ ]] || exit 1
           [[ "$pull" =~ ^[1-9][0-9]*$ ]] || exit 1
-          operation="${branch#dsh/task-}"
+          operation="${branch#dsh-e2e/task-}"
           pr_json="$(gh api "repos/$REPOSITORY/pulls/$pull")"
           head_sha="$(jq -r .head.sha <<<"$pr_json")"
-          jq -e --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" --arg branch "$branch" '
+          jq -e --arg repo "${REPOSITORY,,}" --arg base "$BASE_BRANCH" --arg branch "$branch" '
             .state == "open" and (.head.repo.full_name | ascii_downcase) == $repo and
             (.base.repo.full_name | ascii_downcase) == $repo and
             .head.ref == $branch and .base.ref == $base
@@ -1074,9 +1081,392 @@ jobs:
           ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
           ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
 
+  integration:
+    name: GitHub integration contracts
+    needs: [gate, read_only, write, cancellation]
+    if: >-
+      needs.gate.outputs.run_e2e == 'true' &&
+      needs.read_only.result == 'success' &&
+      needs.write.result == 'success' &&
+      needs.cancellation.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: read
+    steps:
+      - name: Checkout permanent harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.harness_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.candidate_sha }}
+          path: candidate-action
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Prepare deterministic GitHub integration harness
+        id: integration_baseline
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
+          CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$HARNESS_SHA" ]]
+          [[ "$(git -C candidate-action rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          node --check .github/e2e/github-integration-llm.mjs
+          node --check .github/e2e/read-action-output.mjs
+
+          gh api "repos/$REPOSITORY" > "$RUNNER_TEMP/dsh-e2e-integration-repository.json"
+          candidate_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
+            .state == "open" and .draft == false and .head.sha == $sha and
+            (.head.repo.full_name | ascii_downcase) == $repo and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
+          ' <<<"$candidate_json" >/dev/null
+
+          runs="$(gh api --method GET "repos/$REPOSITORY/actions/runs" \
+            -f head_sha="$CANDIDATE_SHA" -f event=pull_request -f status=completed -f per_page=50)"
+          ci_run_id="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' <<<"$runs")"
+          [[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(gh api "repos/$REPOSITORY/actions/runs/$ci_run_id" --jq .head_sha)" == "$CANDIDATE_SHA" ]]
+          echo "ci_run_id=$ci_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Create isolated Issue and draft PR fixtures
+        id: integration_entities
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          marker="<!-- dsh-e2e:github-integration:v1 run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT candidate=$CANDIDATE_SHA -->"
+          issue_title="DSH E2E GitHub integration $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          issue_body="$(printf '%s\n\n%s' "$marker" "Temporary Issue owned by the trusted GitHub integration harness.")"
+          issue_json="$(gh api --method POST "repos/$REPOSITORY/issues" -f title="$issue_title" -f body="$issue_body")"
+          issue_number="$(jq -r .number <<<"$issue_json")"
+          issue_id="$(jq -r .id <<<"$issue_json")"
+          echo "$issue_json" > "$RUNNER_TEMP/dsh-e2e-integration-issue.json"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+          echo "issue_id=$issue_id" >> "$GITHUB_OUTPUT"
+          jq -e --argjson number "$issue_number" --argjson id "$issue_id" --arg title "$issue_title" --arg body "$issue_body" '
+            .number == $number and .id == $id and .state == "open" and
+            (has("pull_request") | not) and .user.id == 41898282 and
+            .title == $title and .body == $body
+          ' <<<"$issue_json" >/dev/null
+
+          history="DSH_E2E_HISTORY_HIDDEN_$GITHUB_RUN_ID"
+          history_json="$(gh api --method POST "repos/$REPOSITORY/issues/$issue_number/comments" -f body="$history")"
+          history_id="$(jq -r .id <<<"$history_json")"
+          [[ "$history_id" =~ ^[1-9][0-9]*$ ]]
+          echo "history_id=$history_id" >> "$GITHUB_OUTPUT"
+
+          branch="dsh-e2e/checks-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ "$branch" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
+          if gh api "repos/$REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
+            echo "The isolated checks branch already exists" >&2
+            exit 1
+          fi
+          gh api --method POST "repos/$REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$CANDIDATE_SHA" >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$branch" --jq .object.sha)" == "$CANDIDATE_SHA" ]]
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+          pr_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          pr_body="$(printf '%s\n\n%s' "$marker" "Temporary draft PR owned by the trusted GitHub integration harness.")"
+          pr_json="$(gh api --method POST "repos/$REPOSITORY/pulls" \
+            -f title="$pr_title" -f head="$branch" -f base="$DEFAULT_BRANCH" -f body="$pr_body" -F draft=true)"
+          pr_number="$(jq -r .number <<<"$pr_json")"
+          pr_id="$(jq -r .id <<<"$pr_json")"
+          echo "$pr_json" > "$RUNNER_TEMP/dsh-e2e-integration-pr.json"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "pr_id=$pr_id" >> "$GITHUB_OUTPUT"
+          jq -e --argjson number "$pr_number" --argjson id "$pr_id" --arg repo "${REPOSITORY,,}" \
+            --arg branch "$branch" --arg base "$DEFAULT_BRANCH" --arg sha "$CANDIDATE_SHA" \
+            --arg title "$pr_title" --arg body "$pr_body" '
+            .number == $number and .id == $id and .state == "open" and .draft == true and
+            (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and
+            .title == $title and .body == $body
+          ' <<<"$pr_json" >/dev/null
+
+      - name: Exercise routes, filters, structured output, and typed GitHub tools
+        id: integration_contracts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
+          ISSUE_NUMBER: ${{ steps.integration_entities.outputs.issue_number }}
+          ISSUE_ID: ${{ steps.integration_entities.outputs.issue_id }}
+          HISTORY_ID: ${{ steps.integration_entities.outputs.history_id }}
+          CHECKS_PR: ${{ steps.integration_entities.outputs.pr_number }}
+          CI_RUN_ID: ${{ steps.integration_baseline.outputs.ci_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ISSUE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$HISTORY_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+
+          audit="$RUNNER_TEMP/dsh-e2e-github-audit.jsonl"
+          fixture_info="$RUNNER_TEMP/dsh-e2e-github-fixture.json"
+          fixture_log="$RUNNER_TEMP/dsh-e2e-github-fixture.log"
+          fixture_key="sk-dsh-e2e-fixture-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          : > "$audit"
+          DSH_E2E_GITHUB_AUDIT="$audit" DSH_E2E_FIXTURE_KEY="$fixture_key" \
+            node .github/e2e/github-integration-llm.mjs > "$fixture_info" 2> "$fixture_log" &
+          fixture_pid=$!
+          cleanup_fixture() {
+            kill -TERM "$fixture_pid" 2>/dev/null || true
+            wait "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup_fixture EXIT
+          for _ in {1..30}; do
+            if [[ -s "$fixture_info" ]] && curl --fail --silent "$(jq -r .healthUrl "$fixture_info")" >/dev/null; then break; fi
+            kill -0 "$fixture_pid" 2>/dev/null || { cat "$fixture_log" >&2; exit 1; }
+            sleep 1
+          done
+          origin="$(jq -r .origin "$fixture_info")"
+          [[ "$origin" =~ ^http://127\.0\.0\.1:[1-9][0-9]*$ ]]
+
+          repository_file="$RUNNER_TEMP/dsh-e2e-integration-repository.json"
+          issue_file="$RUNNER_TEMP/dsh-e2e-integration-issue.json"
+          pr_file="$RUNNER_TEMP/dsh-e2e-integration-pr.json"
+          actor="$GITHUB_ACTOR"
+          jq -n --slurpfile repository "$repository_file" --slurpfile issue "$issue_file" --arg actor "$actor" '
+            {action:"labeled",repository:$repository[0],sender:{login:$actor},issue:$issue[0],label:{name:"dsh-e2e-label"}}
+          ' > "$RUNNER_TEMP/dsh-e2e-label-event.json"
+          jq -n --slurpfile repository "$repository_file" --slurpfile issue "$issue_file" --arg actor "$actor" '
+            {action:"assigned",repository:$repository[0],sender:{login:$actor},issue:$issue[0],assignee:{login:"dsh-e2e-assignee"}}
+          ' > "$RUNNER_TEMP/dsh-e2e-assignee-event.json"
+          trigger_id=$((HISTORY_ID + 1000000))
+          trigger_body="$(printf '%s\n%s\n%s' "/deepseek task --write exercise the typed GitHub comment tool" "DSH_E2E_TRIGGER_VISIBLE_$GITHUB_RUN_ID" "![attachment](https://github.com/user-attachments/assets/dsh-e2e-must-not-forward)")"
+          jq -n --slurpfile repository "$repository_file" --slurpfile issue "$issue_file" \
+            --arg actor "$actor" --arg body "$trigger_body" --argjson trigger_id "$trigger_id" '
+            {action:"created",repository:$repository[0],sender:{login:$actor},issue:$issue[0],comment:{
+              id:$trigger_id,body:$body,created_at:"2099-01-01T00:00:00Z",updated_at:"2099-01-01T00:00:00Z",user:{login:"github-actions[bot]"}
+            }}
+          ' > "$RUNNER_TEMP/dsh-e2e-github-event.json"
+          jq -n --slurpfile repository "$repository_file" --slurpfile pull "$pr_file" --arg actor "$actor" '
+            {action:"synchronize",repository:$repository[0],sender:{login:$actor},pull_request:$pull[0]}
+          ' > "$RUNNER_TEMP/dsh-e2e-checks-event.json"
+
+          task_schema='{"type":"object","properties":{"route":{"type":"string","enum":["label","assignee","github"]},"accepted":{"type":"boolean","const":true}},"required":["route","accepted"],"additionalProperties":false}'
+          run_candidate() {
+            local name="$1" event_name="$2" event_path="$3" fixture_route="$4"
+            shift 4
+            local output="$RUNNER_TEMP/dsh-e2e-${name}-output"
+            local summary="$RUNNER_TEMP/dsh-e2e-${name}-summary"
+            local log="$RUNNER_TEMP/dsh-e2e-${name}.log"
+            : > "$output"
+            : > "$summary"
+            if ! env \
+              "INPUT_DEEPSEEK-API-KEY=$fixture_key" \
+              "INPUT_GITHUB-TOKEN=$GH_TOKEN" \
+              'INPUT_DSH-VERSION=0.1.1-rc.2' \
+              'INPUT_PROGRESS-COMMENT=false' \
+              'INPUT_TIMEOUT-MINUTES=15' \
+              "INPUT_BASE-URL=$origin/$fixture_route" \
+              "GITHUB_EVENT_NAME=$event_name" \
+              "GITHUB_EVENT_PATH=$event_path" \
+              "GITHUB_OUTPUT=$output" \
+              "GITHUB_STEP_SUMMARY=$summary" \
+              "$@" \
+              node candidate-action/dist/index.js > "$log" 2>&1; then
+              cat "$log" >&2
+              return 1
+            fi
+          }
+          read_output() {
+            node .github/e2e/read-action-output.mjs "$RUNNER_TEMP/dsh-e2e-$1-output" "$2"
+          }
+
+          run_candidate label issues "$RUNNER_TEMP/dsh-e2e-label-event.json" label \
+            'INPUT_COMMAND=auto' 'INPUT_LABEL-TRIGGER=dsh-e2e-label' \
+            "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_TASK-ACCESS=read' \
+            'INPUT_PROMPT=Return the deterministic label task result.' \
+            "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
+          label_result="$(read_output label result-json)"
+          label_task="$(read_output label task-output)"
+          jq -e '.conclusion == "success" and .operation == "task" and .policy.trust == "trusted-read" and .taskOutput == {route:"label",accepted:true}' <<<"$label_result" >/dev/null
+          jq -e '. == {route:"label",accepted:true}' <<<"$label_task" >/dev/null
+
+          run_candidate assignee issues "$RUNNER_TEMP/dsh-e2e-assignee-event.json" assignee \
+            'INPUT_COMMAND=auto' 'INPUT_ASSIGNEE-TRIGGER=dsh-e2e-assignee' \
+            "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_TASK-ACCESS=read' \
+            'INPUT_PROMPT=Return the deterministic assignee task result.' \
+            "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
+          assignee_result="$(read_output assignee result-json)"
+          jq -e '.conclusion == "success" and .operation == "task" and .taskOutput == {route:"assignee",accepted:true}' <<<"$assignee_result" >/dev/null
+
+          run_candidate denied issues "$RUNNER_TEMP/dsh-e2e-label-event.json" label \
+            'INPUT_COMMAND=auto' 'INPUT_LABEL-TRIGGER=dsh-e2e-label' \
+            'INPUT_ALLOWED-ACTORS=dsh-e2e-no-match' 'INPUT_TASK-ACCESS=read' \
+            'INPUT_PROMPT=This route must remain neutral.' 'INPUT_MAX-TURNS=1'
+          denied_result="$(read_output denied result-json)"
+          jq -e '.conclusion == "neutral" and .status == "neutral" and .operation == null' <<<"$denied_result" >/dev/null
+          jq -s -e '[.[] | select(.route == "label")] | length == 1' "$audit" >/dev/null
+
+          run_candidate github issue_comment "$RUNNER_TEMP/dsh-e2e-github-event.json" github \
+            'INPUT_COMMAND=auto' 'INPUT_TRIGGER-PHRASE=/deepseek' \
+            "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_INCLUDE-COMMENTS-BY-ACTOR=*' \
+            'INPUT_EXCLUDE-COMMENTS-BY-ACTOR=github-actions[bot]' \
+            'INPUT_PERMISSION-PROFILE=custom' \
+            'INPUT_ALLOWED-TOOLS=["workspace.edit","github.comment.create"]' \
+            'INPUT_ALLOW-WRITE=true' 'INPUT_RUN-TESTS=true' \
+            'INPUT_VALIDATION-INTEGRITY=strict' \
+            'INPUT_TEST-COMMANDS=[["node","-e","process.exit(0)"]]' \
+            "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=2'
+          github_result="$(read_output github result-json)"
+          github_task="$(read_output github task-output)"
+          jq -e '
+            .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
+            .validation.status == "passed" and .validation.commandCount == 1 and
+            .write.status == "no-changes" and .taskOutput == {route:"github",accepted:true} and
+            (.loop.toolReceipts | any(
+              .id == "github.comment.create" and .ok == true and .effect == "created" and .reconciled == true and .attempts >= 1
+            ))
+          ' <<<"$github_result" >/dev/null
+          jq -e '. == {route:"github",accepted:true}' <<<"$github_task" >/dev/null
+
+          history="DSH_E2E_HISTORY_HIDDEN_$GITHUB_RUN_ID"
+          trigger="DSH_E2E_TRIGGER_VISIBLE_$GITHUB_RUN_ID"
+          attachment_url="https://github.com/user-attachments/assets/dsh-e2e-must-not-forward"
+          jq -s -e --arg history "$history" --arg trigger "$trigger" --arg attachment "$attachment_url" '
+            ([.[] | select(.route == "github" and .index == 1)] | length == 1) and
+            ([.[] | select(.route == "github" and .index == 1)][0] |
+              .authorizationMatches == true and
+              (.prompt | contains($trigger)) and
+              ((.prompt | contains($history)) | not) and
+              (.prompt | contains("[image removed]")) and
+              ((.prompt | contains($attachment)) | not))
+          ' "$audit" >/dev/null
+          tool_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
+          jq -e '
+            [.[] | select((.body // "") | contains("dsh-action:github-tool-call="))] as $tools |
+            ($tools | length) == 1 and $tools[0].user.id == 41898282 and
+            ($tools[0].body | contains("DSH E2E typed GitHub tool completed")) and
+            (($tools[0].body | contains("@maintainers")) | not)
+          ' <<<"$tool_comments" >/dev/null
+
+          run_candidate checks pull_request "$RUNNER_TEMP/dsh-e2e-checks-event.json" checks \
+            'INPUT_COMMAND=diagnose' 'INPUT_PERMISSION-PROFILE=custom' \
+            'INPUT_ALLOWED-TOOLS=["github.checks.read"]' 'INPUT_MAX-TURNS=2'
+          checks_result="$(read_output checks result-json)"
+          jq -e '
+            .conclusion == "success" and .operation == "diagnose" and .policy.trust == "trusted-read" and
+            (.loop.toolReceipts | any(.id == "github.checks.read" and .ok == true and .effect == "read"))
+          ' <<<"$checks_result" >/dev/null
+
+          jq -s -e '
+            length == 6 and all(.authorizationMatches == true) and
+            ([.[] | select(.route == "label")] | length == 1) and
+            ([.[] | select(.route == "assignee")] | length == 1) and
+            ([.[] | select(.route == "github")] | length == 2) and
+            ([.[] | select(.route == "checks")] | length == 2)
+          ' "$audit" >/dev/null
+
+      - name: Remove only verified integration fixtures
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
+          CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
+          ISSUE_NUMBER: ${{ steps.integration_entities.outputs.issue_number }}
+          ISSUE_ID: ${{ steps.integration_entities.outputs.issue_id }}
+          CHECKS_BRANCH: ${{ steps.integration_entities.outputs.branch }}
+          CHECKS_PR: ${{ steps.integration_entities.outputs.pr_number }}
+          CHECKS_PR_ID: ${{ steps.integration_entities.outputs.pr_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- dsh-e2e:github-integration:v1 run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT candidate=$CANDIDATE_SHA -->"
+          issue_title="DSH E2E GitHub integration $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          issue_body="$(printf '%s\n\n%s' "$marker" "Temporary Issue owned by the trusted GitHub integration harness.")"
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ && "$ISSUE_ID" =~ ^[1-9][0-9]*$ ]]
+          issue_json="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER")"
+          jq -e --argjson number "$ISSUE_NUMBER" --argjson id "$ISSUE_ID" --arg title "$issue_title" --arg body "$issue_body" '
+            .number == $number and .id == $id and (has("pull_request") | not) and
+            .user.id == 41898282 and .title == $title and .body == $body
+          ' <<<"$issue_json" >/dev/null
+          issue_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
+          jq -e 'all(.[]; .user.id == 41898282)' <<<"$issue_comments" >/dev/null
+          mapfile -t issue_comment_ids < <(jq -r '.[].id' <<<"$issue_comments")
+          for comment_id in "${issue_comment_ids[@]}"; do
+            [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
+            gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
+          done
+          gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER" -f state=closed >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER" --jq .state)" == "closed" ]]
+          [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" --jq length)" -eq 0 ]]
+
+          [[ "$CHECKS_BRANCH" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
+          [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ && "$CHECKS_PR_ID" =~ ^[1-9][0-9]*$ ]]
+          pr_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          pr_body="$(printf '%s\n\n%s' "$marker" "Temporary draft PR owned by the trusted GitHub integration harness.")"
+          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR")"
+          jq -e --argjson number "$CHECKS_PR" --argjson id "$CHECKS_PR_ID" --arg repo "${REPOSITORY,,}" \
+            --arg branch "$CHECKS_BRANCH" --arg base "$DEFAULT_BRANCH" --arg sha "$CANDIDATE_SHA" \
+            --arg title "$pr_title" --arg body "$pr_body" '
+            .number == $number and .id == $id and .state == "open" and .draft == true and
+            (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and
+            .title == $title and .body == $body
+          ' <<<"$pr_json" >/dev/null
+          pr_comments="$(gh api "repos/$REPOSITORY/issues/$CHECKS_PR/comments?per_page=100")"
+          jq -e 'all(.[]; .user.id == 41898282)' <<<"$pr_comments" >/dev/null
+          mapfile -t pr_comment_ids < <(jq -r '.[].id' <<<"$pr_comments")
+          for comment_id in "${pr_comment_ids[@]}"; do
+            [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
+            gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
+          done
+          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" --jq .object.sha)" == "$CANDIDATE_SHA" ]]
+          gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f state=closed >/dev/null
+          gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"
+          [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .state)" == "closed" ]]
+          if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" >/dev/null 2>&1; then
+            echo "Verified integration checks branch still exists" >&2
+            exit 1
+          fi
+
+          candidate_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
+            .state == "open" and .draft == false and .head.sha == $sha and
+            (.head.repo.full_name | ascii_downcase) == $repo and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
+          ' <<<"$candidate_json" >/dev/null
+          ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+
   revalidate_candidate:
     name: Final candidate binding
-    needs: [gate, read_only, write, cancellation]
+    needs: [gate, read_only, write, cancellation, integration]
     if: always() && needs.gate.result == 'success' && needs.gate.outputs.run_e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
