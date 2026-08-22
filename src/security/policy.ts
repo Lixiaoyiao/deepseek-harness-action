@@ -15,6 +15,10 @@ export interface Capabilities {
   readonly commit: boolean;
   readonly push: boolean;
   readonly createPullRequest: boolean;
+  readonly manageIssueLabels: boolean;
+  readonly manageIssueAssignees: boolean;
+  readonly updateIssueState: boolean;
+  readonly updatePullRequestMetadata: boolean;
 }
 
 export interface SecurityPolicy {
@@ -50,6 +54,10 @@ const noCapabilities: Capabilities = {
   commit: false,
   push: false,
   createPullRequest: false,
+  manageIssueLabels: false,
+  manageIssueAssignees: false,
+  updateIssueState: false,
+  updatePullRequestMetadata: false,
 };
 
 function sameRepositoryState(
@@ -167,6 +175,10 @@ export function evaluatePolicy(input: PolicyInput): SecurityPolicy {
       createPullRequest:
         operation === "implement" ||
         (operation === "task" && !(context.kind === "entity" && context.isPullRequest)),
+      manageIssueLabels: true,
+      manageIssueAssignees: true,
+      updateIssueState: true,
+      updatePullRequestMetadata: true,
     },
   };
 }

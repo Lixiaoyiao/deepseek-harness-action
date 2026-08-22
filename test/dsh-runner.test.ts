@@ -818,6 +818,10 @@ describe("runDsh", () => {
           commit: true,
           push: true,
           createPullRequest: true,
+          manageIssueLabels: true,
+          manageIssueAssignees: true,
+          updateIssueState: true,
+          updatePullRequestMetadata: true,
         },
       },
     });
@@ -1025,6 +1029,10 @@ describe("runDsh", () => {
             commit: false,
             push: false,
             createPullRequest: false,
+            manageIssueLabels: false,
+            manageIssueAssignees: false,
+            updateIssueState: false,
+            updatePullRequestMetadata: false,
           },
         },
       });

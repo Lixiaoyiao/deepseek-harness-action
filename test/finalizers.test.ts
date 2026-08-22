@@ -129,6 +129,10 @@ describe("operation finalizers", () => {
         commit: false,
         push: false,
         createPullRequest: false,
+        manageIssueLabels: false,
+        manageIssueAssignees: false,
+        updateIssueState: false,
+        updatePullRequestMetadata: false,
       },
     };
     await runAgentTask(
@@ -144,6 +148,7 @@ describe("operation finalizers", () => {
           workspace: [],
           manifests: [],
           commands: [],
+          github: [],
           permission: {
             profile: "custom",
             requestedTools: [],

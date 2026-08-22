@@ -11,7 +11,7 @@ import { finalizeWorkflowRunRoute, routeCommand, type RoutedCommand } from "./co
 import { finishDiagnosis } from "./commands/diagnose.js";
 import { finishReview } from "./commands/review.js";
 import { publishTaskAnswer } from "./commands/task.js";
-import { AgentDeadlineError, runAgentLoop } from "./agent/loop.js";
+import { AgentDeadlineError, runAgentLoop, type AgentToolReceipt } from "./agent/loop.js";
 import { DshAbortedError } from "./dsh/errors.js";
 import { PolicyDeniedError } from "./errors.js";
 import { createGitHubClient } from "./github/client.js";
@@ -22,13 +22,23 @@ import { checkActorPermissions } from "./github/permissions.js";
 import { StickyProgressReporter } from "./github/progress.js";
 import { revalidatePullRequestHead } from "./write/pr.js";
 import { materializeRepositoryAtSha } from "./github/repository.js";
-import { createWorkspaceSnapshot, type WorkspaceSnapshot } from "./write/workspace.js";
+import {
+  createWorkspaceSnapshot,
+  fingerprintWorkspace,
+  type WorkspaceSnapshot,
+} from "./write/workspace.js";
 import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
 import { buildPermissionAudit, type PermissionAudit } from "./permissions/profile.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
+import {
+  GitHubToolFlushError,
+  GitHubToolProvider,
+  type GitHubToolBinding,
+  type GitHubToolFlushReceipt,
+} from "./tools/github.js";
 import { ToolRouter } from "./tools/router.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
 import { throwIfCancelled } from "./lifecycle/cancellation.js";
@@ -63,6 +73,11 @@ import {
   taskIdentity,
 } from "./orchestration/context.js";
 import { executeWrite, type WriteOutcome } from "./orchestration/write.js";
+import {
+  assertValidationSucceeded,
+  assertWriteValidationConfigured,
+  runValidationCommandsInDocker,
+} from "./write/validate.js";
 
 export {
   assertOperationContext,
@@ -81,7 +96,9 @@ interface RunState {
   permission?: PermissionAudit;
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
+  validationPassed?: boolean;
   progressFailure?: ProgressFailureFinalization;
+  partialWrite?: WriteOutcome;
 }
 
 interface ProgressFailureFinalization {
@@ -89,6 +106,84 @@ interface ProgressFailureFinalization {
   readonly deadlineMs: number;
   status: "pending" | "succeeded" | "failed";
   promise: Promise<void>;
+}
+
+function githubToolBinding(
+  context: ReturnType<typeof parseGitHubContext>,
+  snapshot: EntitySnapshot | undefined,
+): GitHubToolBinding | undefined {
+  const repository = {
+    repositoryId: context.repository.id,
+    owner: context.repository.owner,
+    repo: context.repository.repo,
+  } as const;
+  if (context.kind === "entity" && snapshot?.kind === "issue") {
+    return {
+      ...repository,
+      target: "issue",
+      entityNumber: snapshot.number,
+      state: snapshot.state,
+      updatedAt: snapshot.updatedAt,
+      contentFingerprint: snapshot.contentFingerprint,
+    };
+  }
+  if (context.kind === "entity" && snapshot?.kind === "pull_request") {
+    if (snapshot.headRepositoryId === null) return undefined;
+    return {
+      ...repository,
+      target: "pull_request",
+      entityNumber: snapshot.number,
+      headSha: snapshot.headSha,
+      headRef: snapshot.headRef,
+      headRepositoryId: snapshot.headRepositoryId,
+      baseSha: snapshot.baseSha,
+      baseRef: snapshot.baseRef,
+      baseRepositoryId: snapshot.baseRepositoryId,
+    };
+  }
+  if (context.kind === "automation" && context.workflowRun !== undefined) {
+    return { ...repository, target: "workflow_run", headSha: context.workflowRun.headSha };
+  }
+  return undefined;
+}
+
+function mergeGitHubFlushReceipts(
+  receipts: readonly AgentToolReceipt[],
+  flushes: readonly GitHubToolFlushReceipt[],
+): readonly AgentToolReceipt[] {
+  const byCallId = new Map(flushes.map((flush) => [flush.result.callId, flush]));
+  return receipts.map((receipt) => {
+    const flush = byCallId.get(receipt.callId);
+    if (flush === undefined) return receipt;
+    const output =
+      typeof flush.result.output === "object" && flush.result.output !== null
+        ? (flush.result.output as Record<string, unknown>)
+        : {};
+    const effect = output.effect;
+    return {
+      ...receipt,
+      ok: flush.result.ok,
+      durationMs: receipt.durationMs + flush.durationMs,
+      ...(effect === "created" ||
+      effect === "updated" ||
+      effect === "unchanged" ||
+      effect === "read" ||
+      effect === "scheduled"
+        ? { effect }
+        : {}),
+      ...(!flush.result.ok ? { error: true } : {}),
+      ...(typeof output.target === "string" && Buffer.byteLength(output.target, "utf8") <= 160
+        ? { target: output.target }
+        : {}),
+      ...(typeof output.attempts === "number" &&
+      Number.isInteger(output.attempts) &&
+      output.attempts >= 0 &&
+      output.attempts <= 2
+        ? { attempts: output.attempts }
+        : {}),
+      ...(typeof output.reconciled === "boolean" ? { reconciled: output.reconciled } : {}),
+    };
+  });
 }
 
 function progressFailureStatus(
@@ -353,10 +448,13 @@ async function runActionInternal(
       agentWorkspace = tempRoot;
     }
     const packet = await buildContextPacket(client, context, command, snapshot, inputs);
+    const trustedGitHubBinding = githubToolBinding(context, snapshot);
     const resolvedTools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy, {
       permissionProfile: inputs.permissionProfile,
       disallowedTools: inputs.disallowedTools,
       isolation: inputs.isolation,
+      ...(trustedGitHubBinding === undefined ? {} : { githubBinding: trustedGitHubBinding }),
+      allowWrite: inputs.allowWrite,
     });
     const deniedTools = new Set(resolvedTools.permission.disallowedTools);
     const extensionAllowedTools = resolvedTools.permission.requestedTools.filter(
@@ -395,12 +493,28 @@ async function runActionInternal(
             containerImage: inputs.containerImage,
             redact,
           });
+    const githubToolProvider =
+      tools.github.length === 0 || trustedGitHubBinding === undefined
+        ? undefined
+        : new GitHubToolProvider({
+            ids: tools.github,
+            binding: trustedGitHubBinding,
+            policy,
+            allowWrite: inputs.allowWrite,
+            expectedAuthorId: inputs.botUserId,
+            client,
+          });
+    const controllerProviders = [commandToolProvider, githubToolProvider].filter(
+      (provider): provider is CommandToolProvider | GitHubToolProvider => provider !== undefined,
+    );
     const toolProvider =
-      commandToolProvider === undefined ? undefined : new ToolRouter([commandToolProvider]);
+      controllerProviders.length === 0 ? undefined : new ToolRouter(controllerProviders);
     const agentTools = {
       ...tools,
       manifests: [
-        ...tools.manifests.filter(({ provider }) => provider !== "command"),
+        ...tools.manifests.filter(
+          ({ provider }) => provider !== "command" && provider !== "github",
+        ),
         ...(toolProvider?.manifest() ?? []),
       ],
     };
@@ -411,8 +525,114 @@ async function runActionInternal(
       extensions: extensions.audit,
     });
     state.permission = permission;
-    const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
     const deadlineMs = startedAt + inputs.timeoutMinutes * 60_000;
+    const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
+    const githubMutationTools = tools.github.filter((id) => id !== "github.checks.read");
+    let githubValidationFingerprint: string | undefined;
+    let githubValidationBudget: ValidationDeadline | undefined;
+    const ensureGitHubMutationValidation = async (): Promise<void> => {
+      if (githubMutationTools.length === 0) return;
+      if (workspaceCopy === undefined) {
+        throw new PolicyDeniedError(
+          "GitHub mutation tools require an immutable Controller workspace snapshot",
+        );
+      }
+      const validationWorkspace = workspaceCopy;
+      assertWriteValidationConfigured(inputs.runTests, inputs.testCommands);
+      const before = await fingerprintWorkspace(validationWorkspace.workerRoot);
+      if (before === githubValidationFingerprint) return;
+      state.phase = "validation";
+      if (githubValidationBudget === undefined) {
+        const phaseMs = phaseTimeoutMs(deadlineMs, PHASE_TIMEOUTS.validationMs, Date.now);
+        if (phaseMs <= 0) throw new AgentDeadlineError();
+        githubValidationBudget = {
+          deadlineMs: Date.now() + phaseMs,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        };
+      }
+      const validationBudget = githubValidationBudget;
+      const changes = await withinSharedValidationDeadline(
+        async () => inspectWorkspaceChanges(validationWorkspace),
+        validationBudget,
+      );
+      let integrity = await withinSharedValidationDeadline(
+        async () =>
+          inspectValidationIntegrity({
+            snapshot: validationWorkspace,
+            changes,
+            commands: inputs.testCommands,
+            mode: inputs.validationIntegrity,
+          }),
+        validationBudget,
+      );
+      integrity = await withinSharedValidationDeadline(
+        async () =>
+          enforceValidationIntegrity({
+            snapshot: validationWorkspace,
+            commands: inputs.testCommands,
+            audit: integrity,
+            baselineReplay: {
+              containerImage: inputs.containerImage,
+              timeoutMs: remainingSharedValidationMs(validationBudget),
+              ...(options.signal === undefined ? {} : { signal: options.signal }),
+            },
+          }),
+        validationBudget,
+      );
+      state.validationIntegrity = integrity;
+      const validationResults = await withinSharedValidationDeadline(
+        async () =>
+          runValidationCommandsInDocker(
+            validationWorkspace.workerRoot,
+            inputs.testCommands,
+            inputs.containerImage,
+            remainingSharedValidationMs(validationBudget),
+            undefined,
+            options.signal,
+          ),
+        validationBudget,
+      );
+      assertValidationSucceeded(validationResults);
+      state.validationPassed = true;
+      const after = await fingerprintWorkspace(validationWorkspace.workerRoot);
+      if (after !== before) {
+        throw new PolicyDeniedError(
+          "Workspace changed while validating deferred GitHub mutations; refusing mutation",
+        );
+      }
+      githubValidationFingerprint = after;
+    };
+    const githubFlushReceipts: GitHubToolFlushReceipt[] = [];
+    const flushGitHubMutations = async (remainingMs: number): Promise<void> => {
+      if (githubToolProvider?.hasPendingMutations() !== true) return;
+      await ensureGitHubMutationValidation();
+      state.phase = "write";
+      try {
+        githubFlushReceipts.push(
+          ...(await githubToolProvider.flush({
+            workspacePath: agentWorkspace,
+            timeoutMs: Math.min(remainingMs, deadlineMs - Date.now()),
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          })),
+        );
+      } catch (error: unknown) {
+        if (error instanceof GitHubToolFlushError) {
+          githubFlushReceipts.push(...error.receipts);
+          if (state.agent?.toolReceipts !== undefined) {
+            state.agent = {
+              ...state.agent,
+              toolReceipts: mergeGitHubFlushReceipts(state.agent.toolReceipts, githubFlushReceipts),
+            };
+          }
+        }
+        throw error;
+      }
+    };
+
+    // Mutation requests are deferred until finalization, but validate the exact
+    // immutable baseline before the first Agent turn so no model-controlled
+    // path can introduce a pre-validation GitHub side effect.
+    if (githubMutationTools.length > 0) await ensureGitHubMutationValidation();
 
     state.phase = "agent";
     const loop = await runAgentLoop(
@@ -609,6 +829,7 @@ async function runActionInternal(
           if (command.operation === "task") {
             if ((changes?.all.length ?? 0) === 0) {
               remainingControllerMs();
+              await flushGitHubMutations(remainingControllerMs());
               state.phase = "publication";
               const commentId =
                 issueNumber === undefined
@@ -686,6 +907,19 @@ async function runActionInternal(
             },
             options.signal,
           );
+          state.partialWrite = { ...write, writeStatus: "partial-success" };
+          // executeWrite has completed the existing Controller validation and
+          // Validation Integrity gates for this exact workspace revision.
+          if (
+            snapshot?.kind === "pull_request" &&
+            write.commitSha !== undefined &&
+            githubToolProvider !== undefined
+          ) {
+            githubToolProvider.advancePullHead(write.commitSha, snapshot.headRef);
+          }
+          githubValidationFingerprint = await fingerprintWorkspace(agentWorkspace);
+          await flushGitHubMutations(remainingControllerMs());
+          delete state.partialWrite;
           return { kind: "write", write };
         },
       },
@@ -701,7 +935,7 @@ async function runActionInternal(
       turns: loop.stats.turns,
       toolCalls: loop.stats.toolCalls,
       validationRetries: loop.stats.validationRetries,
-      toolReceipts: loop.stats.toolReceipts,
+      toolReceipts: mergeGitHubFlushReceipts(loop.stats.toolReceipts, githubFlushReceipts),
       ...(agentResult.toolReceipts === undefined
         ? {}
         : { dshToolReceipts: agentResult.toolReceipts }),
@@ -741,13 +975,16 @@ async function runActionInternal(
         operation: command.operation,
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
-        validation: {
-          status: "not-applicable",
-          commandCount: 0,
-          ...(state.validationIntegrity === undefined
-            ? {}
-            : { integrity: state.validationIntegrity }),
-        },
+        validation:
+          finalized.kind === "answer" && githubMutationTools.length > 0
+            ? successfulValidation(inputs, state.validationIntegrity)
+            : {
+                status: "not-applicable",
+                commandCount: 0,
+                ...(state.validationIntegrity === undefined
+                  ? {}
+                  : { integrity: state.validationIntegrity }),
+              },
         ...(finalized.kind !== "answer" || !finalized.noChanges
           ? {}
           : { writeStatus: "no-changes" as const, changedPaths: [] }),
@@ -830,7 +1067,10 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
-            status: "failed",
+            status:
+              failure.phase === "validation" || state.validationPassed !== true
+                ? "failed"
+                : "passed",
             commandCount: state.validationCommandCount ?? 0,
             ...(state.validationIntegrity === undefined
               ? {}
@@ -844,6 +1084,7 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
       summary: failure.title,
       findingsCount: 0,
       ...(validation === undefined ? {} : { validation }),
+      ...(state.partialWrite ?? {}),
       error: failure,
     };
   } finally {

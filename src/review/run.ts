@@ -46,7 +46,7 @@ export function partitionDshToolPlanes(tools: readonly AgentToolManifest[]): {
   const controllerTools: AgentToolManifest[] = [];
   const extensionTools: AgentToolManifest[] = [];
   for (const tool of tools) {
-    if (tool.provider === "command") {
+    if (tool.provider === "command" || tool.provider === "github") {
       controllerTools.push(tool);
       continue;
     }

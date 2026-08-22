@@ -48,6 +48,10 @@ const policy: SecurityPolicy = {
     commit: true,
     push: true,
     createPullRequest: true,
+    manageIssueLabels: true,
+    manageIssueAssignees: true,
+    updateIssueState: true,
+    updatePullRequestMetadata: true,
   },
 };
 const result: DshRunResult = {

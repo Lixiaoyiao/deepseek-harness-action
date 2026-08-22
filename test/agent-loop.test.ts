@@ -69,6 +69,10 @@ function task(contextPacket: unknown = { identity: "TASK-ID" }): AgentTask {
         commit: true,
         push: true,
         createPullRequest: true,
+        manageIssueLabels: true,
+        manageIssueAssignees: true,
+        updateIssueState: true,
+        updatePullRequestMetadata: true,
       },
     },
     contextPacket,
@@ -87,6 +91,7 @@ function task(contextPacket: unknown = { identity: "TASK-ID" }): AgentTask {
         },
       ],
       commands: [],
+      github: [],
       permission: {
         profile: "strict",
         requestedTools: ["workspace.read", "workspace.edit"],
@@ -346,6 +351,10 @@ describe("controller-owned agent loop", () => {
             stdout: `tool output ${"o".repeat(20_000)}`,
             stderr: `tool error ${"e".repeat(20_000)} TOOL_TAIL`,
             timedOut: false,
+            effect: "scheduled",
+            target: "repository:42/issue:7",
+            attempts: 0,
+            reconciled: false,
           },
         }),
     };
@@ -386,6 +395,12 @@ describe("controller-owned agent loop", () => {
     expect(result.stats).toMatchObject({ turns: 3, toolCalls: 1, validationRetries: 1 });
     expect(result.stats.toolReceipts).toHaveLength(1);
     expect(result.stats.toolReceipts[0]?.callId).toMatch(/^call-[a-f0-9]{40}$/u);
+    expect(result.stats.toolReceipts[0]).toMatchObject({
+      effect: "scheduled",
+      target: "repository:42/issue:7",
+      attempts: 0,
+      reconciled: false,
+    });
     const toolFeedbackPrompt = buildDshPrompt({
       operation: "task",
       prompt: JSON.stringify(requests[1]?.context),

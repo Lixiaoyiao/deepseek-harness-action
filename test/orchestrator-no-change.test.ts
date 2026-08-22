@@ -15,11 +15,13 @@ import type * as GitHubPermissionsModule from "../src/github/permissions.js";
 import type * as RepositoryModule from "../src/github/repository.js";
 import type * as InputsModule from "../src/inputs.js";
 import type * as ValidationIntegrityModule from "../src/write/validation-integrity.js";
+import type * as ValidationModule from "../src/write/validate.js";
 import type * as WorkspaceModule from "../src/write/workspace.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
 import type * as WriteGitHubModule from "../src/write/github.js";
 import type * as WritePrModule from "../src/write/pr.js";
 import { deferProgressUntilWriteValidation, runAction } from "../src/orchestrator.js";
+import { issueContentFingerprint } from "../src/github/issue-identity.js";
 import { inputs } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -33,8 +35,10 @@ const mocks = vi.hoisted(() => ({
   materializeRepositoryAtSha: vi.fn(),
   createWorkspaceSnapshot: vi.fn(),
   inspectWorkspaceChanges: vi.fn(),
+  fingerprintWorkspace: vi.fn(),
   inspectValidationIntegrity: vi.fn(),
   enforceValidationIntegrity: vi.fn(),
+  runValidationCommandsInDocker: vi.fn(),
   runAgentLoop: vi.fn(),
   publishTaskAnswer: vi.fn(),
   finishAutomationTask: vi.fn(),
@@ -89,12 +93,18 @@ vi.mock("../src/write/workspace.js", async (importOriginal) => ({
   ...(await importOriginal<typeof WorkspaceModule>()),
   createWorkspaceSnapshot: mocks.createWorkspaceSnapshot,
   inspectWorkspaceChanges: mocks.inspectWorkspaceChanges,
+  fingerprintWorkspace: mocks.fingerprintWorkspace,
 }));
 
 vi.mock("../src/write/validation-integrity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ValidationIntegrityModule>()),
   inspectValidationIntegrity: mocks.inspectValidationIntegrity,
   enforceValidationIntegrity: mocks.enforceValidationIntegrity,
+}));
+
+vi.mock("../src/write/validate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ValidationModule>()),
+  runValidationCommandsInDocker: mocks.runValidationCommandsInDocker,
 }));
 
 vi.mock("../src/agent/loop.js", async (importOriginal) => ({
@@ -143,7 +153,7 @@ const issue: IssueSnapshot = {
   author: "alice",
   state: "open",
   updatedAt: "2026-08-22T00:00:00Z",
-  contentFingerprint: "issue-fingerprint",
+  contentFingerprint: "f".repeat(64),
   comments: [],
 };
 const workspaceSnapshot: WorkspaceSnapshot = {
@@ -254,6 +264,22 @@ beforeEach(() => {
     changes: [],
     truncated: false,
   });
+  mocks.enforceValidationIntegrity.mockImplementation(async (input: { audit: unknown }) =>
+    Promise.resolve(input.audit),
+  );
+  mocks.fingerprintWorkspace.mockResolvedValue("workspace-fingerprint");
+  mocks.runValidationCommandsInDocker.mockResolvedValue([
+    {
+      argv: ["npm", "test"],
+      result: {
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        outputTruncated: false,
+      },
+    },
+  ]);
   mocks.publishTaskAnswer.mockResolvedValue(4242);
   mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
     const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
@@ -375,6 +401,151 @@ describe("orchestrator task no-change publication", () => {
       conclusion: "failure",
       error: { code: "AGENT_TIMEOUT", category: "runtime", phase: "validation" },
     });
+    expect(mocks.publishTaskAnswer).not.toHaveBeenCalled();
+  });
+
+  it("validates before the Agent, defers typed GitHub mutation, then flushes after finalization", async () => {
+    const title = "Check whether a change is needed";
+    const body = "Inspect the current implementation and answer.";
+    const fingerprint = issueContentFingerprint({ number: 7, title, body, authorId: 101 });
+    mocks.fetchEntitySnapshot.mockResolvedValueOnce({
+      ...issue,
+      title,
+      body,
+      contentFingerprint: fingerprint,
+    });
+    mocks.loadInputs.mockReturnValueOnce(
+      inputs({
+        command: "task",
+        prompt: "Update issue metadata only",
+        taskAccess: "write",
+        allowWrite: true,
+        isolation: "docker",
+        permissionProfile: "custom",
+        allowedTools: ["workspace.read", "workspace.edit", "github.issue.labels.set"],
+        testCommands: [["npm", "test"]],
+      }),
+    );
+    let labels: readonly string[] = [];
+    const getIssue = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          number: 7,
+          title,
+          body,
+          state: "open",
+          state_reason: null,
+          labels: labels.map((name) => ({ name })),
+          assignees: [],
+          user: { id: 101, login: "alice" },
+          updated_at: "2026-08-22T00:00:00Z",
+        },
+      }),
+    );
+    const setLabels = vi.fn((request: { labels: readonly string[] }) => {
+      labels = request.labels;
+      return Promise.resolve({ data: [] });
+    });
+    mocks.createGitHubClient.mockReturnValueOnce({
+      rest: { issues: { get: getIssue, setLabels } },
+    });
+    mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
+      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+      expect(mocks.runValidationCommandsInDocker).toHaveBeenCalledOnce();
+      expect(setLabels).not.toHaveBeenCalled();
+      const scheduled = await hooks.toolProvider?.invoke(
+        {
+          callId: `call-${"a".repeat(40)}`,
+          id: "github.issue.labels.set",
+          input: { labels: ["triaged"] },
+        },
+        { workspacePath: "agent-workspace", timeoutMs: 60_000 },
+      );
+      expect(scheduled?.output).toMatchObject({ effect: "scheduled", attempts: 0 });
+      expect(setLabels).not.toHaveBeenCalled();
+      const stats: AgentLoopModule.AgentLoopStats = {
+        turns: 2,
+        toolCalls: 1,
+        validationRetries: 0,
+        toolReceipts: [
+          {
+            callId: `call-${"a".repeat(40)}`,
+            id: "github.issue.labels.set",
+            ok: true,
+            durationMs: 1,
+            effect: "scheduled",
+            target: "repository:1/issue:7",
+            attempts: 0,
+            reconciled: false,
+          },
+        ],
+      };
+      await hooks.onState?.(agentResult, stats);
+      const finalization = await hooks.finalize(agentResult, 60_000);
+      return { agent: agentResult, stats, finalization };
+    });
+
+    const outcome = await runAction();
+
+    expect(setLabels).toHaveBeenCalledOnce();
+    expect(labels).toEqual(["triaged"]);
+    expect(mocks.runValidationCommandsInDocker).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      conclusion: "success",
+      validation: { status: "passed", commandCount: 1 },
+      agent: {
+        toolReceipts: [
+          {
+            id: "github.issue.labels.set",
+            ok: true,
+            effect: "updated",
+            attempts: 1,
+            reconciled: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it("never starts the Agent or a GitHub mutation when the pre-Agent validation gate fails", async () => {
+    mocks.loadInputs.mockReturnValueOnce(
+      inputs({
+        command: "task",
+        prompt: "Update issue metadata only",
+        taskAccess: "write",
+        allowWrite: true,
+        isolation: "docker",
+        permissionProfile: "custom",
+        allowedTools: ["workspace.read", "workspace.edit", "github.issue.labels.set"],
+        testCommands: [["npm", "test"]],
+      }),
+    );
+    const setLabels = vi.fn();
+    mocks.createGitHubClient.mockReturnValueOnce({
+      rest: { issues: { setLabels } },
+    });
+    mocks.runValidationCommandsInDocker.mockResolvedValueOnce([
+      {
+        argv: ["npm", "test"],
+        result: {
+          exitCode: 1,
+          stdout: "",
+          stderr: "failed",
+          timedOut: false,
+          outputTruncated: false,
+        },
+      },
+    ]);
+
+    const outcome = await runAction();
+
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      validation: { status: "failed", commandCount: 1 },
+      error: { code: "VALIDATION_FAILED", phase: "validation" },
+    });
+    expect(mocks.runAgentLoop).not.toHaveBeenCalled();
+    expect(setLabels).not.toHaveBeenCalled();
     expect(mocks.publishTaskAnswer).not.toHaveBeenCalled();
   });
 });

@@ -5,8 +5,10 @@ export const AGENT_PROTOCOL_VERSION = 1 as const;
 export interface AgentToolManifest {
   readonly id: string;
   readonly description: string;
-  readonly provider: "builtin" | "command" | "mcp" | "plugin";
-  readonly permissions: readonly ("read" | "write" | "execute" | "network")[];
+  readonly provider: "builtin" | "command" | "github" | "mcp" | "plugin";
+  readonly permissions: readonly (
+    "read" | "write" | "execute" | "network" | "github-read" | "github-write"
+  )[];
   readonly inputSchema: Readonly<Record<string, unknown>>;
 }
 

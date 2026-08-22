@@ -39,6 +39,10 @@ const policy: SecurityPolicy = {
     commit: true,
     push: true,
     createPullRequest: false,
+    manageIssueLabels: true,
+    manageIssueAssignees: true,
+    updateIssueState: true,
+    updatePullRequestMetadata: true,
   },
 };
 

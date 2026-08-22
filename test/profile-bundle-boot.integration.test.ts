@@ -40,6 +40,10 @@ const trustedRead: SecurityPolicy = {
     commit: false,
     push: false,
     createPullRequest: false,
+    manageIssueLabels: false,
+    manageIssueAssignees: false,
+    updateIssueState: false,
+    updatePullRequestMetadata: false,
   },
 };
 

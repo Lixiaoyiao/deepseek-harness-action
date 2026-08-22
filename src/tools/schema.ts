@@ -90,10 +90,20 @@ export type ToolConfiguration = z.infer<typeof toolConfigurationSchema>;
 export type CommandToolId = `command.${string}`;
 export type McpToolId = `mcp.${string}.${string}`;
 export type PluginToolId = `plugin.${string}.${string}`;
-export type AllowedToolId = NativeToolId | CommandToolId | McpToolId | PluginToolId;
+export const githubToolSchema = z.enum([
+  "github.issue.labels.set",
+  "github.issue.assignees.set",
+  "github.issue.state.update",
+  "github.comment.create",
+  "github.pull.metadata.update",
+  "github.checks.read",
+]);
+export type GitHubToolId = z.infer<typeof githubToolSchema>;
+export type AllowedToolId = NativeToolId | CommandToolId | GitHubToolId | McpToolId | PluginToolId;
 
 const allowedToolIdSchema = z.union([
   nativeToolSchema,
+  githubToolSchema,
   z.string().regex(/^command\.[a-z][a-z0-9-]{0,31}$/u),
   z.string().regex(/^mcp\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
   z.string().regex(/^plugin\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),

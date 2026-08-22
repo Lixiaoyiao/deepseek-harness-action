@@ -32,6 +32,10 @@ function policy(
       commit: false,
       push: false,
       createPullRequest: false,
+      manageIssueLabels: trust === "trusted-write",
+      manageIssueAssignees: trust === "trusted-write",
+      updateIssueState: trust === "trusted-write",
+      updatePullRequestMetadata: trust === "trusted-write",
       ...overrides,
     },
   };
