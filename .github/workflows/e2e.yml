@@ -468,7 +468,7 @@ jobs:
           progress-comment: "false"
           validation-integrity: strict
           run-tests: "true"
-          test-commands: '[["node","-e","process.exit(23)"]]'
+          test-commands: '[["false"]]'
           max-turns: "2"
           timeout-minutes: "15"
 
@@ -488,6 +488,9 @@ jobs:
             .conclusion == "failure" and .status == "validation_failed" and
             .error.code == "VALIDATION_FAILED" and .error.phase == "validation" and
             .validation.status == "failed" and
+            .validation.integrity.mode == "strict" and
+            .validation.integrity.status == "clean" and
+            .validation.integrity.dangerousChangeCount == 0 and
             (.loop.toolReceipts | any(.id == "command.prepare-validation" and .ok == true)) and
             (.loop.dshToolReceipts // [] | all(.id != "native.bash"))
           ' <<<"$RESULT_JSON" >/dev/null
