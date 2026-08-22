@@ -13,7 +13,7 @@ import {
   type DshRuntime,
   type DshToolReceipt,
 } from "../dsh/runner.js";
-import { DshError, type DshFailureTelemetry } from "../dsh/errors.js";
+import { DshError, DshMalformedOutputError, type DshFailureTelemetry } from "../dsh/errors.js";
 import { parseDshOutput, type DshOutput } from "../dsh/schema.js";
 import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
@@ -355,6 +355,9 @@ export async function runAgentLoop<TFinal>(
           };
           error.attachTelemetry(aggregateFailure);
           await hooks.onEngineFailure?.(aggregateFailure, stats(turn));
+        }
+        if (pendingValidationFailure !== undefined && error instanceof DshMalformedOutputError) {
+          throw pendingValidationFailure;
         }
         throw error;
       }

@@ -130,7 +130,7 @@ DSH turn
   └─ blocked → 仅在没有未解决的 Controller validation failure 时返回 neutral
 ```
 
-默认 `strict` Agent toolset 没有 shell。受信任维护者可以选择 `standard` 或精确的 `custom` 策略，在无凭据 Docker worker 内开放经过审计的 DSH 原生 Bash 工具。任何 profile 都不会让 DSH 获得 GitHub 凭据、真实 DeepSeek key、自行批准或扩大工具集合的能力，也不会获得 commit/push/PR/Release 权限。显式获准的第三方扩展属于受信任 worker code，可以产生下文说明的进程级副作用。controller 负责 validation、实际变更检查和所有最终 GitHub mutation。`max-turns`（默认 3）统一限制工具请求和 validation 修复所消耗的 DSH turn；`timeout-minutes` 是整个 controller loop 的总 deadline。若相同 workspace revision 连续得到相同 validation 失败，controller 会以 no-progress 错误停止，避免无效循环。若修复轮改为返回 `blocked`，它也不能抹去待处理的 validation failure：原始失败与任何 Validation Integrity audit 仍是权威结果。turn/tool/validation-retry 计数与限长 tool receipts 会写入 `result-json.loop`。
+默认 `strict` Agent toolset 没有 shell。受信任维护者可以选择 `standard` 或精确的 `custom` 策略，在无凭据 Docker worker 内开放经过审计的 DSH 原生 Bash 工具。任何 profile 都不会让 DSH 获得 GitHub 凭据、真实 DeepSeek key、自行批准或扩大工具集合的能力，也不会获得 commit/push/PR/Release 权限。显式获准的第三方扩展属于受信任 worker code，可以产生下文说明的进程级副作用。controller 负责 validation、实际变更检查和所有最终 GitHub mutation。`max-turns`（默认 3）统一限制工具请求和 validation 修复所消耗的 DSH turn；`timeout-minutes` 是整个 controller loop 的总 deadline。若相同 workspace revision 连续得到相同 validation 失败，controller 会以 no-progress 错误停止，避免无效循环。修复轮通过返回 `blocked`、耗尽 turn 或输出畸形 structured output 都不能抹去待处理的 validation failure：原始失败与任何 Validation Integrity audit 会一直保持权威，直至后续 finalization 通过。独立的 cancellation、credential leak、isolation 与 runtime failure 仍保留各自分类。turn/tool/validation-retry 计数与限长 tool receipts 会写入 `result-json.loop`。
 
 ## 权限档位
 

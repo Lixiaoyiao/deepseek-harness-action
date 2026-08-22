@@ -8,7 +8,11 @@ import {
   runAgentLoop,
 } from "../src/agent/loop.js";
 import { buildDshPrompt, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
-import { DshProcessError } from "../src/dsh/errors.js";
+import {
+  DshCredentialLeakError,
+  DshMalformedOutputError,
+  DshProcessError,
+} from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
 import type { DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
@@ -108,6 +112,27 @@ function engine(
       if (next === undefined) throw new Error("Unexpected turn");
       return Promise.resolve({
         output: next,
+        durationMs: 10,
+        metadata: { isolationReport: isolation },
+      });
+    },
+  };
+}
+
+function repairTurnFailureEngine(
+  error: Error,
+  requests: AgentTurnRequest[],
+): AgentEngine<DshOutput, DshTurnMetadata> {
+  let turn = 0;
+  return {
+    id: "fake-repair-failure",
+    version: "1",
+    runTurn: (request) => {
+      requests.push(request);
+      turn += 1;
+      if (turn > 1) return Promise.reject(error);
+      return Promise.resolve({
+        output: output("final"),
         durationMs: 10,
         metadata: { isolationReport: isolation },
       });
@@ -507,6 +532,90 @@ describe("controller-owned agent loop", () => {
         },
       ),
     ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
+  it("does not let malformed repair output erase a pending validation-integrity failure", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const onEngineFailure = vi.fn();
+    const malformed = new DshMalformedOutputError(
+      "DSH stdout was not one complete JSON value",
+    ).attachTelemetry({
+      durationMs: 25,
+      isolationReport: isolation,
+      toolReceipts: [
+        {
+          schemaVersion: 1,
+          callId: "repair-malformed",
+          id: "native.bash",
+          runtimeName: "bash",
+          provider: "builtin",
+          counted: true,
+          completed: true,
+          ok: true,
+          durationMs: 4,
+        },
+      ],
+    });
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+          onEngineFailure,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => repairTurnFailureEngine(malformed, requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(onEngineFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durationMs: 35,
+        toolReceipts: [expect.objectContaining({ callId: "repair-malformed", ok: true })],
+      }),
+      expect.objectContaining({ turns: 2, validationRetries: 1 }),
+    );
+  });
+
+  it("does not let a pending validation failure hide a repair-turn credential leak", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const credentialLeak = new DshCredentialLeakError("stdout").attachTelemetry({
+      durationMs: 25,
+      isolationReport: isolation,
+    });
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => repairTurnFailureEngine(credentialLeak, requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(credentialLeak);
     expect(requests).toHaveLength(2);
     expect(finalize).toHaveBeenCalledOnce();
   });
