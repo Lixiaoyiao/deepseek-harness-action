@@ -561,7 +561,7 @@ jobs:
           progress-comment: "false"
           validation-integrity: strict
           run-tests: "true"
-          test-commands: '[["node","-e","const fs=require(\"node:fs\");if(fs.readFileSync(process.argv[1],\"utf8\")!==\"trusted-write\\n\")process.exit(1)","dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt"]]'
+          test-commands: '[["node",".github/e2e/assert-trusted-write.mjs","dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt"]]'
           max-turns: "2"
           timeout-minutes: "18"
 
