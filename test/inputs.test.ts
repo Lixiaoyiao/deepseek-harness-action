@@ -40,6 +40,7 @@ describe("loadInputs", () => {
       ["npm", "test"],
       ["node", "script with spaces.js"],
     ]);
+    expect(result.taskOutputSchema).toBeUndefined();
   });
 
   it("parses bounded maintainer-owned routing and actor filters", () => {
@@ -96,6 +97,8 @@ describe("loadInputs", () => {
     ["label-trigger", "bad\u0000label"],
     ["allowed-actors", "alice,not an actor"],
     ["allowed-bots", "alice/../../admin"],
+    ["task-output-schema", '{"type":"object","$ref":"https://example.test/schema"}'],
+    ["task-output-schema", '{"type":"object","oneOf":[{"type":"object"}]}'],
   ])("rejects invalid %s", (name, value) => {
     expect(() =>
       loadInputs(
@@ -241,5 +244,50 @@ describe("loadInputs", () => {
         ),
       ).toThrow(/credentials must not appear/u);
     }
+  });
+
+  it("loads a bounded trusted task output schema and rejects credentials embedded in it", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "sk-deepseek-secret-value",
+        "github-token": "ghs_controller-secret-value",
+        "task-output-schema": JSON.stringify({
+          type: "object",
+          properties: { status: { type: "string", enum: ["ready", "blocked"] } },
+          required: ["status"],
+          additionalProperties: false,
+        }),
+      }),
+    );
+    expect(result.taskOutputSchema).toEqual({
+      type: "object",
+      properties: { status: { type: "string", enum: ["ready", "blocked"] } },
+      required: ["status"],
+      additionalProperties: false,
+    });
+
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "sk-deepseek-secret-value",
+          "github-token": "ghs_controller-secret-value",
+          "task-output-schema": JSON.stringify({
+            type: "object",
+            description: "ghs_controller-secret-value",
+          }),
+        }),
+      ),
+    ).toThrow(/credentials must not appear/u);
+
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "sk-deepseek-secret-value",
+          "github-token": "ghs_controller-secret-value",
+          command: "review",
+          "task-output-schema": JSON.stringify({ type: "object" }),
+        }),
+      ),
+    ).toThrow(/supported only for command task or auto/u);
   });
 });

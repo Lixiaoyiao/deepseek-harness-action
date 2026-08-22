@@ -18,6 +18,7 @@ import {
   validateAllowedToolReferences,
 } from "./tools/schema.js";
 import { DSH_VERSION } from "./release.js";
+import { parseTaskOutputSchema } from "./dsh/task-output.js";
 
 const booleanInput = z.enum(["true", "false"]).transform((value) => value === "true");
 
@@ -197,6 +198,20 @@ const actionInputsSchema = z.object({
       return z.NEVER;
     }
   }),
+  taskOutputSchema: z
+    .string()
+    .transform((value, context) => {
+      try {
+        return parseTaskOutputSchema(value);
+      } catch (error: unknown) {
+        context.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return z.NEVER;
+      }
+    })
+    .optional(),
 });
 
 export type ActionInputs = z.infer<typeof actionInputsSchema>;
@@ -237,11 +252,23 @@ const defaults = {
   toolConfig: '{"schemaVersion":1,"commands":[]}',
   mcpConfig: '{"schemaVersion":1,"servers":[]}',
   pluginConfig: '{"schemaVersion":1,"bundles":[],"plugins":[]}',
+  taskOutputSchema: "",
 } as const;
 
 function optionalInput(reader: InputReader, name: string, fallback: string): string {
   const value = reader(name);
   return value === "" ? fallback : value;
+}
+
+function containsSecret(value: unknown, secret: string): boolean {
+  if (typeof value === "string") return value.includes(secret);
+  if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(
+      ([key, item]) => key.includes(secret) || containsSecret(item, secret),
+    );
+  }
+  return false;
 }
 
 function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): void {
@@ -252,12 +279,13 @@ function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): vo
   ];
   if (
     secrets.some((secret) => inputs.prompt.includes(secret)) ||
+    secrets.some((secret) => containsSecret(inputs.taskOutputSchema, secret)) ||
     configuredArgv.some((argv) =>
       argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
     )
   ) {
     throw new ActionConfigurationError(
-      "Invalid action inputs: controller credentials must not appear in the task prompt, test-commands, or tool-config argv",
+      "Invalid action inputs: controller credentials must not appear in the task prompt, task-output-schema, test-commands, or tool-config argv",
     );
   }
 }
@@ -311,6 +339,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
     mcpConfig: optionalInput(reader, "mcp-config", defaults.mcpConfig),
     pluginConfig: optionalInput(reader, "plugin-config", defaults.pluginConfig),
+    taskOutputSchema: optionalInput(reader, "task-output-schema", defaults.taskOutputSchema),
   });
 
   if (!parsed.success) {
@@ -350,6 +379,15 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
     throw new ActionConfigurationError(
       "Invalid action inputs: prompt is required when command is task",
+    );
+  }
+  if (
+    parsed.data.taskOutputSchema !== undefined &&
+    parsed.data.command !== "auto" &&
+    parsed.data.command !== "task"
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: task-output-schema is supported only for command task or auto",
     );
   }
   if (

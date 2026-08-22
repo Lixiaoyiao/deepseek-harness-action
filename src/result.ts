@@ -86,6 +86,8 @@ export interface RunOutcome {
   readonly pullRequestNumber?: number;
   readonly pullRequestUrl?: string;
   readonly commentId?: number;
+  /** Controller-validated maintainer-defined task result; never an authority input. */
+  readonly taskOutput?: unknown;
   readonly error?: ActionFailure;
 }
 
@@ -321,6 +323,7 @@ function structuredResult(
     ...(outcome.validation === undefined ? {} : { validation: outcome.validation }),
     ...(Object.keys(write).length === 0 ? {} : { write }),
     ...(outcome.commentId === undefined ? {} : { commentId: outcome.commentId }),
+    ...(outcome.taskOutput === undefined ? {} : { taskOutput: outcome.taskOutput }),
     ...(outcome.error === undefined ? {} : { error: outcome.error }),
   };
 }
@@ -420,6 +423,7 @@ export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string,
     trust: outcome.policy?.trust ?? "none",
     "duration-ms": outcome.durationMs,
     "comment-id": outcome.commentId ?? "",
+    "task-output": outcome.taskOutput === undefined ? "" : JSON.stringify(outcome.taskOutput),
     "error-code": outcome.error?.code ?? "",
     "error-message": outcome.error?.message ?? "",
     "extension-profile-digest": outcome.agent?.extensionAudit?.digest ?? "",

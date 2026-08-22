@@ -6,6 +6,7 @@ import type * as FixModule from "../src/commands/fix.js";
 import type * as ImplementModule from "../src/commands/implement.js";
 import type * as TaskModule from "../src/commands/task.js";
 import type { DshRunResult } from "../src/dsh/runner.js";
+import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
 import type * as GitHubClientModule from "../src/github/client.js";
 import type * as GitHubFetchModule from "../src/github/fetch.js";
 import type { IssueSnapshot } from "../src/github/fetch.js";
@@ -150,6 +151,14 @@ const workspaceSnapshot: WorkspaceSnapshot = {
   workerRoot: "agent-workspace",
   baseline: new Map(),
 };
+const taskOutputSchema = parseTaskOutputSchema(
+  JSON.stringify({
+    type: "object",
+    properties: { status: { type: "string", enum: ["already-complete"] } },
+    required: ["status"],
+    additionalProperties: false,
+  }),
+);
 const agentResult: DshRunResult = {
   output: {
     protocolVersion: 1,
@@ -157,6 +166,7 @@ const agentResult: DshRunResult = {
     state: "final",
     summary: "The repository already satisfies the request; no files need changing.",
     findings: [],
+    taskOutput: { status: "already-complete" },
   },
   durationMs: 25,
   isolationReport: {
@@ -194,6 +204,7 @@ beforeEach(() => {
       allowWrite: true,
       isolation: "docker",
       progressComment: true,
+      taskOutputSchema,
     }),
   );
   mocks.readEventPayload.mockResolvedValue({
@@ -301,6 +312,7 @@ describe("orchestrator task no-change publication", () => {
       changedPaths: [],
       commentId: 4242,
       validation: { status: "not-applicable", commandCount: 0 },
+      taskOutput: { status: "already-complete" },
     });
 
     expect(mocks.finishAutomationTask).not.toHaveBeenCalled();

@@ -90,6 +90,9 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
         workspacePath: request.workspacePath,
         toolCatalog: controllerTools,
         nativeTools,
+        ...(request.operation !== "task" || this.inputs.taskOutputSchema === undefined
+          ? {}
+          : { taskOutputSchema: this.inputs.taskOutputSchema }),
         ...(this.extensions === undefined ? {} : { extensions: this.extensions }),
         trust: this.policy.trust,
         isolation: this.inputs.isolation,

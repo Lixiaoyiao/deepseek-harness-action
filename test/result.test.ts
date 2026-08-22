@@ -240,6 +240,33 @@ describe("versioned action results", () => {
       write: { status: "no-changes", changedPaths: [] },
     });
     expect(formatStepSummary(outcome)).toContain("**Write:** no-changes");
+    expect(outputs["task-output"]).toBe("");
+    expect(JSON.parse(String(outputs["result-json"]))).not.toHaveProperty("taskOutput");
+  });
+
+  it("adds validated task output without replacing the fixed audit envelope", () => {
+    const outcome: RunOutcome = {
+      schemaVersion: 1,
+      conclusion: "success",
+      operation: "task",
+      summary: "Release assessment complete",
+      findingsCount: 0,
+      durationMs: 750,
+      taskOutput: { releaseReady: true, checks: ["unit", "integration"] },
+    };
+
+    const outputs = buildActionOutputs(outcome);
+    expect(JSON.parse(String(outputs["task-output"]))).toEqual(outcome.taskOutput);
+    expect(JSON.parse(String(outputs["result-json"]))).toEqual({
+      schemaVersion: 1,
+      status: "success",
+      conclusion: "success",
+      operation: "task",
+      summary: "Release assessment complete",
+      findingsCount: 0,
+      timing: { durationMs: 750 },
+      taskOutput: { releaseReady: true, checks: ["unit", "integration"] },
+    });
   });
 
   it("distinguishes timeout, validation, denial, and ordinary failure statuses", () => {

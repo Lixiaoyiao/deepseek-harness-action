@@ -690,6 +690,10 @@ async function runActionInternal(
       },
     );
     const agentResult = loop.agent;
+    const taskOutput =
+      command.operation === "task" && agentResult.output.taskOutput !== undefined
+        ? { taskOutput: agentResult.output.taskOutput }
+        : {};
     state.agent = {
       durationMs: agentResult.durationMs,
       isolation: agentResult.isolationReport,
@@ -714,6 +718,7 @@ async function runActionInternal(
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
         validation: { status: "not-applicable", commandCount: 0 },
+        ...taskOutput,
       };
     }
     if (finalized.kind === "review") {
@@ -725,6 +730,7 @@ async function runActionInternal(
         findingsCount: finalized.publication.selected,
         publication: finalized.publication,
         validation: { status: "not-applicable", commandCount: 0 },
+        ...taskOutput,
       };
     }
     if (finalized.kind === "diagnose" || finalized.kind === "answer") {
@@ -747,6 +753,7 @@ async function runActionInternal(
         ...(finalized.kind !== "answer" || finalized.commentId === undefined
           ? {}
           : { commentId: finalized.commentId }),
+        ...taskOutput,
       };
     }
     const write = finalized.write;
@@ -769,6 +776,7 @@ async function runActionInternal(
       summary: agentResult.output.summary,
       findingsCount: agentResult.output.findings.length,
       validation: successfulValidation(inputs, state.validationIntegrity),
+      ...taskOutput,
       ...write,
     };
   } catch (error: unknown) {

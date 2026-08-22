@@ -361,7 +361,11 @@ export async function runAgentLoop<TFinal>(
         }
         throw error;
       }
-      const validatedOutput = parseDshOutput(JSON.stringify(response.output), task.operation);
+      const validatedOutput = parseDshOutput(
+        JSON.stringify(response.output),
+        task.operation,
+        task.operation === "task" ? inputs.taskOutputSchema : undefined,
+      );
       dshToolReceipts.push(...(response.metadata.toolReceipts ?? []));
       const result: DshRunResult = {
         output: validatedOutput,

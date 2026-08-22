@@ -43,6 +43,7 @@ export function taskIdentity(
         allowedTools: inputs.allowedTools,
         disallowedTools: inputs.disallowedTools,
         validationIntegrity: inputs.validationIntegrity,
+        taskOutputSchema: command.operation === "task" ? inputs.taskOutputSchema : undefined,
         toolConfig: inputs.toolConfig,
         // This identity can influence public branch names and PR markers. Bind
         // it to the redacted audit surface, never the secret-bearing effective

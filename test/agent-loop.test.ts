@@ -14,6 +14,7 @@ import {
   DshProcessError,
 } from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
+import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
 import type { DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
 import { ValidationIntegrityError } from "../src/write/validation-integrity.js";
@@ -168,6 +169,50 @@ function validationIntegrityFailure(): ValidationIntegrityError {
 }
 
 describe("controller-owned agent loop", () => {
+  it("revalidates configured taskOutput at the Controller-owned outer loop", async () => {
+    const taskOutputSchema = parseTaskOutputSchema(
+      JSON.stringify({
+        type: "object",
+        properties: { status: { type: "string", enum: ["ready"] } },
+        required: ["status"],
+        additionalProperties: false,
+      }),
+    );
+    const result = await runAgentLoop(
+      task(),
+      inputs({ taskOutputSchema }),
+      {
+        deadlineMs: Date.now() + 60_000,
+        blocked: () => Promise.resolve("blocked"),
+        finalize: (agent) => Promise.resolve(agent.output.taskOutput),
+      },
+      {
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => engine([output("final", { taskOutput: { status: "ready" } })], []),
+      },
+    );
+    expect(result.finalization).toEqual({ status: "ready" });
+    expect(result.agent.output.taskOutput).toEqual({ status: "ready" });
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ taskOutputSchema }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final", { taskOutput: { status: "forged" } })], []),
+        },
+      ),
+    ).rejects.toBeInstanceOf(DshMalformedOutputError);
+  });
+
   it("caps an Agent turn independently and forwards the run cancellation signal", async () => {
     const controller = new AbortController();
     const requests: AgentTurnRequest[] = [];
