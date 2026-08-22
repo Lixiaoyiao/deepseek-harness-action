@@ -325,7 +325,10 @@ async function runActionInternal(
     return {
       ...outcomeContext(state, startedAt),
       conclusion: "neutral",
-      summary: "No matching @dsh command or automatic event",
+      summary:
+        inputs.triggerPhrase === "@dsh"
+          ? "No matching @dsh command or automatic event"
+          : "No matching configured command or automatic event",
       findingsCount: 0,
     };
   }
