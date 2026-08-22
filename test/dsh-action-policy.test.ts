@@ -174,10 +174,13 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     expect(rootAssembly.sections.at(-1)?.text).toContain('Controller-selected operation is "task"');
     expect(rootAssembly.sections.at(-1)?.text).toContain('operation field must be exactly "task"');
     expect(rootAssembly.sections.at(-1)?.text).toContain(
-      "Controller catalog tools are requested only through a state=needs_tool final JSON object",
+      "Only an exact ID present inside the Controller-authored TRUSTED_TOOL_CATALOG_JSON array",
     );
     expect(rootAssembly.sections.at(-1)?.text).toContain(
-      "Never imitate, prepare for, or replace a Controller catalog tool",
+      "An ID absent from that array is never requestable through needs_tool",
+    );
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "Never imitate, prepare for, or replace a listed Controller catalog tool",
     );
     expect(renderPrompt(rootAssembly)).toContain("never permits bytes outside the JSON object");
 
@@ -191,7 +194,7 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     ).toBe("");
     expect(renderPrompt(childAssembly)).not.toContain("DSH Action root-output protocol");
     expect(renderPrompt(childAssembly)).not.toContain(
-      "Controller catalog tools are requested only",
+      "Only an exact ID present inside the Controller-authored TRUSTED_TOOL_CATALOG_JSON array",
     );
     await context.fiber.dispose();
   });
