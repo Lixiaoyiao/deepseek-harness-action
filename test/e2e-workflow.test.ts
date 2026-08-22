@@ -64,4 +64,42 @@ describe("trusted core E2E workflow", () => {
     expect(cleanup).toContain("if: ${{ always() && steps.trusted.outcome != 'skipped' }}");
     expect(cleanup).toContain("No broad cleanup was attempted.");
   });
+
+  it("exercises v0.6 GitHub integration through deterministic exact-DSH runs", () => {
+    const integration = stepBlock(
+      workflow,
+      "Exercise routes, filters, structured output, and typed GitHub tools",
+    );
+
+    for (const contract of [
+      "INPUT_LABEL-TRIGGER=dsh-e2e-label",
+      "INPUT_ASSIGNEE-TRIGGER=dsh-e2e-assignee",
+      "INPUT_ALLOWED-ACTORS=dsh-e2e-no-match",
+      "INPUT_TRIGGER-PHRASE=/deepseek",
+      "INPUT_EXCLUDE-COMMENTS-BY-ACTOR=github-actions[bot]",
+      'INPUT_ALLOWED-TOOLS=["workspace.edit","github.comment.create"]',
+      'INPUT_ALLOWED-TOOLS=["github.checks.read"]',
+      '.validation.status == "passed"',
+      '.taskOutput == {route:"github",accepted:true}',
+      "DSH_E2E_HISTORY_HIDDEN_",
+      "DSH_E2E_TRIGGER_VISIBLE_",
+      "[image removed]",
+    ]) {
+      expect(integration).toContain(contract);
+    }
+    expect(integration).not.toContain("secrets.DEEPSEEK_API_KEY");
+  });
+
+  it("cleans only the identity-verified integration Issue, draft PR, and ref", () => {
+    const cleanup = stepBlock(workflow, "Remove only verified integration fixtures");
+
+    expect(cleanup).toContain("if: always()");
+    expect(cleanup).toContain("dsh-e2e:github-integration:v1");
+    expect(cleanup).toContain("^dsh-e2e/checks-");
+    expect(cleanup).toContain("(.head.repo.full_name | ascii_downcase) == $repo");
+    expect(cleanup).toContain(
+      'gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"',
+    );
+    expect(cleanup).not.toContain("matching-refs");
+  });
 });
