@@ -25,7 +25,7 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具      | 通过 `strict`、`standard` 和精确的 `custom` 档位使用 Bash、Web Search、Subagent、固定命令、MCP、Bundle 与 Plugin |
 | 结构化结果    | 无论成功或失败，都提供稳定的标量 outputs 和 schema-v1 `result-json`                                              |
 
-v0.5.1 对 DeepSeek Harness `0.1.1-rc.2` 使用经过审计的精确版本固定。Action 的输入、输出、GitHub 权限和所有写入决定仍由 Controller 掌握。
+v0.5.2 只增加轻量安装器与 onboarding 流程，继续使用经过审计的 DeepSeek Harness `0.1.1-rc.2` 精确版本固定，不扩张 Agent 核心功能。Action 的输入、输出、GitHub 权限和所有写入决定仍由 Controller 掌握。
 
 ## 真实运行
 
@@ -39,6 +39,30 @@ v0.5.1 对 DeepSeek Harness `0.1.1-rc.2` 使用经过审计的精确版本固定
 | 实现 Issue 后创建 PR            | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
 ## 快速开始
+
+在需要接入的仓库根目录运行安装器：
+
+```bash
+npm create deepseek-harness-action@latest
+```
+
+选择一种模式：
+
+- **PR Review** 创建 `.github/workflows/dsh-review.yml`。
+- **@dsh Coding Commands** 创建 `.github/workflows/dsh-commands.yml`。
+- **Both** 创建以上两个 workflow 文件。
+
+在 CI 或其它非交互环境中，必须显式传入 mode，安装器不会等待 stdin：
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both
+```
+
+安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。它不会添加 Secret、commit 或 push 改动，也不会创建 PR。生成的 workflow 会把 Action 固定到 v0.5.2 的不可变 release commit。
+
+安装完成后，在 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。打开或更新一个非 draft PR 即可触发 Review；使用 Coding Commands 时，把 `@dsh` 命令写在 Issue 或 PR 评论的第一行。完整 onboarding 与安全说明见[安装指南](docs/setup.zh-CN.md)。
+
+### 手工安装
 
 先在仓库的 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`，再创建 `.github/workflows/dsh-review.yml`：
 
@@ -64,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -72,7 +96,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.5.1` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.5.2` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 
@@ -103,7 +127,7 @@ jobs:
 
 | 指南                                                       | 内容                                                                 |
 | ---------------------------------------------------------- | -------------------------------------------------------------------- |
-| [安装指南](docs/setup.zh-CN.md) · [English](docs/setup.md) | Secret、首个 workflow、权限、安全检出和模板                          |
+| [安装指南](docs/setup.zh-CN.md) · [English](docs/setup.md) | 安装器、手工安装、Secret、权限、安全检出和模板                       |
 | [使用指南](docs/usage.zh-CN.md) · [English](docs/usage.md) | `@dsh` 命令、task、review、diagnose、fix、implement 和自动化         |
 | [配置参考](docs/configuration.md)                          | 输入、权限档位、工具、验证、扩展和输出                               |
 | [故障排查](docs/troubleshooting.md)                        | 权限拒绝、Docker、超时、取消、验证和扩展故障                         |

@@ -2,18 +2,55 @@
 
 [中文](setup.zh-CN.md) · [README](../README.md) · [Usage](usage.md) · [Configuration](configuration.md)
 
-This guide takes you from a repository secret to a safe first workflow. Start with read-only pull request review, then add commands or write mode only when the repository needs them.
+This guide takes you from installation to a safe first workflow. Start with read-only pull request review, then add commands or write mode only when the repository needs them.
 
-## Requirements
+## Quick Start: installer
+
+From the root of the repository you want to configure, run:
+
+```bash
+npm create deepseek-harness-action@latest
+```
+
+Choose what to install:
+
+| Choice                   | Files created                        |
+| ------------------------ | ------------------------------------ |
+| **PR Review**            | `.github/workflows/dsh-review.yml`   |
+| **@dsh Coding Commands** | `.github/workflows/dsh-commands.yml` |
+| **Both**                 | Both workflow files above            |
+
+For CI or another non-interactive environment, pass the mode explicitly. The installer will not wait for stdin:
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both
+```
+
+The installer creates `.github/workflows/` when necessary and refuses to overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`, commit or push changes, or open a pull request. The generated workflows pin the Action to the immutable v0.5.2 release commit.
+
+After the installer succeeds:
+
+1. Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions**.
+2. For Review, open or update a non-draft pull request.
+3. For Coding Commands, put an `@dsh` command on the first line of an Issue or pull request comment. Before requesting a write, replace the validation command placeholders with commands for your project.
+4. Continue with the security guidance in this document and read [Usage](usage.md) for every supported command.
+
+Node.js and npm are needed locally only to run the installer. The generated workflows do not assume that the target repository is a Node.js project.
+
+## Manual installation
+
+Use the following steps if you prefer to create the workflows yourself.
+
+### Requirements
 
 - A GitHub repository where you can add Actions secrets and workflows.
 - A DeepSeek API key.
 - An Ubuntu GitHub-hosted runner, or a self-hosted runner with Docker available.
-- Node.js 24 only when developing this Action itself; consumers do not install Node separately.
+- Node.js 24 only when developing this Action itself; it is not required to run a manually installed workflow.
 
 Docker is required for untrusted pull request data, all writes, and all MCP, Bundle, or Plugin extensions. The optional host execution path has no operating-system isolation and is for dedicated trusted runners only.
 
-## 1. Add the API key
+### 1. Add the API key
 
 Open **Settings → Secrets and variables → Actions → New repository secret** and create:
 
@@ -25,12 +62,12 @@ Pass it only to the `deepseek-api-key` input. Do not expose it through `env`, a 
 
 The default `github-token` is `${{ github.token }}` and is also Controller-only. Keep checkout credentials disabled so repository code and the worker cannot inherit Git credentials.
 
-## 2. Choose an Action reference
+### 2. Choose an Action reference
 
 The examples use the current release tag for readability:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
 ```
 
 For production, replace the tag with the full immutable commit SHA published for that release. Do not use `main`, `latest`, a version range, or another floating ref. Keep `dsh-version` at the Action's audited exact value:
@@ -42,7 +79,7 @@ with:
 
 The Action rejects a different DSH version until that package family and its Profile/tool surface have been reviewed and released together.
 
-## 3. Add safe automatic pull request review
+### 3. Add safe automatic pull request review
 
 Create `.github/workflows/dsh-review.yml`:
 
@@ -73,7 +110,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -83,7 +120,7 @@ jobs:
 
 Open a non-draft pull request and inspect the Actions run, review summary, and any inline findings. The full maintained template is [`examples/fork-review.yml`](../examples/fork-review.yml).
 
-## 4. Grant only the GitHub permissions the entry point needs
+### 4. Grant only the GitHub permissions the entry point needs
 
 Agent permission profiles do not grant GitHub permissions. The workflow token scopes only determine which APIs the trusted Controller can call.
 
@@ -99,7 +136,7 @@ Agent permission profiles do not grant GitHub permissions. The workflow token sc
 
 A broad workflow token cannot bypass actor, event, origin, SHA, protected-path, validation, or Controller policy checks. Conversely, missing token scopes can stop an otherwise authorized result from being published.
 
-## 5. Add commands, CI, or automation
+### 5. Add commands, CI, or automation
 
 Copy the template that matches the desired entry point:
 
@@ -113,9 +150,9 @@ For `issue_comment`, `workflow_run`, dispatch, and schedule workflows, run the w
 
 The `prompt` input is trusted instruction. Do not interpolate Issue bodies, PR text, comments, logs, repository files, or model output into it. GitHub resolves expressions before the Action starts, so the Action cannot recover the original provenance.
 
-## 6. Enable write mode deliberately
+### 6. Enable write mode deliberately
 
-A write command alone does not authorize mutation. A valid write workflow must also meet the actor, event, same-repository, branch, SHA, workspace, and tool policy checks, and must configure Controller-run validation:
+A write command alone does not authorize mutation. A valid write workflow must also meet the actor, event, same-repository, branch, SHA, workspace, and tool policy checks, and must configure Controller-run validation. Replace every placeholder below with the commands and pinned container image for your project before enabling write mode; these are deliberately not npm defaults:
 
 ```yaml
 with:
@@ -125,18 +162,17 @@ with:
   validation-integrity: strict
   test-commands: >-
     [
-      ["npm","ci","--ignore-scripts"],
-      ["npm","test"],
-      ["npm","run","typecheck"]
+      ["REPLACE_WITH_YOUR_PROJECT_INSTALL_COMMAND"],
+      ["REPLACE_WITH_YOUR_PROJECT_TEST_COMMAND"]
     ]
-  container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+  container-image: REPLACE_WITH_YOUR_PROJECT_IMAGE@sha256:REPLACE_WITH_FULL_DIGEST
 ```
 
-Replace these validation commands with the commands for your repository. Each entry is a fixed argv array and is not expanded by a shell. Every command must pass. `run-tests: "false"` denies the write; it is not a waiver.
+Each validation command is a fixed argv array and is not expanded by a shell. Include every required argument as a separate string; every command must pass. The placeholders fail closed until replaced. `run-tests: "false"` denies the write; it is not a waiver.
 
 The Docker image is executable worker code. Writes and extensions require a full digest, not only a tag. See [Configuration](configuration.md#write-validation-and-integrity) before enabling this path.
 
-## Checkout, timeout, and concurrency rules
+### Checkout, timeout, and concurrency rules
 
 - Keep every `actions/checkout` reference pinned and set `persist-credentials: false`.
 - For `pull_request_target`, check out only `github.event.pull_request.base.sha`; never run the fork checkout.
@@ -144,7 +180,7 @@ The Docker image is executable worker code. Writes and extensions require a full
 - Keep the job-level `timeout-minutes` a few minutes above the Action's `timeout-minutes` input. The Action needs a short bounded window to stop its worker, write outputs, and attempt eligible cancellation status updates.
 - A forced runner termination can bypass all cleanup. Treat the Actions conclusion as authoritative; see [Troubleshooting](troubleshooting.md#cancellation-or-a-sticky-comment-remains-in-progress).
 
-## Verify the installation
+### Verify the installation
 
 After the first run, check that:
 

@@ -12,6 +12,9 @@ This guide is for repository maintainers qualifying and publishing an Action rel
 - Keep every directly used `@deepseek-ai/dsh*` package exactly pinned. Do not use `latest`, ranges, floating Git refs, mixed package-family versions, or peer/lock bypass flags.
 - Keep Action checkouts pinned with `persist-credentials: false`.
 - Keep the real GitHub token and DeepSeek key outside the Agent, repository code, validation, and extensions.
+- Publish installer templates only after replacing their controlled build token
+  with the full commit SHA resolved from the formal release tag. A candidate or
+  guessed SHA is not a production Action reference.
 - A published tag is immutable. If its formal smoke fails, do not move the tag; fix forward with the next patch release.
 
 The release constants and direct DSH package inventory live in [`src/release.ts`](../src/release.ts). [`scripts/verify-release-contract.mjs`](../scripts/verify-release-contract.mjs) checks them against the manifest, lock, Action metadata, CI runtime smoke, and release canary.
@@ -49,6 +52,11 @@ For an Action version bump, update every release surface together:
 4. The release canary workflow name and `RELEASE_TAG`.
 5. `dist/`, generated through the normal build.
 6. Any release-specific verification fixture or documentation.
+
+The standalone `create-deepseek-harness-action` package has its own semantic
+version. For v0.5.2 its version is `0.1.0`; do not change it to the Action
+version. Keep its package manifest, npm lock/workspace metadata, CLI tests, and
+pack-time release-SHA contract aligned.
 
 For a DSH version bump, additionally:
 
@@ -161,3 +169,109 @@ gh workflow run release-canary.yml --ref main
 Wait for the run and record its URL and conclusion. A successful PR candidate run or `main` CI does not replace this formal-tag smoke.
 
 If the smoke fails after publication, keep the tag immutable. Diagnose the failure, prepare the next patch release from `main`, and repeat the complete latest-SHA qualification flow.
+
+## Publish the npm create package
+
+Publish `create-deepseek-harness-action` only after the formal tag, GitHub
+Release, and release canary all resolve to `release_sha`. A Git commit cannot
+safely contain its own not-yet-known object ID, so the source package uses one
+controlled build token. The npm tarball is built in a disposable checkout of
+the exact tagged commit and injects the real SHA at pack time. Never commit a
+guessed candidate SHA, move the release tag, or publish a tarball containing the
+token or a floating Action tag.
+
+First verify the published release identity again and create a detached staging
+checkout. The tag-resolution loop accepts either an annotated or lightweight
+tag and must end at the already qualified commit:
+
+```bash
+release_tag="vX.Y.Z"
+sha_pattern='^[0-9a-f]{40}$'
+[[ "$release_sha" =~ $sha_pattern ]]
+
+release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag")"
+jq -e --arg tag "$release_tag" '
+  .tag_name == $tag and .draft == false and .prerelease == false
+' <<<"$release_json" >/dev/null
+
+ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag")"
+object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+object_type="$(jq -r '.object.type' <<<"$ref_json")"
+for _ in 1 2 3 4 5; do
+  [[ "$object_type" != "tag" ]] && break
+  tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+  object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+  object_type="$(jq -r '.object.type' <<<"$tag_json")"
+done
+[[ "$object_type" == "commit" && "$object_sha" == "$release_sha" ]]
+
+installer_stage="$(mktemp -d)"
+git worktree add --detach "$installer_stage/source" "$release_sha"
+mkdir "$installer_stage/pack" "$installer_stage/unpacked" "$installer_stage/smoke"
+```
+
+Pack with the verified SHA as the only production substitution input. The
+package's pack step must reject a missing, uppercase, short, or otherwise
+invalid value:
+
+```bash
+pack_json="$(
+  DSH_ACTION_RELEASE_SHA="$release_sha" \
+    npm pack "$installer_stage/source/packages/create-deepseek-harness-action" \
+      --silent --json --pack-destination "$installer_stage/pack"
+)"
+tarball="$installer_stage/pack/$(jq -r '.[0].filename' <<<"$pack_json")"
+test -f "$tarball"
+tar -xzf "$tarball" -C "$installer_stage/unpacked"
+```
+
+Inspect the packed artifact, not only the source tree. It must contain version
+`0.1.0`, expose the `create-deepseek-harness-action` executable, contain no
+unresolved release token or floating `v0.5.2` Action reference, and generate
+exactly two workflows bound to `release_sha` in a non-interactive smoke run:
+
+```bash
+node --input-type=module - "$installer_stage/unpacked/package/package.json" <<'NODE'
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
+assert.equal(manifest.name, "create-deepseek-harness-action");
+assert.equal(manifest.version, "0.1.0");
+assert.ok(manifest.bin?.["create-deepseek-harness-action"]);
+NODE
+
+! grep -R -E '__[A-Z0-9_]*RELEASE[A-Z0-9_]*__|deepseek-harness-action@v0\.5\.2' \
+  "$installer_stage/unpacked/package"
+
+(
+  cd "$installer_stage/smoke"
+  npm exec --yes --package "$tarball" -- \
+    create-deepseek-harness-action --mode both
+)
+
+test "$(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml' | wc -l)" -eq 2
+while IFS= read -r workflow; do
+  grep -F "uses: Lixiaoyiao/deepseek-harness-action@$release_sha" "$workflow"
+  ! grep -E 'deepseek-harness-action@(v0\.5\.2|main|latest)' "$workflow"
+done < <(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml')
+```
+
+Only after those checks pass, authenticate to the official npm registry and
+publish that exact tarball. Do not publish from the source directory because
+that would rerun packing with an unreviewed environment:
+
+```bash
+npm whoami --registry=https://registry.npmjs.org/
+npm publish "$tarball" --access public --registry=https://registry.npmjs.org/
+npm view create-deepseek-harness-action@0.1.0 \
+  name version dist-tags --json --registry=https://registry.npmjs.org/
+```
+
+Run one final `npm create deepseek-harness-action@latest -- --mode both` smoke
+from an empty temporary directory against the public registry. Confirm the two
+generated workflow files still contain only `release_sha`, parse as YAML, and
+retain the required checkout, permission, Docker, validation, and credential
+boundaries. Then remove the disposable worktree and staging directory. npm
+versions and the release tag are immutable; a bad published installer must be
+fixed with a new installer patch version rather than replacing `0.1.0`.

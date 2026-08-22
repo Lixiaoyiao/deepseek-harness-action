@@ -211,6 +211,9 @@ MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, Docker/path/timeout
 handling, and the packaged `dist` entrypoint. It did not require a change to
 the Action's existing input, output, or permission semantics. That conclusion
 does not approve any release after `0.1.1-rc.2`.
+v0.5.2 retains this exact runtime and security contract unchanged; its new
+standalone installer only writes workflow files and does not run inside the
+Agent or Controller.
 
 The Action starts this generated Profile through the official
 `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API. It does not use the general
@@ -419,14 +422,14 @@ The supplied templates use the following sets:
 | Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                   |
 | CI auto-fix                                     | Same as the preceding row                                                                                                                     |
 | Core E2E gate/read/write/cancellation           | Split per job: read-only gate, `contents`/PR write only for the write golden path, and Issue write only for the isolated cancellation fixture |
-| v0.5.1 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
+| v0.5.2 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
 
 The release canary requires repository variable `DSH_RELEASE_CANARY_SHA` to be
-the lowercase full 40-character commit SHA referenced by the formal v0.5.1 tag
+the lowercase full 40-character commit SHA referenced by the formal v0.5.2 tag
 and its non-draft, non-prerelease GitHub Release. Before any environment secret
 is available, a secretless gate requires `refs/heads/main`, requires the
 run/workflow SHA to equal the live default-branch SHA, and fails if `main` is no
@@ -495,7 +498,7 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred in v0.5.1. On `SIGTERM` or
+A marker-level freshness guard remains deferred in v0.5.2. On `SIGTERM` or
 `SIGINT`, the Controller aborts the active worker and immediately starts a
 bounded, best-effort terminal comment update while run-scoped cleanup proceeds.
 A later authoritative non-cancellation failure can correct a provisional
@@ -505,7 +508,7 @@ crash, or a network/GitHub API outage can prevent all finalization code from
 running; an “In progress” comment may therefore remain stale. The Actions run
 conclusion is authoritative.
 
-v0.5.1 retains the binding of its generated Profile and positive native-tool
+v0.5.2 retains the binding of its generated Profile and positive native-tool
 policy to the exact DSH version whose complete tool surface was audited. It
 accepts only the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family; another
 tag, range or exact version is

@@ -25,7 +25,7 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Offers `strict`, `standard`, and exact `custom` profiles for Bash, Web Search, Subagent, fixed commands, MCP, Bundle, and Plugin tools |
 | Structured results      | Reports stable scalar outputs plus a schema-v1 `result-json` envelope on success and failure                                           |
 
-v0.5.1 uses exact, audited DeepSeek Harness `0.1.1-rc.2` package pins. Action inputs, outputs, GitHub permissions, and all write decisions remain Controller-owned.
+v0.5.2 is an installer/onboarding release. It keeps the exact, audited DeepSeek Harness `0.1.1-rc.2` package pins and does not expand the Agent core. Action inputs, outputs, GitHub permissions, and all write decisions remain Controller-owned.
 
 ## Live runs
 
@@ -39,6 +39,30 @@ These public runs show the comments and Actions logs produced by this repository
 | Issue implementation followed by a pull request         | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
 ## Quick Start
+
+Run the installer from the root of the repository you want to configure:
+
+```bash
+npm create deepseek-harness-action@latest
+```
+
+Choose one of these modes:
+
+- **PR Review** creates `.github/workflows/dsh-review.yml`.
+- **@dsh Coding Commands** creates `.github/workflows/dsh-commands.yml`.
+- **Both** creates both workflow files.
+
+For CI or another non-interactive environment, pass the mode explicitly so the installer never waits for stdin:
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both
+```
+
+The installer creates `.github/workflows/` when needed and refuses to overwrite an existing target workflow. It does not add secrets, commit or push changes, or open a pull request. The generated workflows pin the Action to the immutable v0.5.2 release commit.
+
+After installation, add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions**. Open or update a non-draft pull request to trigger Review. For Coding Commands, put an `@dsh` command on the first line of an Issue or pull request comment. See [Setup](docs/setup.md) for the complete onboarding and security guide.
+
+### Manual installation
 
 Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions**, then create `.github/workflows/dsh-review.yml`:
 
@@ -64,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -72,7 +96,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.5.1` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.5.2` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 
@@ -103,7 +127,7 @@ Read the complete [Security policy](SECURITY.md) before enabling write mode, hos
 
 | Guide                                                       | Contents                                                                             |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Setup](docs/setup.md) · [中文](docs/setup.zh-CN.md)        | Secret, first workflow, permissions, safe checkout, and templates                    |
+| [Setup](docs/setup.md) · [中文](docs/setup.zh-CN.md)        | Installer, manual setup, Secret, permissions, safe checkout, and templates           |
 | [Usage](docs/usage.md) · [中文](docs/usage.zh-CN.md)        | `@dsh` commands, tasks, review, diagnose, fix, implement, and automation             |
 | [Configuration](docs/configuration.md)                      | Inputs, permission profiles, tools, validation, extensions, and outputs              |
 | [Troubleshooting](docs/troubleshooting.md)                  | Denials, Docker, timeouts, cancellation, validation, and extension failures          |

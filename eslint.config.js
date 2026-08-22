@@ -35,4 +35,15 @@ export default tseslint.config(
     },
     rules: tseslint.configs.disableTypeChecked.rules,
   },
+  {
+    files: ["packages/create-deepseek-harness-action/**/*.{mjs,mts}"],
+    languageOptions: {
+      parserOptions: { projectService: false },
+      globals: {
+        process: "readonly",
+        URL: "readonly",
+      },
+    },
+    rules: tseslint.configs.disableTypeChecked.rules,
+  },
 );
