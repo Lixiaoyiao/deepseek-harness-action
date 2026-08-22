@@ -27,7 +27,7 @@ Before qualification, configure the `core-e2e` environment:
 2. Add `DEEPSEEK_API_KEY` to that environment.
 3. Do not expose the secret to the gate jobs; the workflows bind trusted identities before entering the environment.
 
-Core E2E uses repository variable `DSH_E2E_CANDIDATE_SHA`. The release canary uses `DSH_RELEASE_CANARY_SHA`. Each must be a lowercase, full 40-character commit SHA for its current purpose.
+Both pre-merge and post-merge Core E2E use repository variable `DSH_E2E_CANDIDATE_SHA`. The release canary uses `DSH_RELEASE_CANARY_SHA`. Each must be a lowercase, full 40-character commit SHA for its current purpose.
 
 ## Local qualification
 
@@ -39,6 +39,12 @@ npm run check
 ```
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
+
+For v0.6.0, the DSH audit also proves that the exact headless package still
+accepts only one text task and creates one text content block. That negative
+contract is release evidence for deferring GitHub attachment images; do not
+remove it unless a replacement exact DSH multimodal contract and its security
+review ship together.
 
 Before committing, inspect the complete diff and confirm that only intended source, test, metadata, documentation, and generated bundle changes are present. For a documentation-only PR, verify explicitly that `src/`, `dist/`, runtime assets, `action.yml`, and package files did not change.
 
@@ -90,15 +96,16 @@ The candidate PR must be open, non-draft, same-repository, and target the defaul
 The permanent [Core E2E workflow](../.github/workflows/e2e.yml) is trusted release harness code and must already exist on the live default branch. Its secretless gate requires a write-capable actor and binds all of the following before any secret-bearing job starts:
 
 - the workflow and dispatch SHA equal the live default-branch SHA;
-- `candidate_sha` is the current full PR head SHA;
+- `candidate_sha` is either the current full PR head SHA or, in protected post-merge mode, the live default-branch SHA;
 - `DSH_E2E_CANDIDATE_SHA` equals that SHA; and
-- the supplied PR is open, non-draft, same-repository, and based on the default branch.
+- pull-request mode binds an open, non-draft, same-repository PR based on the default branch, while main mode rejects a PR number and requires the candidate, dispatch, workflow, and live default-branch SHAs to be identical.
 
-Set the candidate variable, then dispatch the trusted workflow from `main`:
+For pre-merge qualification, set the candidate variable and dispatch the trusted workflow from `main` in pull-request mode:
 
 ```bash
 gh variable set DSH_E2E_CANDIDATE_SHA --body "$candidate_sha"
 gh workflow run e2e.yml --ref main \
+  -f candidate_mode=pull-request \
   -f candidate_sha="$candidate_sha" \
   -f pull_request="$pr_number"
 ```
@@ -117,9 +124,20 @@ The golden paths cover:
 | Subagent                    | Real `native.subagent` through a successful no-change write path                                                                                         |
 | Bash trusted write          | `standard` native Bash, validation, and exact branch/PR/commit/file assertions                                                                           |
 | Cancellation                | Graceful `SIGTERM` moves the isolated sticky comment from In progress to cancelled, then removes only the fixture comment and closes its temporary Issue |
+| Trigger and filters         | Deterministic label, assignee, custom phrase, actor deny, historical-comment exclusion, and triggering-comment retention                                 |
+| Branch UX                   | A real task PR targets the candidate branch and uses the configured sanitized prefix/template while retaining the Controller key                         |
+| Typed GitHub tools          | All six exact operations: labels, assignees, Issue state, reconciled comment creation, PR metadata, and immutable-head check/status reads                |
+| Structured task output      | Trusted bounded schema, final Controller validation, scalar output, and optional field inside the unchanged audit envelope                               |
+| Image boundary              | Inline/reference Markdown, HTML image/source, and raw GitHub attachment URLs/tokens are absent from the deterministic LLM request                        |
 | Credential isolation        | All candidate and harness checkouts use `persist-credentials: false` and have no residual Git auth configuration                                         |
 
-The workflow also compares `main`, the candidate PR, comments, `dsh/task-*` refs, and Controller-created task PRs on no-mutation paths, then revalidates the candidate identity at the end.
+The workflow also compares `main`, the candidate identity, PR/comments when
+present, legacy `dsh/task-*` refs, and Controller-created task PRs on
+no-mutation paths. Its
+run-bound label, Issue, draft PR, comments, one-file fixture commit, and custom
+ref are identity-verified and removed exactly before final candidate
+revalidation. Cleanup handles each emitted identity independently, continues
+after a per-fixture failure, and never performs a broad deletion.
 
 Graceful cancellation is the verifiable path. `SIGKILL`, runner/host loss, a process crash, or GitHub API/network loss can prevent all finalizers from running; Core E2E must not claim otherwise.
 
@@ -127,15 +145,28 @@ If Core E2E finds a bug, fix it on the PR, obtain the new head SHA, update the v
 
 ## Merge and qualify `main`
 
-After candidate CI and Core E2E pass:
+After candidate CI and pre-merge Core E2E pass:
 
 1. Reconfirm the PR head SHA has not moved.
 2. Merge the PR into `main`.
-3. Record the resulting full `main` SHA.
+3. Record the resulting full `main` SHA as `release_sha`.
 4. Wait for the `push` CI run on that exact `main` SHA.
 5. Verify the working tree and release metadata contain the expected version and generated bundle.
+6. Set `DSH_E2E_CANDIDATE_SHA` to `release_sha` and run the complete protected Core E2E workflow in `main` mode:
 
-Do not tag while the final `main` CI is pending or failing.
+   ```bash
+   gh variable set DSH_E2E_CANDIDATE_SHA --body "$release_sha"
+   gh workflow run e2e.yml --ref main \
+     -f candidate_mode=main \
+     -f candidate_sha="$release_sha"
+   ```
+
+7. Wait for every Core E2E job, including final candidate binding, to succeed against that exact SHA.
+
+Do not tag while final `main` CI or post-merge Core E2E is pending or failing. If
+`main` moves, the old run is not release evidence: record the new SHA, repeat
+push CI and the complete `main`-mode Core E2E, and tag only that newly qualified
+commit.
 
 ## Tag and GitHub Release
 
@@ -166,7 +197,7 @@ gh variable set DSH_RELEASE_CANARY_SHA --body "$release_sha"
 gh workflow run release-canary.yml --ref main
 ```
 
-Wait for the run and record its URL and conclusion. A successful PR candidate run or `main` CI does not replace this formal-tag smoke.
+Wait for the run and record its URL and conclusion. Pre-merge Core E2E, post-merge Core E2E, and `main` CI do not replace this formal-tag smoke; conversely, the one-task post-release smoke does not replace full post-merge Core E2E before tagging.
 
 If the smoke fails after publication, keep the tag immutable. Diagnose the failure, prepare the next patch release from `main`, and repeat the complete latest-SHA qualification flow.
 

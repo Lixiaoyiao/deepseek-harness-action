@@ -3,8 +3,14 @@ import { createServer } from "node:http";
 
 const auditPath = process.env.DSH_E2E_GITHUB_AUDIT;
 const expectedKey = process.env.DSH_E2E_FIXTURE_KEY;
+const issueLabel = process.env.DSH_E2E_ISSUE_LABEL;
+const issueAssignee = process.env.DSH_E2E_ISSUE_ASSIGNEE;
+const pullTitle = process.env.DSH_E2E_PULL_TITLE;
 if (!auditPath) throw new Error("DSH_E2E_GITHUB_AUDIT is required");
 if (!expectedKey) throw new Error("DSH_E2E_FIXTURE_KEY is required");
+if (!issueLabel) throw new Error("DSH_E2E_ISSUE_LABEL is required");
+if (!issueAssignee) throw new Error("DSH_E2E_ISSUE_ASSIGNEE is required");
+if (!pullTitle) throw new Error("DSH_E2E_PULL_TITLE is required");
 
 const calls = new Map();
 
@@ -44,18 +50,36 @@ function finalTask(route) {
 }
 
 function fixtureOutput(route, index) {
-  if (route === "github" && index === 1) {
+  if (route === "github" && index <= 4) {
+    const requests = [
+      {
+        id: "github.issue.labels.set",
+        input: { labels: [issueLabel] },
+        reason: "Exercise the Controller-owned exact label replacement path.",
+      },
+      {
+        id: "github.issue.assignees.set",
+        input: { assignees: [issueAssignee] },
+        reason: "Exercise the Controller-owned exact assignee replacement path.",
+      },
+      {
+        id: "github.comment.create",
+        input: { body: "DSH E2E typed GitHub tool completed for @maintainers." },
+        reason: "Exercise the Controller-owned reconciled comment path.",
+      },
+      {
+        id: "github.issue.state.update",
+        input: { state: "closed", stateReason: "completed" },
+        reason: "Exercise the Controller-owned bounded Issue state path last.",
+      },
+    ];
     return {
       protocolVersion: 1,
       operation: "task",
       state: "needs_tool",
-      summary: "Schedule the exact typed GitHub comment operation.",
+      summary: `Schedule typed GitHub Issue operation ${String(index)}.`,
       findings: [],
-      toolRequest: {
-        id: "github.comment.create",
-        input: { body: "DSH E2E typed GitHub tool completed for @maintainers." },
-        reason: "Exercise the Controller-owned typed mutation path.",
-      },
+      toolRequest: requests[index - 1],
     };
   }
   if (route === "label" || route === "assignee" || route === "github") {
@@ -85,6 +109,29 @@ function fixtureOutput(route, index) {
       diagnosis: "The typed Controller check/status response was available as bounded data.",
     };
   }
+  if (route === "metadata" && index === 1) {
+    return {
+      protocolVersion: 1,
+      operation: "task",
+      state: "needs_tool",
+      summary: "Schedule the exact typed pull request metadata operation.",
+      findings: [],
+      toolRequest: {
+        id: "github.pull.metadata.update",
+        input: { title: pullTitle },
+        reason: "Exercise the Controller-owned bounded pull request metadata path.",
+      },
+    };
+  }
+  if (route === "metadata") {
+    return {
+      protocolVersion: 1,
+      operation: "task",
+      state: "final",
+      summary: "Deterministic pull request metadata update completed.",
+      findings: [],
+    };
+  }
   throw new Error(`unexpected fixture route: ${route}`);
 }
 
@@ -109,7 +156,7 @@ const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/plain" }).end("ok\n");
     return;
   }
-  const match = /^\/(label|assignee|github|checks)\/(?:v1\/)?chat\/completions$/u.exec(
+  const match = /^\/(label|assignee|github|metadata|checks)\/(?:v1\/)?chat\/completions$/u.exec(
     request.url ?? "",
   );
   if (request.method !== "POST" || match === null) {
