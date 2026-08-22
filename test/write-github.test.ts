@@ -26,7 +26,10 @@ describe("GitHub database writes", () => {
     const worker = join(root, "worker");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(source));
     await writeFile(join(source, "a.txt"), "old\n");
-    const snapshot = await createWorkspaceSnapshot(source, worker);
+    const snapshot = await createWorkspaceSnapshot(
+      { kind: "materialized-tree", root: source },
+      worker,
+    );
     await writeFile(join(worker, "a.txt"), "new\n");
 
     const createTree = vi.fn().mockResolvedValue({ data: { sha: "d".repeat(40) } });

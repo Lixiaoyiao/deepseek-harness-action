@@ -10,7 +10,7 @@ Give the Action step an `id`, then inspect `result-json` even when the step
 fails:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+- uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -26,8 +26,12 @@ Useful fields are:
 
 - `status`: broad outcome (`denied`, `timed_out`, `validation_failed`, and so on);
 - `error.code`: stable specific classification;
-- `error.phase`: `configuration`, `routing`, `authorization`, `context`,
-  `agent`, `validation`, `publication`, or `write`;
+- `error.category`: stable `configuration`, `policy`, `domain`, or `runtime`
+  semantics for classified errors;
+- `error.phase`: `entrypoint`, `configuration`, `routing`, `authorization`,
+  `context`, `agent`, `validation`, `publication`, or `write`; this records
+  where the error surfaced and does not determine a classified error's
+  identity;
 - `error.message` and `error.guidance`: redacted, bounded diagnostics;
 - `permissions`, `isolation`, `validation`, `validationIntegrity`, and `loop`:
   Controller evidence for the effective run; and
@@ -247,6 +251,11 @@ The Controller detected changes to package scripts, tests, test configuration,
 lint/typecheck/build configuration, validation runtime files, lock/toolchain
 manifests, or another effective validation entrypoint.
 
+This is high-confidence validation weakening detection plus baseline replay for
+supported validation entrypoints, package scripts, test/config weakening,
+lock/toolchain controls, and known wrappers/interpreters. It is not complete
+cross-language dependency provenance or a formal integrity proof.
+
 - `off` records classified changes without blocking them.
 - `warn` records changed categories and suspicious weakening signals.
 - `strict` blocks high-confidence weakening and truncated audits. For other
@@ -274,7 +283,7 @@ Typical codes:
 For malformed output, retry once. If it persists:
 
 1. Confirm `dsh-version` is exactly `0.1.1-rc.2` and the Action version is
-   v0.5.2.
+   v0.5.3.
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
 3. Check that trusted prompts do not ask for fences, prefaces, suffixes, a
    separate citation list, or a different operation. Web Search Markdown
@@ -294,7 +303,7 @@ bounded log message.
 
 ### DSH runtime
 
-- v0.5.2 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
+- v0.5.3 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
   range, a floating Git ref, or mixed DSH package versions.
 - The runtime installs from the committed lockfile in an ephemeral,
   credential-free container and audits the installed DSH inventory. Registry,

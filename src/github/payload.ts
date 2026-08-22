@@ -1,5 +1,6 @@
 import { open } from "node:fs/promises";
 import { z } from "zod";
+import { EventRoutingError } from "../errors.js";
 
 const MAX_EVENT_PAYLOAD_BYTES = 10 * 1024 * 1024;
 
@@ -14,20 +15,24 @@ async function readBoundedPayload(file: Awaited<ReturnType<typeof open>>): Promi
     bytes += result.bytesRead;
   }
   if (bytes > MAX_EVENT_PAYLOAD_BYTES) {
-    throw new Error("GitHub event payload exceeds 10 MiB");
+    throw new EventRoutingError("GitHub event payload exceeds 10 MiB");
   }
   return Buffer.concat(chunks, bytes);
 }
 
 export async function readEventPayload(path: string | undefined): Promise<unknown> {
-  if (path === undefined || path === "") throw new Error("GITHUB_EVENT_PATH is missing");
+  if (path === undefined || path === "") {
+    throw new EventRoutingError("GITHUB_EVENT_PATH is missing");
+  }
   const file = await open(path, "r");
   let content: Buffer;
   try {
     const metadata = await file.stat();
-    if (!metadata.isFile()) throw new Error("GITHUB_EVENT_PATH is not a regular file");
+    if (!metadata.isFile()) {
+      throw new EventRoutingError("GITHUB_EVENT_PATH is not a regular file");
+    }
     if (metadata.size > MAX_EVENT_PAYLOAD_BYTES) {
-      throw new Error("GitHub event payload exceeds 10 MiB");
+      throw new EventRoutingError("GitHub event payload exceeds 10 MiB");
     }
     content = await readBoundedPayload(file);
   } finally {
@@ -37,12 +42,14 @@ export async function readEventPayload(path: string | undefined): Promise<unknow
   try {
     raw = new TextDecoder("utf-8", { fatal: true }).decode(content);
   } catch (error: unknown) {
-    throw new Error("GITHUB_EVENT_PATH is not valid UTF-8", { cause: error });
+    throw new EventRoutingError("GITHUB_EVENT_PATH is not valid UTF-8", { cause: error });
   }
   try {
     return JSON.parse(raw) as unknown;
   } catch (error: unknown) {
-    throw new Error("GITHUB_EVENT_PATH does not contain valid JSON", { cause: error });
+    throw new EventRoutingError("GITHUB_EVENT_PATH does not contain valid JSON", {
+      cause: error,
+    });
   }
 }
 

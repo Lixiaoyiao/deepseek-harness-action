@@ -14,6 +14,7 @@ import {
   type DshToolReceipt,
 } from "../dsh/runner.js";
 import { DshError, DshMalformedOutputError, type DshFailureTelemetry } from "../dsh/errors.js";
+import { ClassifiedActionError } from "../errors.js";
 import { parseDshOutput, type DshOutput } from "../dsh/schema.js";
 import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
@@ -22,30 +23,29 @@ import { DshAgentEngine, type AgentTask, type DshTurnMetadata } from "../review/
 import { ValidationFailureError } from "../write/validate.js";
 import { fingerprintWorkspace } from "../write/workspace.js";
 
-export class AgentLoopLimitError extends Error {
-  public readonly code = "AGENT_TURN_LIMIT";
-
+export class AgentLoopLimitError extends ClassifiedActionError<"AGENT_TURN_LIMIT"> {
   public constructor(maxTurns: number, options?: ErrorOptions) {
-    super(`Agent did not reach a final result within ${String(maxTurns)} turns`, options);
-    this.name = "AgentLoopLimitError";
+    super(
+      `Agent did not reach a final result within ${String(maxTurns)} turns`,
+      { code: "AGENT_TURN_LIMIT", category: "domain", retryable: false },
+      options,
+    );
   }
 }
 
-export class AgentDeadlineError extends Error {
-  public readonly code = "AGENT_TIMEOUT";
-
+export class AgentDeadlineError extends ClassifiedActionError<"AGENT_TIMEOUT"> {
   public constructor(message = "The controller-owned agent loop exceeded its overall timeout") {
-    super(message);
-    this.name = "AgentDeadlineError";
+    super(message, { code: "AGENT_TIMEOUT", category: "runtime", retryable: true });
   }
 }
 
-export class AgentNoProgressError extends Error {
-  public readonly code = "AGENT_NO_PROGRESS";
-
+export class AgentNoProgressError extends ClassifiedActionError<"AGENT_NO_PROGRESS"> {
   public constructor(options?: ErrorOptions) {
-    super("Validation failed twice with the same workspace revision and error", options);
-    this.name = "AgentNoProgressError";
+    super(
+      "Validation failed twice with the same workspace revision and error",
+      { code: "AGENT_NO_PROGRESS", category: "domain", retryable: false },
+      options,
+    );
   }
 }
 

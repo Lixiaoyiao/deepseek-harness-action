@@ -25,7 +25,7 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Offers `strict`, `standard`, and exact `custom` profiles for Bash, Web Search, Subagent, fixed commands, MCP, Bundle, and Plugin tools |
 | Structured results      | Reports stable scalar outputs plus a schema-v1 `result-json` envelope on success and failure                                           |
 
-v0.5.2 is an installer/onboarding release. It keeps the exact, audited DeepSeek Harness `0.1.1-rc.2` package pins and does not expand the Agent core. Action inputs, outputs, GitHub permissions, and all write decisions remain Controller-owned.
+v0.5.3 is a small architecture/security hardening patch. It stabilizes error identity, tightens Git checkout versus Controller-materialized tree handling, and clarifies validation security boundaries without adding Agent or product features. The exact audited DeepSeek Harness pin remains `0.1.1-rc.2`.
 
 ## Live runs
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.5.2` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.5.3` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 
@@ -119,6 +119,8 @@ Put the command on the first line of an Issue or pull request comment.
 - Repository content, diffs, issues, pull requests, comments, logs, model output, and tool output remain untrusted data.
 - Fork review uses a `.git`-less, credential-free worker and must check out only the trusted base SHA with `persist-credentials: false`.
 - Writes require a trusted same-repository context, authorized actors, Docker, `allow-write: "true"`, non-empty fixed validation commands, and successful validation. Protected-path and Validation Integrity checks still apply.
+- Validation Integrity provides high-confidence weakening detection plus baseline replay for its supported entrypoints, scripts, test/config weakening, lock/toolchain controls, and known wrappers/interpreters; it is not complete cross-language dependency provenance or a formal proof.
+- Validation may use Docker bridge networking. On self-hosted or corporate-network runners, repository validation code may reach runner-accessible network services; use dedicated runners and runner-level segmentation/egress controls.
 - An approved Bundle, Plugin, or stdio MCP server is trusted worker code. ToolRuntime limits model-routed calls; it does not sandbox extension startup, background work, or direct process I/O.
 
 Read the complete [Security policy](SECURITY.md) before enabling write mode, host execution, network access, or third-party extensions.

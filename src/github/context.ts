@@ -3,6 +3,7 @@
  * See THIRD_PARTY_NOTICES.md.
  */
 import { z } from "zod";
+import { EventRoutingError } from "../errors.js";
 import {
   automationEventNames,
   entityEventNames,
@@ -133,13 +134,15 @@ function parseRepository(
   const fullName = environment.GITHUB_REPOSITORY ?? payload.repository.full_name;
   const [owner, repo, ...extra] = fullName.split("/");
   if (!owner || !repo || extra.length > 0) {
-    throw new Error(`Invalid GITHUB_REPOSITORY: ${fullName}`);
+    throw new EventRoutingError(`Invalid GITHUB_REPOSITORY: ${fullName}`);
   }
   if (
     owner.toLowerCase() !== payload.repository.owner.login.toLowerCase() ||
     repo.toLowerCase() !== payload.repository.name.toLowerCase()
   ) {
-    throw new Error("GitHub environment repository does not match event payload repository");
+    throw new EventRoutingError(
+      "GitHub environment repository does not match event payload repository",
+    );
   }
   return {
     id: payload.repository.id,
@@ -155,7 +158,7 @@ function parseRepository(
 function parsePullRequest(payload: z.infer<typeof basePayloadSchema>) {
   const parsed = pullRequestSchema.safeParse(payload.pull_request);
   if (!parsed.success) {
-    throw new Error(`Invalid pull request payload: ${z.prettifyError(parsed.error)}`);
+    throw new EventRoutingError(`Invalid pull request payload: ${z.prettifyError(parsed.error)}`);
   }
   const pr = parsed.data;
   return {
@@ -180,15 +183,15 @@ export function parseGitHubContext(
 ): GitHubContext {
   const rawEventName = environment.GITHUB_EVENT_NAME ?? "";
   if (!isSupportedEventName(rawEventName)) {
-    throw new Error(`Unsupported GitHub event: ${rawEventName || "<missing>"}`);
+    throw new EventRoutingError(`Unsupported GitHub event: ${rawEventName || "<missing>"}`);
   }
   const parsed = basePayloadSchema.safeParse(untrustedPayload);
   if (!parsed.success) {
-    throw new Error(`Invalid GitHub event payload: ${z.prettifyError(parsed.error)}`);
+    throw new EventRoutingError(`Invalid GitHub event payload: ${z.prettifyError(parsed.error)}`);
   }
   const payload = parsed.data;
   const actor = environment.GITHUB_ACTOR ?? payload.sender?.login;
-  if (!actor) throw new Error("GitHub actor is missing");
+  if (!actor) throw new EventRoutingError("GitHub actor is missing");
   const repository = parseRepository(payload, environment);
   const eventName: SemanticEventName =
     rawEventName === "pull_request_target" ? "pull_request" : rawEventName;
@@ -207,7 +210,7 @@ export function parseGitHubContext(
     if (rawEventName === "issues" || rawEventName === "issue_comment") {
       const issue = issueSchema.safeParse(payload.issue);
       if (!issue.success) {
-        throw new Error(`Invalid issue payload: ${z.prettifyError(issue.error)}`);
+        throw new EventRoutingError(`Invalid issue payload: ${z.prettifyError(issue.error)}`);
       }
       return {
         ...common,
@@ -228,12 +231,12 @@ export function parseGitHubContext(
   }
 
   if (!includesEvent(automationEventNames, rawEventName)) {
-    throw new Error(`Unsupported GitHub event: ${rawEventName}`);
+    throw new EventRoutingError(`Unsupported GitHub event: ${rawEventName}`);
   }
   if (rawEventName === "workflow_run") {
     const run = workflowRunSchema.safeParse(payload.workflow_run);
     if (!run.success) {
-      throw new Error(`Invalid workflow_run payload: ${z.prettifyError(run.error)}`);
+      throw new EventRoutingError(`Invalid workflow_run payload: ${z.prettifyError(run.error)}`);
     }
     return {
       ...common,

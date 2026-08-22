@@ -28,8 +28,8 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      # Replace this v0.5.2 tag with its full release commit SHA in production.
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+      # Replace this v0.5.3 tag with its full release commit SHA in production.
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2

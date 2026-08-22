@@ -52,6 +52,7 @@ describe("action entrypoint finalization", () => {
       durationMs: 60_000,
       error: {
         code: "DSH_TIMEOUT",
+        category: "runtime",
         phase: "agent",
         title: "DeepSeek Harness timed out",
         message: "DSH exceeded its timeout",
@@ -104,7 +105,7 @@ describe("action entrypoint finalization", () => {
     expect(mocks.setFailed).not.toHaveBeenCalled();
   });
 
-  it("still emits a safe configuration envelope for an unexpected entrypoint rejection", async () => {
+  it("still emits a safe runtime envelope for an unexpected entrypoint rejection", async () => {
     const token = `ghp_${"a".repeat(36)}`;
     mocks.runAction.mockRejectedValue(new Error(`unexpected ${token}`));
 
@@ -116,9 +117,18 @@ describe("action entrypoint finalization", () => {
     expect(outputs).toMatchObject({
       conclusion: "failure",
       operation: "none",
-      "error-code": "ACTION_CONFIGURATION",
+      "error-code": "ACTION_RUNTIME_FAILED",
     });
     expect(String(outputs["error-message"])).not.toContain(token);
     expect(String(outputs["error-message"])).toContain("[REDACTED_GITHUB_TOKEN]");
+    expect(JSON.parse(String(outputs["result-json"]))).toMatchObject({
+      status: "failed",
+      error: {
+        code: "ACTION_RUNTIME_FAILED",
+        category: "runtime",
+        phase: "entrypoint",
+        retryable: true,
+      },
+    });
   });
 });

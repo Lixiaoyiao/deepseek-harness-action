@@ -29,6 +29,7 @@ const policy: SecurityPolicy = {
 
 const failure: ActionFailure = {
   code: "DSH_TIMEOUT",
+  category: "runtime",
   phase: "agent",
   title: "DeepSeek Harness timed out",
   message: "The worker exceeded 60 seconds",
@@ -38,6 +39,7 @@ const failure: ActionFailure = {
 
 const abortedFailure: ActionFailure = {
   code: "DSH_ABORTED",
+  category: "runtime",
   phase: "agent",
   title: "DeepSeek Harness was cancelled",
   message: "The controller received SIGTERM",
@@ -47,6 +49,7 @@ const abortedFailure: ActionFailure = {
 
 const integrityFailure: ActionFailure = {
   code: "VALIDATION_INTEGRITY",
+  category: "domain",
   phase: "validation",
   title: "Validation integrity failed",
   message: "A protected validation dependency changed",

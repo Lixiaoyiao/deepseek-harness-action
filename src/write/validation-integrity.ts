@@ -766,7 +766,7 @@ export class ValidationIntegrityError extends ValidationFailureError {
     audit: ValidationIntegritySummary,
     failure: ValidationResult = syntheticFailure(audit),
   ) {
-    super(failure);
+    super(failure, { code: "VALIDATION_INTEGRITY", category: "domain", retryable: false });
     this.name = "ValidationIntegrityError";
     this.audit = audit;
   }

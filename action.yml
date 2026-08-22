@@ -30,7 +30,7 @@ inputs:
     required: false
     default: ""
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version. v0.5.2 accepts only the audited 0.1.1-rc.2 runtime."
+    description: "Pinned @deepseek-ai/dsh version. v0.5.3 accepts only the audited 0.1.1-rc.2 runtime."
     required: false
     default: "0.1.1-rc.2"
   dsh-executable:

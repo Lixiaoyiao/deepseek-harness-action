@@ -25,6 +25,10 @@ export interface WorkspaceSnapshot {
   readonly baseline: ReadonlyMap<string, FileState>;
 }
 
+export type WorkspaceSource =
+  | { readonly kind: "git-checkout"; readonly root: string }
+  | { readonly kind: "materialized-tree"; readonly root: string };
+
 export interface WorkspaceChanges {
   readonly added: readonly string[];
   readonly modified: readonly string[];
@@ -80,47 +84,69 @@ async function trackedPaths(root: string): Promise<readonly string[]> {
     cwd: root,
     maxOutputBytes: 32 * 1024 * 1024,
   });
+  if (result.outputTruncated) {
+    throw new Error("git ls-files output exceeded the snapshot capture limit");
+  }
   const paths = result.stdout.split("\0").filter(Boolean).map(normalizeRelativePath);
   if (paths.length > MAX_SNAPSHOT_FILES) throw new Error("Repository exceeds snapshot file limit");
   return paths;
 }
 
-async function repositoryPaths(root: string): Promise<readonly string[]> {
-  try {
-    return await trackedPaths(root);
-  } catch {
-    const result: string[] = [];
-    const pending = [""];
-    while (pending.length > 0) {
-      const current = pending.pop();
-      if (current === undefined) break;
-      const absolute = current === "" ? root : join(root, ...current.split("/"));
-      for (const entry of await readdir(absolute, { withFileTypes: true })) {
-        if (current === "" && isIgnoredGeneratedRootEntry(entry.name)) continue;
-        const path = normalizeRelativePath(
-          current === "" ? entry.name : `${current}/${entry.name}`,
-        );
-        if (entry.isDirectory()) pending.push(path);
-        else if (entry.isFile() || entry.isSymbolicLink()) result.push(path);
-        else throw new Error(`Unsupported repository entry type: ${path}`);
+async function materializedPaths(root: string): Promise<readonly string[]> {
+  const result: string[] = [];
+  const pending = [""];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    const absolute = current === "" ? root : join(root, ...current.split("/"));
+    for (const entry of await readdir(absolute, { withFileTypes: true })) {
+      if (current === "" && isIgnoredGeneratedRootEntry(entry.name)) continue;
+      const path = normalizeRelativePath(current === "" ? entry.name : `${current}/${entry.name}`);
+      if (entry.isDirectory()) {
+        pending.push(path);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        result.push(path);
+        if (result.length > MAX_SNAPSHOT_FILES) {
+          throw new Error("Repository exceeds snapshot file limit");
+        }
+      } else {
+        throw new Error(`Unsupported repository entry type: ${path}`);
       }
     }
-    return result.sort((left, right) => left.localeCompare(right));
+  }
+  return result.sort((left, right) => left.localeCompare(right));
+}
+
+function unsupportedWorkspaceSource(source: never): never {
+  const kind = (source as { readonly kind?: unknown }).kind;
+  throw new Error(`Unsupported workspace source kind: ${String(kind)}`);
+}
+
+async function repositoryPaths(source: WorkspaceSource): Promise<readonly string[]> {
+  switch (source.kind) {
+    case "git-checkout":
+      return await trackedPaths(source.root);
+    case "materialized-tree":
+      return await materializedPaths(source.root);
+    default:
+      return unsupportedWorkspaceSource(source);
   }
 }
 
 /**
- * Copies only tracked files into a .git-less worker directory. DSH and tests
- * operate on this copy, never on the token-bearing controller checkout.
+ * Copies files from an explicitly identified checkout or Controller-materialized
+ * tree into a .git-less worker directory. Git failures never broaden a
+ * checkout from tracked files to arbitrary filesystem entries.
  */
 export async function createWorkspaceSnapshot(
-  sourceRoot: string,
+  source: WorkspaceSource,
   workerRoot: string,
 ): Promise<WorkspaceSnapshot> {
+  const sourceRoot = source.root;
   await mkdir(workerRoot, { recursive: true, mode: 0o700 });
   const baseline = new Map<string, FileState>();
   let bytes = 0;
-  for (const path of await repositoryPaths(sourceRoot)) {
+  for (const path of await repositoryPaths(source)) {
     // Check the lexical path before assertPathWithin resolves it. Otherwise a
     // repository symlink to an in-root file is silently converted to its
     // target and copied as a regular file on Linux.

@@ -13,6 +13,7 @@ import { finishReview } from "./commands/review.js";
 import { publishTaskAnswer } from "./commands/task.js";
 import { AgentDeadlineError, runAgentLoop } from "./agent/loop.js";
 import { DshAbortedError } from "./dsh/errors.js";
+import { PolicyDeniedError } from "./errors.js";
 import { createGitHubClient } from "./github/client.js";
 import { fetchEntitySnapshot, type EntitySnapshot } from "./github/fetch.js";
 import { parseGitHubContext } from "./github/context.js";
@@ -279,7 +280,7 @@ async function runActionInternal(
     ...(pullRequest === undefined ? {} : { resolvedPullRequest: { isFork: pullRequest.isFork } }),
   });
   state.policy = policy;
-  if (!policy.allowed) throw new Error(policy.reason);
+  if (!policy.allowed) throw new PolicyDeniedError(policy.reason);
 
   const issueNumber = snapshot?.number ?? pullRequest?.number;
   const deferWriteProgress = deferProgressUntilWriteValidation(command);
@@ -337,7 +338,10 @@ async function runActionInternal(
         immutableSource,
       );
       agentWorkspace = join(tempRoot, "repository");
-      workspaceCopy = await createWorkspaceSnapshot(immutableSource, agentWorkspace);
+      workspaceCopy = await createWorkspaceSnapshot(
+        { kind: "materialized-tree", root: immutableSource },
+        agentWorkspace,
+      );
     } else {
       tempRoot = await mkdtemp(join(tmpdir(), "dsh-action-empty-"));
       agentWorkspace = tempRoot;
@@ -365,14 +369,12 @@ async function runActionInternal(
       manifests: [...resolvedTools.manifests, ...extensions.manifests],
     };
     if (extensions.network && tools.native.includes("native.bash")) {
-      state.phase = "authorization";
-      throw new Error(
+      throw new PolicyDeniedError(
         "native.bash cannot share a worker with a bridge-networked extension; use mediated web-search or remove Bash",
       );
     }
     if (command.requestedAccess === "write" && !tools.workspace.includes("workspace.edit")) {
-      state.phase = "authorization";
-      throw new Error(
+      throw new PolicyDeniedError(
         "Write tasks require effective workspace.edit permission; select standard or allow it in custom after all trust gates pass",
       );
     }
@@ -406,6 +408,7 @@ async function runActionInternal(
     const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
     const deadlineMs = startedAt + inputs.timeoutMinutes * 60_000;
 
+    state.phase = "agent";
     const loop = await runAgentLoop(
       {
         operation: command.operation,
@@ -623,7 +626,9 @@ async function runActionInternal(
               };
             }
             if (!policy.capabilities.modifyWorkspace) {
-              throw new Error("A read-only task produced workspace changes; refusing publication");
+              throw new PolicyDeniedError(
+                "A read-only task produced workspace changes; refusing publication",
+              );
             }
           }
 

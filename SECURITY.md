@@ -211,9 +211,9 @@ MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, Docker/path/timeout
 handling, and the packaged `dist` entrypoint. It did not require a change to
 the Action's existing input, output, or permission semantics. That conclusion
 does not approve any release after `0.1.1-rc.2`.
-v0.5.2 retains this exact runtime and security contract unchanged; its new
-standalone installer only writes workflow files and does not run inside the
-Agent or Controller.
+v0.5.2 added a standalone installer that only writes workflow files and does
+not run inside the Agent or Controller. v0.5.3 retains the exact audited runtime
+pin while hardening Controller error and repository-source boundaries.
 
 The Action starts this generated Profile through the official
 `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API. It does not use the general
@@ -337,12 +337,12 @@ Bundle patch stays within its installed package before startup.
 
 #### Validation-definition integrity
 
-Repository validation is meaningful only if the Controller notices when the
-candidate also changes its definition. v0.5.1 classifies package scripts, test
-sources/configuration, lint, typecheck, build configuration, validation runtime
-files, and other effective entrypoints independently from ordinary code changes.
-Changing tests with the implementation is supported; a test change is not a
-denial by itself.
+Validation Integrity provides **high-confidence validation weakening detection
+plus baseline replay**. For the supported validation surface, it analyzes
+validation entrypoints, package scripts, test and configuration weakening,
+lock/toolchain controls, and known wrappers and interpreters independently from
+ordinary code changes. Changing tests with the implementation is supported; a
+test change is not a denial by itself.
 
 The audit follows a normalized command graph rather than only the first argv
 token. It includes package-script entrypoints and Node wrapper options such as
@@ -364,6 +364,11 @@ replacement are considered in the strict decision. The selected mode is a
 trusted Action input, not repository or model data. The Controller records the
 integrity audit and disposition in `result-json` and the step summary before any
 GitHub mutation.
+
+This is not complete cross-language dependency provenance and is not a formal
+integrity proof. Unknown language ecosystems, dependency-resolution behavior,
+generated code, or custom wrappers outside the supported command graph may
+require separate repository and runner controls.
 
 ### 4. Controller and commit authority
 
@@ -399,9 +404,10 @@ mutation.
   any authorization or validation gate.
 - Progress publication is secondary UX and cannot mask the primary result.
   Terminal outputs, including the versioned `result-json`, are produced for
-  success, neutral and failure outcomes. Stable failure codes distinguish DSH
-  timeout/output errors, validation failure/timeout, policy denial and the
-  controller phase that failed.
+  success, neutral and failure outcomes. Known configuration, policy, domain,
+  and runtime errors carry stable `code`, `category`, and `retryable` identity.
+  `phase` records where that error surfaced in the Controller lifecycle; it
+  does not determine the known error's identity.
 - Runtime creation and installation, extension installation, each Agent turn,
   and Controller validation have separate bounded budgets. Each receives the
   smaller of its cap and the remaining overall execution deadline, so setup
@@ -422,14 +428,14 @@ The supplied templates use the following sets:
 | Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                   |
 | CI auto-fix                                     | Same as the preceding row                                                                                                                     |
 | Core E2E gate/read/write/cancellation           | Split per job: read-only gate, `contents`/PR write only for the write golden path, and Issue write only for the isolated cancellation fixture |
-| v0.5.2 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
+| v0.5.3 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
 
 The release canary requires repository variable `DSH_RELEASE_CANARY_SHA` to be
-the lowercase full 40-character commit SHA referenced by the formal v0.5.2 tag
+the lowercase full 40-character commit SHA referenced by the formal v0.5.3 tag
 and its non-draft, non-prerelease GitHub Release. Before any environment secret
 is available, a secretless gate requires `refs/heads/main`, requires the
 run/workflow SHA to equal the live default-branch SHA, and fails if `main` is no
@@ -480,11 +486,16 @@ the configured `dsh-executable` then runs as trusted host code. Use that mode
 only on a dedicated trusted runner. Untrusted and trusted-write profiles still
 require Docker.
 
-The credential-free validation container uses Docker bridge networking for
-dependency installation. That is unrestricted destination egress from the
-container, not merely registry access, and validation executes untrusted
-repository code. Use immutable lockfiles, pinned registries/images and a runner
-egress policy when source confidentiality or reproducibility requires it.
+The credential-free validation container currently uses Docker bridge
+networking for validation commands, including dependency installation. That is
+unrestricted destination egress from the container, not merely registry access,
+and validation executes untrusted repository code. Use immutable lockfiles,
+pinned registries/images and a runner egress policy when source confidentiality
+or reproducibility requires it. On a self-hosted runner, especially one attached
+to a corporate network, repository-controlled validation code may reach services
+and destinations that are reachable through the runner's Docker bridge path.
+Use dedicated runners, network segmentation, and runner-level egress controls
+for that threat model.
 
 Each validation command receives a random container name and `--rm`. On a
 launch error or timeout the controller also attempts `docker rm --force`, and
@@ -498,7 +509,7 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred in v0.5.2. On `SIGTERM` or
+A marker-level freshness guard remains deferred in v0.5.3. On `SIGTERM` or
 `SIGINT`, the Controller aborts the active worker and immediately starts a
 bounded, best-effort terminal comment update while run-scoped cleanup proceeds.
 A later authoritative non-cancellation failure can correct a provisional
@@ -508,7 +519,7 @@ crash, or a network/GitHub API outage can prevent all finalization code from
 running; an “In progress” comment may therefore remain stale. The Actions run
 conclusion is authoritative.
 
-v0.5.2 retains the binding of its generated Profile and positive native-tool
+v0.5.3 retains the binding of its generated Profile and positive native-tool
 policy to the exact DSH version whose complete tool surface was audited. It
 accepts only the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family; another
 tag, range or exact version is

@@ -3,6 +3,47 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.5.3] - 2026-08-23
+
+### Fixed
+
+- Decoupled stable error identity from the mutable Controller lifecycle phase.
+  Known configuration, policy, domain, and runtime errors now carry stable
+  `code`, `category`, and `retryable` semantics, while `phase` records only
+  where the error surfaced. Extension policy denials raised during context
+  preparation now remain `POLICY_DENIED` instead of becoming
+  `CONTEXT_PREPARATION_FAILED`; otherwise-unclassified exceptions use the
+  phase-independent `ACTION_RUNTIME_FAILED` identity.
+- Replaced the unconditional `repositoryPaths()` Git-error fallback with an
+  explicit source contract. Git checkouts remain tracked-files-only and fail
+  closed on any `git ls-files`, normalization, truncation, or file-limit error;
+  only Controller-materialized `.git`-less trees use the bounded filesystem
+  walk required by the immutable GitHub tree worker path.
+
+### Security documentation
+
+- Defined Validation Integrity as high-confidence validation weakening
+  detection plus baseline replay for supported validation entrypoints, package
+  scripts, test/config weakening, lock/toolchain controls, and known
+  wrappers/interpreters. It is not complete cross-language dependency
+  provenance or a formal integrity proof.
+- Documented that validation may use Docker bridge networking and that
+  repository code on a self-hosted or corporate-network runner may reach
+  services accessible through the runner's network path.
+
+### Compatibility and scope
+
+- Existing scalar Action outputs and the schema-v1 `result-json` envelope remain
+  compatible; classified failures add the backward-compatible
+  `result-json.error.category` field, and corrected classification may change a
+  previously phase-derived error code or status.
+- `validation-integrity` still defaults to `warn`. Protected paths, exact DSH
+  `0.1.1-rc.2` pins, per-version audit policy, E2E architecture, write gates,
+  and installer behavior remain unchanged.
+- This release adds no product features. Session/Resume, GitHub Tools, new
+  triggers, branch/image/structured-output features, protected globs, and
+  installer changes remain out of scope.
+
 ## [0.5.2] - 2026-08-23
 
 ### Added
@@ -516,6 +557,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.5.3]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.4.0...v0.5.0

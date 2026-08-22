@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
 import { assertPinnedContainerImage } from "../dsh/runner.js";
+import {
+  ActionConfigurationError,
+  ClassifiedActionError,
+  PolicyDeniedError,
+  type ActionErrorIdentity,
+} from "../errors.js";
 import { runCommand, type CommandResult } from "../security/argv.js";
 import { isIgnoredGeneratedRootEntry } from "./workspace.js";
 
@@ -35,18 +41,20 @@ export function assertWriteValidationConfigured(
   commands: readonly (readonly string[])[],
 ): void {
   if (!runTests) {
-    throw new Error(
+    throw new PolicyDeniedError(
       "run-tests=false cannot authorize a repository write; trusted writes require Controller validation",
     );
   }
   if (commands.length === 0) {
-    throw new Error("test-commands must contain at least one command before a repository write");
+    throw new PolicyDeniedError(
+      "test-commands must contain at least one command before a repository write",
+    );
   }
 }
 
 function validationDeadline(timeoutMs: number): number {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error("Validation timeout must be a positive integer");
+    throw new ActionConfigurationError("Validation timeout must be a positive integer");
   }
   return Date.now() + timeoutMs;
 }
@@ -68,24 +76,29 @@ function includeInValidationCopy(workspaceRoot: string, source: string): boolean
   return rootEntry !== undefined && !isIgnoredGeneratedRootEntry(rootEntry);
 }
 
-export class ValidationFailureError extends Error {
-  public readonly code: "VALIDATION_FAILED" | "VALIDATION_TIMEOUT";
+export type ValidationErrorCode =
+  "VALIDATION_FAILED" | "VALIDATION_TIMEOUT" | "VALIDATION_INTEGRITY";
+
+export class ValidationFailureError extends ClassifiedActionError<ValidationErrorCode> {
   public readonly argv: readonly string[];
   public readonly exitCode: number;
   public readonly timedOut: boolean;
   public readonly outputTruncated: boolean;
   public readonly result: CommandResult;
 
-  public constructor(failure: ValidationResult) {
+  public constructor(
+    failure: ValidationResult,
+    identity?: ActionErrorIdentity<ValidationErrorCode>,
+  ) {
     const command = failure.argv.join(" ");
     const status = failure.result.timedOut
       ? "timed out"
       : `exited with code ${String(failure.result.exitCode)}`;
+    const code = failure.result.timedOut ? "VALIDATION_TIMEOUT" : "VALIDATION_FAILED";
     super(
       `Validation command ${JSON.stringify(command)} ${status}${failure.result.outputTruncated ? "; captured output was truncated" : ""}`,
+      identity ?? { code, category: "domain", retryable: failure.result.timedOut },
     );
-    this.name = "ValidationFailureError";
-    this.code = failure.result.timedOut ? "VALIDATION_TIMEOUT" : "VALIDATION_FAILED";
     this.argv = failure.argv;
     this.exitCode = failure.result.exitCode;
     this.timedOut = failure.result.timedOut;

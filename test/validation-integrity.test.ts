@@ -35,7 +35,10 @@ async function fixture(
   const worker = join(root, "worker");
   await mkdir(source);
   for (const [path, content] of Object.entries(files)) await write(source, path, content);
-  return { root, snapshot: await createWorkspaceSnapshot(source, worker) };
+  return {
+    root,
+    snapshot: await createWorkspaceSnapshot({ kind: "materialized-tree", root: source }, worker),
+  };
 }
 
 async function audit(
