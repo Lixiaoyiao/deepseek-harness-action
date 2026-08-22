@@ -13,15 +13,33 @@ const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 const dshPackage = (name) => name === "@deepseek-ai/dsh" || name.startsWith("@deepseek-ai/dsh-");
 
-const [manifestText, lockText, action, ci, canary] = await Promise.all([
+const [
+  manifestText,
+  lockText,
+  action,
+  ci,
+  canary,
+  installerManifestText,
+  installerLockText,
+  installerBuild,
+  installerReview,
+  installerCommands,
+] = await Promise.all([
   read("package.json"),
   read("package-lock.json"),
   read("action.yml"),
   read(".github/workflows/ci.yml"),
   read(".github/workflows/release-canary.yml"),
+  read("packages/create-deepseek-harness-action/package.json"),
+  read("packages/create-deepseek-harness-action/package-lock.json"),
+  read("packages/create-deepseek-harness-action/scripts/build.mjs"),
+  read("packages/create-deepseek-harness-action/src/templates/dsh-review.yml"),
+  read("packages/create-deepseek-harness-action/src/templates/dsh-commands.yml"),
 ]);
 const manifest = JSON.parse(manifestText);
 const lock = JSON.parse(lockText);
+const installerManifest = JSON.parse(installerManifestText);
+const installerLock = JSON.parse(installerLockText);
 const directDependencies = {
   ...(manifest.dependencies ?? {}),
   ...(manifest.devDependencies ?? {}),
@@ -101,6 +119,96 @@ for (const expected of [
   assert.ok(canary.includes(expected), `release canary is missing contract token: ${expected}`);
 }
 
+assert.equal(
+  installerManifest.name,
+  "create-deepseek-harness-action",
+  "installer npm package name drifted",
+);
+assert.equal(installerManifest.version, "0.1.0", "installer version must start at 0.1.0");
+assert.equal(installerManifest.private, false, "installer must remain publishable");
+assert.equal(
+  installerManifest.bin?.["create-deepseek-harness-action"],
+  "./dist/cli.mjs",
+  "installer bin entry drifted",
+);
+assert.deepEqual(installerManifest.files, ["dist/"], "installer package files must be allowlisted");
+assert.equal(
+  installerManifest.scripts?.prepack,
+  "npm run build",
+  "installer pack must build its release-bound dist",
+);
+assert.deepEqual(
+  installerManifest.publishConfig,
+  { access: "public", registry: "https://registry.npmjs.org/" },
+  "installer must publish publicly through the official npm registry",
+);
+assert.equal(installerLock.version, "0.1.0", "installer lock version drifted");
+assert.equal(installerLock.packages?.[""]?.version, "0.1.0", "installer root lock version drifted");
+
+const installerReleaseToken = "__DSH_ACTION_RELEASE_SHA__";
+assert.ok(
+  installerBuild.includes("DSH_ACTION_RELEASE_SHA"),
+  "installer build must require an explicit release SHA",
+);
+assert.ok(
+  installerBuild.includes("^[0-9a-f]{40}$"),
+  "installer build must accept only a lowercase full commit SHA",
+);
+for (const [name, template] of [
+  ["review", installerReview],
+  ["commands", installerCommands],
+]) {
+  assert.equal(
+    template.split(installerReleaseToken).length - 1,
+    1,
+    `${name} installer template must contain exactly one controlled release token`,
+  );
+  assert.ok(
+    template.includes(`Lixiaoyiao/deepseek-harness-action@${installerReleaseToken}`),
+    `${name} installer template must bind only through the controlled release token`,
+  );
+  assert.ok(
+    !/deepseek-harness-action@(?:main|latest|v\d)/u.test(template),
+    `${name} installer template must not use a floating Action reference`,
+  );
+  assert.ok(
+    template.includes("persist-credentials: false"),
+    `${name} installer template must disable checkout credentials`,
+  );
+  assert.ok(
+    !/^\s+env:\s*$/mu.test(template) && !template.includes("github-token:"),
+    `${name} installer template must not expose Controller credentials`,
+  );
+}
+for (const expected of [
+  "pull_request_target:",
+  "ref: ${{ github.event.pull_request.base.sha }}",
+  "contents: read",
+  "pull-requests: write",
+  'allow-write: "false"',
+]) {
+  assert.ok(installerReview.includes(expected), `installer review is missing: ${expected}`);
+}
+for (const expected of [
+  "ref: ${{ github.event.repository.default_branch }}",
+  "actions: read",
+  "checks: read",
+  "contents: write",
+  "issues: write",
+  "pull-requests: write",
+  'allow-write: "true"',
+  'run-tests: "true"',
+  "validation-integrity: strict",
+  "REQUIRED: Replace this fail-closed placeholder",
+  "@sha256:",
+]) {
+  assert.ok(installerCommands.includes(expected), `installer commands is missing: ${expected}`);
+}
+assert.ok(
+  !/\b(?:npm|pnpm|yarn)\b/u.test(installerCommands),
+  "installer coding validation must not assume a JavaScript package manager",
+);
+
 process.stdout.write(
-  `release contract ok: ${ACTION_TAG}, DSH ${DSH_VERSION}, ${String(lockedDshPackageCount)} locked DSH packages\n`,
+  `release contract ok: ${ACTION_TAG}, installer ${installerManifest.name}@${installerManifest.version}, DSH ${DSH_VERSION}, ${String(lockedDshPackageCount)} locked DSH packages\n`,
 );

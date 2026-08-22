@@ -1,6 +1,6 @@
-# v0.5.1 custom controlled-extension template. The package and endpoint names are
+# v0.5.2 custom controlled-extension template. The package and endpoint names are
 # intentionally non-routable placeholders: replace them with extensions you have
-# audited. Pin this Action to the full v0.5.1 release commit SHA in production.
+# audited. Pin this Action to the full v0.5.2 release commit SHA in production.
 name: DSH controlled MCP and Profile
 
 on:
@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

@@ -2,18 +2,55 @@
 
 [English](setup.md) · [项目首页](../README.zh-CN.md) · [使用指南](usage.zh-CN.md) · [配置参考](configuration.md)
 
-本指南从添加仓库 Secret 开始，带你建立第一个安全 workflow。建议先启用只读 PR 审查；只有仓库确实需要时，再加入命令或写模式。
+本指南从安装开始，带你建立第一个安全 workflow。建议先启用只读 PR 审查；只有仓库确实需要时，再加入命令或写模式。
 
-## 准备条件
+## 快速开始：安装器
+
+在需要接入的仓库根目录运行：
+
+```bash
+npm create deepseek-harness-action@latest
+```
+
+选择要安装的内容：
+
+| 选择                     | 创建的文件                           |
+| ------------------------ | ------------------------------------ |
+| **PR Review**            | `.github/workflows/dsh-review.yml`   |
+| **@dsh Coding Commands** | `.github/workflows/dsh-commands.yml` |
+| **Both**                 | 以上两个 workflow 文件               |
+
+在 CI 或其它非交互环境中，必须显式传入 mode，安装器不会等待 stdin：
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both
+```
+
+安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。它不会添加 `DEEPSEEK_API_KEY`、commit 或 push 改动，也不会创建 PR。生成的 workflow 会把 Action 固定到 v0.5.2 的不可变 release commit。
+
+安装成功后：
+
+1. 在 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。
+2. 使用 Review 时，打开或更新一个非 draft PR。
+3. 使用 Coding Commands 时，把 `@dsh` 命令写在 Issue 或 PR 评论的第一行。请求写入前，必须把 validation command 占位符替换为适合你项目的命令。
+4. 继续阅读本文的安全说明，并通过[使用指南](usage.zh-CN.md)了解所有受支持的命令。
+
+本地只在运行安装器时需要 Node.js 和 npm；生成的 workflow 不会假定目标仓库是 Node.js 项目。
+
+## 手工安装
+
+如果希望自己创建 workflow，请按以下步骤操作。
+
+### 准备条件
 
 - 你能在目标 GitHub 仓库中添加 Actions Secret 和 workflow。
 - 一个 DeepSeek API key。
 - GitHub 托管的 Ubuntu runner，或已经安装 Docker 的自托管 runner。
-- 只有开发这个 Action 本身时才需要 Node.js 24；Action 使用方不用单独安装 Node.js。
+- 只有开发这个 Action 本身时才需要 Node.js 24；手工安装的 workflow 不需要单独安装 Node.js。
 
 处理不可信 PR 数据、执行任何写入，以及使用任何 MCP、Bundle 或 Plugin 扩展时，都必须使用 Docker。可选的 host 执行路径没有操作系统隔离，只适合专用的受信任 runner。
 
-## 1. 添加 API key
+### 1. 添加 API key
 
 打开 **Settings → Secrets and variables → Actions → New repository secret**，创建：
 
@@ -25,12 +62,12 @@ DEEPSEEK_API_KEY
 
 默认的 `github-token` 是 `${{ github.token }}`，也只由 Controller 使用。请禁用 checkout 凭据，避免仓库代码或 worker 继承 Git 凭据。
 
-## 2. 选择 Action 版本
+### 2. 选择 Action 版本
 
 为了便于阅读，示例使用当前发布 Tag：
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
 ```
 
 生产环境应把 Tag 替换为该版本发布时的完整、不可变 commit SHA。不要使用 `main`、`latest`、版本范围或其它浮动 ref。`dsh-version` 必须保持为本版本审计过的精确值：
@@ -42,7 +79,7 @@ with:
 
 只有新的 DSH package family、Profile 和工具面完成复核并随新版本发布后，Action 才会接受不同版本。
 
-## 3. 添加安全的自动 PR 审查
+### 3. 添加安全的自动 PR 审查
 
 创建 `.github/workflows/dsh-review.yml`：
 
@@ -73,7 +110,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -83,7 +120,7 @@ jobs:
 
 打开一个非 draft PR，检查 Actions 运行、审查汇总和行内问题。完整且持续维护的模板见 [`examples/fork-review.yml`](../examples/fork-review.yml)。
 
-## 4. 只授予入口真正需要的 GitHub 权限
+### 4. 只授予入口真正需要的 GitHub 权限
 
 Agent 权限档位不会授予 GitHub 权限。workflow token scope 只决定受信任 Controller 可以调用哪些 API。
 
@@ -99,7 +136,7 @@ Agent 权限档位不会授予 GitHub 权限。workflow token scope 只决定受
 
 较宽的 workflow token 不能绕过 actor、事件、来源、SHA、受保护路径、验证或 Controller 策略。反过来，缺少必要 scope 也会让本来获准的结果无法发布。
 
-## 5. 添加命令、CI 或自动化流程
+### 5. 添加命令、CI 或自动化流程
 
 按使用场景复制模板：
 
@@ -113,9 +150,9 @@ Agent 权限档位不会授予 GitHub 权限。workflow token scope 只决定受
 
 `prompt` 输入属于受信任指令。不要把 Issue 正文、PR 内容、评论、日志、仓库文件或模型输出插入其中。GitHub 会在 Action 启动前解析表达式，Action 无法恢复这些值原来的来源。
 
-## 6. 谨慎启用写模式
+### 6. 谨慎启用写模式
 
-写命令本身不会授权变更。有效的写 workflow 还必须通过 actor、事件、同仓库、分支、SHA、workspace 和工具策略检查，并配置由 Controller 执行的验证：
+写命令本身不会授权变更。有效的写 workflow 还必须通过 actor、事件、同仓库、分支、SHA、workspace 和工具策略检查，并配置由 Controller 执行的验证。启用写模式前，必须把下面的每个占位符替换为适合你项目的命令和固定到 digest 的容器镜像；这里特意不提供 npm 默认值：
 
 ```yaml
 with:
@@ -125,18 +162,17 @@ with:
   validation-integrity: strict
   test-commands: >-
     [
-      ["npm","ci","--ignore-scripts"],
-      ["npm","test"],
-      ["npm","run","typecheck"]
+      ["REPLACE_WITH_YOUR_PROJECT_INSTALL_COMMAND"],
+      ["REPLACE_WITH_YOUR_PROJECT_TEST_COMMAND"]
     ]
-  container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+  container-image: REPLACE_WITH_YOUR_PROJECT_IMAGE@sha256:REPLACE_WITH_FULL_DIGEST
 ```
 
-请把这些验证命令换成适合你仓库的命令。每一项都是固定 argv 数组，不会经过 shell 展开；所有命令都必须成功。`run-tests: "false"` 会拒绝写入，不是跳过验证的开关。
+每条 validation command 都是固定 argv 数组，不会经过 shell 展开；每个参数都要写成独立字符串，并且所有命令都必须成功。占位符在替换前会安全失败。`run-tests: "false"` 会拒绝写入，不是跳过验证的开关。
 
 Docker image 本身就是可执行的 worker code。写入和扩展必须使用完整 digest，不能只固定 Tag。启用前请阅读[写模式与验证](configuration.md#write-validation-and-integrity)。
 
-## Checkout、超时与并发规则
+### Checkout、超时与并发规则
 
 - 固定每个 `actions/checkout` 版本，并设置 `persist-credentials: false`。
 - 使用 `pull_request_target` 时，只检出 `github.event.pull_request.base.sha`，绝不运行 fork checkout。
@@ -144,7 +180,7 @@ Docker image 本身就是可执行的 worker code。写入和扩展必须使用�
 - job 的 `timeout-minutes` 应比 Action 的同名输入多留几分钟，让 Action 有一个短且有上限的窗口停止 worker、写入 outputs，并尝试发布适用的取消状态。
 - runner 被强制终止时可能完全跳过 cleanup。应以 Actions conclusion 为准，详见[评论一直显示 In progress](troubleshooting.md#cancellation-or-a-sticky-comment-remains-in-progress)。
 
-## 验证接入结果
+### 验证接入结果
 
 第一次运行后，确认：
 

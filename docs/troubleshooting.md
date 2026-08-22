@@ -10,7 +10,7 @@ Give the Action step an `id`, then inspect `result-json` even when the step
 fails:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
+- uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -274,7 +274,7 @@ Typical codes:
 For malformed output, retry once. If it persists:
 
 1. Confirm `dsh-version` is exactly `0.1.1-rc.2` and the Action version is
-   v0.5.1.
+   v0.5.2.
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
 3. Check that trusted prompts do not ask for fences, prefaces, suffixes, a
    separate citation list, or a different operation. Web Search Markdown
@@ -294,7 +294,7 @@ bounded log message.
 
 ### DSH runtime
 
-- v0.5.1 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
+- v0.5.2 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
   range, a floating Git ref, or mixed DSH package versions.
 - The runtime installs from the committed lockfile in an ephemeral,
   credential-free container and audits the installed DSH inventory. Registry,

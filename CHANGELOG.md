@@ -3,6 +3,45 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.5.2] - 2026-08-23
+
+### Added
+
+- Added the independent `create-deepseek-harness-action` npm package at
+  version `0.1.0`. `npm create deepseek-harness-action@latest` can generate a
+  safe PR-review workflow, an `@dsh` coding-command workflow, or both without a
+  server, database, OAuth flow, or GitHub App.
+- Added explicit non-interactive selection for CI and automation. The installer
+  creates `.github/workflows/` when needed, reports every created file, and
+  refuses to overwrite an existing target workflow.
+
+### Changed
+
+- Made the installer the primary Quick Start while retaining the complete
+  manual workflow setup. The coding template leaves repository validation as
+  an explicit required replacement instead of assuming an npm project.
+- Added installer coverage for Review, Commands, Both, directory creation,
+  overwrite refusal, non-interactive execution, YAML parsing, and the generated
+  workflow security contract.
+
+### Security and scope
+
+- Generated workflows preserve credential-free checkout, trusted-base-only
+  fork review, minimum GitHub permissions, and the existing Controller/worker
+  credential boundary. Write-capable commands still require explicit
+  `allow-write`, Docker isolation, Controller validation, and strict validation
+  integrity.
+- The published installer templates bind the Action to the full immutable
+  commit SHA resolved from the formal v0.5.2 tag. That SHA is injected only
+  after the tag and GitHub Release exist and is verified in the npm tarball;
+  no guessed pre-release SHA is shipped.
+- This is an installer and onboarding release only. The Agent core, Action
+  inputs and outputs, permission semantics, and schema-v1 `result-json` remain
+  unchanged. The audited DSH family remains exactly `0.1.1-rc.2`.
+- Session/Resume, Label or Assignee triggers, custom trigger phrases, branch
+  templates, image support, GitHub App behavior, commit signing, Agent Teams,
+  and unrelated feature expansion remain out of scope.
+
 ## [0.5.1] - 2026-08-22
 
 ### Changed
@@ -477,6 +516,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.5.2]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...v0.4.0
