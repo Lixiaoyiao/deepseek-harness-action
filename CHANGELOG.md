@@ -30,12 +30,16 @@ versioning for published action releases.
   trusted-write plus `allow-write`, Docker, and Controller validation, and are
   deferred until finalization. Entity revalidation, bounded retries,
   postconditions, ambiguous-failure reconciliation, and bounded receipts apply.
+  Confirmed or possible partial external effects are reported as
+  `partial-success` rather than as an ordinary retry-safe failure.
 - All prior credential, fork/trust/write, Docker, protected-path, validation,
   Validation Integrity, and exact DSH audit gates remain in force. Controller
   credentials are rejected from public branch configuration and task schemas.
 - Existing inputs, scalar outputs, default branch names, and fixed
-  `result-json` schema version remain compatible. The audited DSH family stays
-  exactly `0.1.1-rc.2`; the standalone installer remains unchanged.
+  `result-json` schema version remain compatible. Default branch configuration
+  also preserves the exact v0.5.3 task identity and reconciliation key. The
+  audited DSH family stays exactly `0.1.1-rc.2`; the standalone installer
+  remains unchanged.
 
 ### Deferred and out of scope
 

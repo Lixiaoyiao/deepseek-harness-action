@@ -217,6 +217,10 @@ text and reserved markers, then uses bounded attempts, postconditions,
 ambiguous-failure reconciliation, and receipts. The GitHub token never enters
 the model, DSH worker, tool input, feedback, or receipt.
 
+If a sequential flush confirms or cannot exclude an earlier external effect
+before a later failure, the Controller records `partial-success` and an
+`externalEffect` receipt instead of presenting an ordinary retry-safe failure.
+
 #### Controlled DSH native, MCP, Bundle, and plugin tools
 
 v0.4 introduced the official DSH extension mechanisms. v0.5.1 re-audits them
@@ -474,15 +478,22 @@ The permanent Core E2E workflow is trusted release infrastructure and must be
 bootstrapped onto the default branch before it qualifies a candidate. Its gate
 has no secret access and requires the dispatch ref, workflow/dispatch SHA, and
 live default-branch SHA to agree before it binds the explicit full candidate
-SHA, `DSH_E2E_CANDIDATE_SHA`, a write-capable actor, and an open non-draft
-same-repository PR targeting the default branch. The three jobs that can access
-`DEEPSEEK_API_KEY` all use the `core-e2e` environment; repository operators must
-configure that environment with a default-branch-only deployment policy.
+SHA, `DSH_E2E_CANDIDATE_SHA`, and a write-capable actor. Pull-request mode also
+requires an open non-draft same-repository PR targeting the default branch.
+Protected main mode rejects a PR number and requires candidate, workflow,
+dispatch, repository-variable, and live default-branch SHAs to be identical;
+the complete Core E2E must pass in that mode on the exact post-merge release
+commit before tagging. The three jobs that can access `DEEPSEEK_API_KEY` all use
+the `core-e2e` environment; repository operators must configure that environment
+with a default-branch-only deployment policy.
 Harness/fixture code is checked out at the immutable trusted SHA and candidate
 code only at the bound candidate SHA, always without persisted checkout
 credentials. Cancellation uses a dedicated temporary Issue and one locked bot
 comment ID, then strictly deletes the comment and closes the Issue instead of
-touching the candidate PR's sticky comment.
+touching the candidate PR's sticky comment. The integration job exercises all
+six typed GitHub operations against run-bound label, Issue, draft PR, commit and
+ref fixtures, restores their remote state, and independently performs exact,
+identity-verified cleanup without broad matching or deletion.
 
 ## Known boundary
 
@@ -528,9 +539,11 @@ audited `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text task
 and constructs one text content block; it has no formal multimodal contract.
 Markdown images are rendered inert as `[image removed]`. The Controller does
 not download attachments, forward their URLs, mount their bytes, or attach
-credentials to an unofficial fetch path. Future enablement requires a newly
-audited exact DSH contract plus independent source, SSRF, magic-byte, type,
-count, size, total-size, timeout, and credential-free-download gates.
+credentials to an unofficial fetch path. Used reference definitions, HTML
+image/source tags, and recognized raw GitHub attachment URLs are removed from
+all prompt channels. Future enablement requires a newly audited exact DSH
+contract plus independent source, SSRF, magic-byte, type, count, size,
+total-size, timeout, and credential-free-download gates.
 
 Each validation command receives a random container name and `--rm`. On a
 launch error or timeout the controller also attempts `docker rm --force`, and

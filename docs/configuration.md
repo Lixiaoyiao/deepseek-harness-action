@@ -227,6 +227,11 @@ repository identity, then performs bounded API attempts, postcondition checks,
 ambiguous-failure reconciliation, and bounded receipts. Model output never
 becomes GitHub authority.
 
+If one queued mutation is confirmed or may have taken effect before a later
+mutation fails, the failure envelope reports `write.status: partial-success`
+and receipts mark the bounded external-effect state. Treat that as a manual
+reconciliation signal; do not blindly rerun the model request.
+
 ## Maintainer-defined command tools
 
 A `command.*` tool is a complete argv chosen by the workflow maintainer. The
@@ -403,9 +408,11 @@ v0.6.0 does not download or forward GitHub image attachments. The exact audited
 `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
-Enabling attachments is deferred until an exact DSH release provides a formal,
-auditable contract; the Action does not pass image URLs, bytes, local paths, or
-Controller credentials through an unofficial channel.
+Reference definitions, HTML image/source elements, and recognized raw GitHub
+attachment URLs are removed from every prompt channel as well. Enabling
+attachments is deferred until an exact DSH release provides a formal, auditable
+contract; the Action does not pass image URLs, bytes, local paths, or Controller
+credentials through an unofficial channel.
 
 ## Write validation and integrity
 
