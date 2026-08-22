@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 
+import { isAllowedActor } from "./actors.js";
 import type { GitHubClient } from "./client.js";
 import type { GitHubContext } from "./context.js";
 import { issueContentFingerprint } from "./issue-identity.js";
@@ -66,6 +67,11 @@ export interface RepositoryComment {
   readonly body: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface CommentActorFilter {
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
 }
 
 export interface PullRequestFileContext {
@@ -210,6 +216,22 @@ export function filterCommentsToTriggerTime(
   });
 }
 
+/** Filter only historical prompt context. The audited triggering comment is retained. */
+export function filterHistoricalCommentsByActor(
+  comments: readonly RepositoryComment[],
+  triggerCommentId: number | undefined,
+  filter: CommentActorFilter = {},
+): readonly RepositoryComment[] {
+  const include = filter.include ?? [];
+  const exclude = filter.exclude ?? [];
+  return comments.filter((comment) => {
+    if (comment.id === triggerCommentId) return true;
+    // Exclusion deliberately wins when an actor appears in both sets.
+    if (isAllowedActor(comment.author, exclude)) return false;
+    return include.length === 0 || isAllowedActor(comment.author, include);
+  });
+}
+
 function normalizeComment(comment: {
   id: number;
   body?: string | null;
@@ -329,17 +351,19 @@ async function listRecentCommentsBounded(
 function selectBoundedComments(
   comments: readonly RepositoryComment[],
   context: GitHubContext,
+  actorFilter: CommentActorFilter,
 ): readonly RepositoryComment[] {
   const trigger = originalTriggerComment(context);
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
   if (trigger !== null) byId.set(trigger.id, trigger);
-  const eligible = [...filterCommentsToTriggerTime([...byId.values()], context)].sort(
-    (left, right) => {
-      if (left.id === trigger?.id) return -1;
-      if (right.id === trigger?.id) return 1;
-      return Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id - left.id;
-    },
-  );
+  const atTriggerTime = filterCommentsToTriggerTime([...byId.values()], context);
+  const eligible = [
+    ...filterHistoricalCommentsByActor(atTriggerTime, trigger?.id, actorFilter),
+  ].sort((left, right) => {
+    if (left.id === trigger?.id) return -1;
+    if (right.id === trigger?.id) return 1;
+    return Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id - left.id;
+  });
 
   const selected: RepositoryComment[] = [];
   let remainingBytes = MAX_COMMENT_BYTES;
@@ -360,9 +384,10 @@ async function listExistingComments(
   repo: string,
   issueNumber: number,
   context: GitHubContext,
+  actorFilter: CommentActorFilter,
 ): Promise<readonly RepositoryComment[]> {
   const comments = await listRecentCommentsBounded(client, owner, repo, issueNumber);
-  return selectBoundedComments(comments, context);
+  return selectBoundedComments(comments, context, actorFilter);
 }
 
 async function listPullRequestFilesBounded(
@@ -420,6 +445,7 @@ export async function fetchPullRequestSnapshot(
   client: GitHubClient,
   context: GitHubContext,
   pullNumber: number,
+  actorFilter: CommentActorFilter = {},
 ): Promise<PullRequestSnapshot> {
   const { owner, repo } = context.repository;
   const pull = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
@@ -440,7 +466,7 @@ export async function fetchPullRequestSnapshot(
   }
   const [{ files, maybeTruncated: filesTruncated }, comments] = await Promise.all([
     listPullRequestFilesBounded(client, owner, repo, pullNumber),
-    listExistingComments(client, owner, repo, pullNumber, context),
+    listExistingComments(client, owner, repo, pullNumber, context, actorFilter),
   ]);
 
   let sourceBytes = 0;
@@ -538,6 +564,7 @@ export async function fetchIssueSnapshot(
   client: GitHubClient,
   context: GitHubContext,
   issueNumber: number,
+  actorFilter: CommentActorFilter = {},
 ): Promise<IssueSnapshot> {
   const { owner, repo } = context.repository;
   const issue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
@@ -549,7 +576,14 @@ export async function fetchIssueSnapshot(
     body: issue.data.body,
     authorId: issue.data.user?.id,
   });
-  const comments = await listExistingComments(client, owner, repo, issueNumber, context);
+  const comments = await listExistingComments(
+    client,
+    owner,
+    repo,
+    issueNumber,
+    context,
+    actorFilter,
+  );
   const verifiedIssue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
   if (
     issue.data.number !== verifiedIssue.data.number ||
@@ -583,10 +617,11 @@ export async function fetchEntitySnapshot(
   context: GitHubContext,
   entityNumber: number,
   isPullRequest: boolean,
+  actorFilter: CommentActorFilter = {},
 ): Promise<EntitySnapshot> {
   return isPullRequest
-    ? fetchPullRequestSnapshot(client, context, entityNumber)
-    : fetchIssueSnapshot(client, context, entityNumber);
+    ? fetchPullRequestSnapshot(client, context, entityNumber, actorFilter)
+    : fetchIssueSnapshot(client, context, entityNumber, actorFilter);
 }
 
 export function extractOriginalTriggerText(context: GitHubContext): string {

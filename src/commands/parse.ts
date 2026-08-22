@@ -10,18 +10,26 @@ export interface ParsedCommand {
   readonly requestedAccess: RequestedAccess;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 /**
  * Parse an exact first-line @dsh command plus its remaining comment body. This
  * parser is deliberately never applied to repository files, issue bodies, or
  * quoted text.
  */
-export function parseCommand(content: string): ParsedCommand | null {
+export function parseCommand(content: string, triggerPhrase = "@dsh"): ParsedCommand | null {
   const lines = content.replace(/\r\n?/gu, "\n").split("\n");
   const firstLine = lines[0] ?? "";
-  if (lines.slice(1).some((line) => /^\s*@dsh\b/iu.test(line))) return null;
-  const match = /^\s*@dsh\s+(task|review|diagnose|fix|implement)(?:\s+(.*?))?\s*$/iu.exec(
-    firstLine,
+  const escapedPhrase = escapeRegExp(triggerPhrase);
+  const laterPhrase = new RegExp(`^\\s*${escapedPhrase}(?:\\s|$)`, "iu");
+  if (lines.slice(1).some((line) => laterPhrase.test(line))) return null;
+  const firstLineCommand = new RegExp(
+    `^\\s*${escapedPhrase}\\s+(task|review|diagnose|fix|implement)(?:\\s+(.*?))?\\s*$`,
+    "iu",
   );
+  const match = firstLineCommand.exec(firstLine);
   if (!match) return null;
   const operation = operationSchema.parse(match[1]?.toLowerCase());
   let firstInstructions = match[2]?.trim() ?? "";

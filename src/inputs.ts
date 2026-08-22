@@ -48,6 +48,70 @@ const argvListInput = z.string().transform((value, context): readonly (readonly 
   return result.data;
 });
 
+const MAX_TRIGGER_PHRASE_BYTES = 128;
+const MAX_ROUTING_LITERAL_BYTES = 256;
+const MAX_ACTOR_LIST_BYTES = 4 * 1024;
+const MAX_ACTOR_ENTRIES = 100;
+const MAX_ACTOR_ENTRY_BYTES = 100;
+
+function boundedRoutingLiteral(name: string, maximumBytes: number, allowEmpty: boolean) {
+  return z.string().transform((value, context): string => {
+    const trimmed = value.trim();
+    if ((!allowEmpty && trimmed === "") || Buffer.byteLength(trimmed, "utf8") > maximumBytes) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must be ${allowEmpty ? "at most" : "between 1 and"} ${String(maximumBytes)} UTF-8 bytes`,
+      });
+      return z.NEVER;
+    }
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/u.test(trimmed)) {
+      context.addIssue({ code: "custom", message: `${name} must not contain control characters` });
+      return z.NEVER;
+    }
+    return trimmed;
+  });
+}
+
+function actorListInput(name: string) {
+  return z.string().transform((value, context): readonly string[] => {
+    if (Buffer.byteLength(value, "utf8") > MAX_ACTOR_LIST_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must not exceed ${String(MAX_ACTOR_LIST_BYTES)} UTF-8 bytes`,
+      });
+      return z.NEVER;
+    }
+    const entries = value
+      .split(",")
+      .map((entry) => entry.trim().replace(/^@/u, ""))
+      .filter(Boolean);
+    if (entries.length > MAX_ACTOR_ENTRIES) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must contain at most ${String(MAX_ACTOR_ENTRIES)} actors`,
+      });
+      return z.NEVER;
+    }
+    const unique = new Map<string, string>();
+    for (const entry of entries) {
+      if (
+        Buffer.byteLength(entry, "utf8") > MAX_ACTOR_ENTRY_BYTES ||
+        !/^(?:\*|\*\[bot\]|[A-Za-z0-9_.-]+(?:\[bot\])?)$/u.test(entry)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `${name} contains an invalid actor pattern: ${entry || "<empty>"}`,
+        });
+        return z.NEVER;
+      }
+      const normalized = entry.toLowerCase();
+      if (!unique.has(normalized)) unique.set(normalized, entry);
+    }
+    return [...unique.values()];
+  });
+}
+
 const actionInputsSchema = z.object({
   deepseekApiKey: z.string().min(8, "deepseek-api-key must be at least 8 characters"),
   githubToken: z.string().min(8, "github-token must be at least 8 characters"),
@@ -67,6 +131,13 @@ const actionInputsSchema = z.object({
   webSearchBaseUrl: z.url(),
   botUserId: integerInput(1, 2_147_483_647),
   progressComment: booleanInput,
+  triggerPhrase: boundedRoutingLiteral("trigger-phrase", MAX_TRIGGER_PHRASE_BYTES, false),
+  labelTrigger: boundedRoutingLiteral("label-trigger", MAX_ROUTING_LITERAL_BYTES, true),
+  assigneeTrigger: boundedRoutingLiteral("assignee-trigger", MAX_ROUTING_LITERAL_BYTES, true),
+  allowedActors: actorListInput("allowed-actors"),
+  allowedBots: actorListInput("allowed-bots"),
+  includeCommentsByActor: actorListInput("include-comments-by-actor"),
+  excludeCommentsByActor: actorListInput("exclude-comments-by-actor"),
   maxTurns: integerInput(1, 10),
   permissionProfile: permissionProfileSchema,
   validationIntegrity: z.enum(["off", "warn", "strict"]),
@@ -150,6 +221,13 @@ const defaults = {
   webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
   botUserId: "41898282",
   progressComment: "true",
+  triggerPhrase: "@dsh",
+  labelTrigger: "",
+  assigneeTrigger: "",
+  allowedActors: "*",
+  allowedBots: "",
+  includeCommentsByActor: "",
+  excludeCommentsByActor: "",
   maxTurns: "3",
   permissionProfile: "strict",
   validationIntegrity: "warn",
@@ -205,6 +283,21 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     webSearchBaseUrl: optionalInput(reader, "web-search-base-url", defaults.webSearchBaseUrl),
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
     progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
+    triggerPhrase: optionalInput(reader, "trigger-phrase", defaults.triggerPhrase),
+    labelTrigger: optionalInput(reader, "label-trigger", defaults.labelTrigger),
+    assigneeTrigger: optionalInput(reader, "assignee-trigger", defaults.assigneeTrigger),
+    allowedActors: optionalInput(reader, "allowed-actors", defaults.allowedActors),
+    allowedBots: optionalInput(reader, "allowed-bots", defaults.allowedBots),
+    includeCommentsByActor: optionalInput(
+      reader,
+      "include-comments-by-actor",
+      defaults.includeCommentsByActor,
+    ),
+    excludeCommentsByActor: optionalInput(
+      reader,
+      "exclude-comments-by-actor",
+      defaults.excludeCommentsByActor,
+    ),
     maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
     permissionProfile: optionalInput(reader, "permission-profile", defaults.permissionProfile),
     validationIntegrity: optionalInput(

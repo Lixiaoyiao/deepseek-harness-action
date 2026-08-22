@@ -8,6 +8,7 @@ import { isWorkflowRunContext, type GitHubContext } from "../github/context.js";
 import type { GitHubClient } from "../github/client.js";
 import {
   fetchPullRequestSnapshot,
+  type CommentActorFilter,
   type EntitySnapshot,
   type PullRequestSnapshot,
 } from "../github/fetch.js";
@@ -186,14 +187,15 @@ function sanitizedSnapshot(snapshot: EntitySnapshot): unknown {
 export async function resolvePullRequest(
   client: GitHubClient,
   context: GitHubContext,
+  actorFilter: CommentActorFilter = {},
 ): Promise<PullRequestSnapshot | undefined> {
   if (context.kind === "entity" && context.isPullRequest) {
-    return await fetchPullRequestSnapshot(client, context, context.entityNumber);
+    return await fetchPullRequestSnapshot(client, context, context.entityNumber, actorFilter);
   }
   if (isWorkflowRunContext(context)) {
     const pullNumber = context.workflowRun.pullRequestNumbers[0];
     if (pullNumber !== undefined) {
-      return await fetchPullRequestSnapshot(client, context, pullNumber);
+      return await fetchPullRequestSnapshot(client, context, pullNumber, actorFilter);
     }
   }
   return undefined;

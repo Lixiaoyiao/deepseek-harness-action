@@ -18,6 +18,13 @@ describe("loadInputs", () => {
     );
     expect(result.allowWrite).toBe(false);
     expect(result.progressComment).toBe(true);
+    expect(result.triggerPhrase).toBe("@dsh");
+    expect(result.labelTrigger).toBe("");
+    expect(result.assigneeTrigger).toBe("");
+    expect(result.allowedActors).toEqual(["*"]);
+    expect(result.allowedBots).toEqual([]);
+    expect(result.includeCommentsByActor).toEqual([]);
+    expect(result.excludeCommentsByActor).toEqual([]);
     expect(result.taskAccess).toBe("read");
     expect(result.maxTurns).toBe(3);
     expect(result.permissionProfile).toBe("strict");
@@ -33,6 +40,31 @@ describe("loadInputs", () => {
       ["npm", "test"],
       ["node", "script with spaces.js"],
     ]);
+  });
+
+  it("parses bounded maintainer-owned routing and actor filters", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "trigger-phrase": "  /deepseek  ",
+        "label-trigger": "agent-ready",
+        "assignee-trigger": "@deepseek-bot",
+        "allowed-actors": "Alice, @BOB, alice",
+        "allowed-bots": "dependabot[bot]",
+        "include-comments-by-actor": "maintainer, *[bot]",
+        "exclude-comments-by-actor": "renovate[bot]",
+      }),
+    );
+    expect(result).toMatchObject({
+      triggerPhrase: "/deepseek",
+      labelTrigger: "agent-ready",
+      assigneeTrigger: "@deepseek-bot",
+      allowedActors: ["Alice", "BOB"],
+      allowedBots: ["dependabot[bot]"],
+      includeCommentsByActor: ["maintainer", "*[bot]"],
+      excludeCommentsByActor: ["renovate[bot]"],
+    });
   });
 
   it("keeps the action manifest allow and deny defaults empty", () => {
@@ -60,6 +92,10 @@ describe("loadInputs", () => {
     ["disallowed-tools", '["command.missing"]'],
     ["allowed-tools", '["mcp.docs.lookup"]'],
     ["disallowed-tools", '["plugin.lint.scan"]'],
+    ["trigger-phrase", "bad\nphrase"],
+    ["label-trigger", "bad\u0000label"],
+    ["allowed-actors", "alice,not an actor"],
+    ["allowed-bots", "alice/../../admin"],
   ])("rejects invalid %s", (name, value) => {
     expect(() =>
       loadInputs(

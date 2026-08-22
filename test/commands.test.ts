@@ -25,6 +25,17 @@ describe("parseCommand", () => {
     });
   });
 
+  it("treats a custom trigger phrase literally while preserving first-line grammar", () => {
+    expect(parseCommand("  /dsh+ review focus", "/dsh+")).toEqual({
+      operation: "review",
+      instructions: "focus",
+      requestedAccess: "read",
+    });
+    expect(parseCommand("please /dsh+ review", "/dsh+")).toBeNull();
+    expect(parseCommand("/dsh+ review\n/dsh+ fix", "/dsh+")).toBeNull();
+    expect(parseCommand("@dsh review", "/dsh+")).toBeNull();
+  });
+
   it("parses generic task intent with explicit access and multiline instructions", () => {
     expect(parseCommand("@dsh task explain the cache")).toEqual({
       operation: "task",
@@ -60,6 +71,70 @@ describe("routeCommand", () => {
       source: "mention",
       instructions: "now",
       requestedAccess: "read",
+    });
+  });
+
+  it("uses the configured trigger phrase without broadening comment parsing", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: { comment: { body: "/deepseek diagnose now" } },
+    });
+    expect(routeCommand(context, inputs({ triggerPhrase: "/deepseek" }))).toMatchObject({
+      operation: "diagnose",
+      source: "mention",
+      instructions: "now",
+    });
+    expect(routeCommand(context, inputs())).toBeNull();
+  });
+
+  it("routes maintainer-configured label and assignee events by entity kind", () => {
+    const issue = pullRequestContext({
+      rawEventName: "issues",
+      eventName: "issues",
+      eventAction: "labeled",
+      isPullRequest: false,
+      pullRequest: undefined,
+      payload: { label: { name: "dsh-ready" } },
+    });
+    expect(
+      routeCommand(
+        issue,
+        inputs({ labelTrigger: "DSH-READY", taskAccess: "write", prompt: "handle issue" }),
+      ),
+    ).toEqual({
+      operation: "task",
+      source: "automatic-event",
+      instructions: "handle issue",
+      requestedAccess: "write",
+    });
+
+    const pull = pullRequestContext({
+      eventAction: "assigned",
+      payload: { assignee: { login: "review-bot" } },
+    });
+    expect(
+      routeCommand(pull, inputs({ assigneeTrigger: "@Review-Bot", taskAccess: "write" })),
+    ).toEqual({
+      operation: "review",
+      source: "automatic-event",
+      instructions: "",
+      requestedAccess: "read",
+    });
+    expect(routeCommand(issue, inputs({ labelTrigger: "other" }))).toBeNull();
+  });
+
+  it("applies allowed-actors only as a routing filter", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      actor: "outsider",
+      payload: { comment: { body: "@dsh review" } },
+    });
+    expect(routeCommand(context, inputs({ allowedActors: ["maintainer"] }))).toBeNull();
+    expect(routeCommand(context, inputs({ allowedActors: ["*"] }))).toMatchObject({
+      operation: "review",
+      source: "mention",
     });
   });
 

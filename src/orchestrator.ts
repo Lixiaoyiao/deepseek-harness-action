@@ -249,9 +249,13 @@ async function runActionInternal(
   const client = createGitHubClient(inputs.githubToken);
   throwIfCancelled(options.signal);
   state.phase = "authorization";
-  const permissions = await checkActorPermissions(client, context);
+  const permissions = await checkActorPermissions(client, context, inputs.allowedBots);
   state.phase = "context";
-  const pullRequest = await resolvePullRequest(client, context);
+  const commentActorFilter = {
+    include: inputs.includeCommentsByActor,
+    exclude: inputs.excludeCommentsByActor,
+  };
+  const pullRequest = await resolvePullRequest(client, context, commentActorFilter);
   command = finalizeWorkflowRunRoute(context, command, pullRequest !== undefined);
   state.operation = command.operation;
   let snapshot: EntitySnapshot | undefined = pullRequest;
@@ -261,6 +265,7 @@ async function runActionInternal(
       context,
       context.entityNumber,
       context.isPullRequest,
+      commentActorFilter,
     );
   }
   assertOperationContext(command, context, snapshot);
