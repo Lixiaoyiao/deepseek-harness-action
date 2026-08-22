@@ -119,6 +119,7 @@ describe("extension runtime package lock", () => {
         plan,
         nativeTools: [],
         workspaceWrite: false,
+        expectedOperation: "task",
         task: "test",
         workerWorkspacePath: "/workspace",
         policyPluginPath: "/controller/action-policy.mjs",

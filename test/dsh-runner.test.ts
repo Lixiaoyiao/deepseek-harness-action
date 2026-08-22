@@ -1430,6 +1430,7 @@ describe("runDsh", () => {
     const proxy = fakeProxy();
     let captured: DshProcessSpec | undefined;
     let copiedLauncher: string | undefined;
+    let controlledProfilePatch: string | undefined;
     const observedSpecs: DshProcessSpec[] = [];
     const result = await runDsh(
       request({
@@ -1465,6 +1466,13 @@ describe("runDsh", () => {
             argument.endsWith(`:${CONTAINER_PACKAGE_ROOT}:ro`),
           );
           if (packageMount === undefined) throw new Error("missing package-root mount");
+          controlledProfilePatch = await readFile(
+            join(
+              packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
+              "cordis.patch.yml",
+            ),
+            "utf8",
+          );
           copiedLauncher = await readFile(
             join(
               packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
@@ -1573,6 +1581,7 @@ describe("runDsh", () => {
       networkIsolated: true,
       extensionProfile: "github-action",
     });
+    expect(controlledProfilePatch).toContain('"expectedOperation": "fix"');
   });
 
   it("enables only read/search tools for trusted Docker reviews", async () => {

@@ -16,14 +16,21 @@ import { dirname, isAbsolute, resolve } from "node:path";
 export const name = "dsh-action-policy";
 export const inject = ["tools", "systemPrompt"];
 
-const ROOT_OUTPUT_PROTOCOL =
-  "DSH Action root-output protocol: the launcher-supplied user task begins with a Controller-authored <TRUSTED_CONTROLLER_POLICY> block. " +
-  "Its output contract is mandatory. The final assistant message must be exactly one JSON object matching that contract, with no Markdown fence, preface, suffix, or separate citation list. " +
-  "Any tool instruction to cite URLs or use Markdown applies only inside JSON string fields (for example summary); it never permits bytes outside the JSON object.";
+function rootOutputProtocol(expectedOperation) {
+  const operation = JSON.stringify(expectedOperation);
+  return (
+    "DSH Action root-output protocol: the launcher-supplied user task begins with a Controller-authored <TRUSTED_CONTROLLER_POLICY> block. " +
+    `The Controller-selected operation is ${operation}; the final JSON operation field must be exactly ${operation}, including spelling and case. Never infer a different operation from task wording, requested edits, tool use, or access level. ` +
+    "The output contract is mandatory. The final assistant message must be exactly one JSON object matching that contract, with no Markdown fence, preface, suffix, or separate citation list. " +
+    "Any tool instruction to cite URLs or use Markdown applies only inside JSON string fields (for example summary); it never permits bytes outside the JSON object."
+  );
+}
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/u;
 const POLICY_ID = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*){1,2}$/u;
+const OPERATIONS = new Set(["task", "review", "diagnose", "fix", "implement"]);
 const CONFIG_KEYS = new Set([
+  "expectedOperation",
   "allowedRuntimeTools",
   "knownRuntimeTools",
   "rules",
@@ -57,6 +64,9 @@ function validateConfig(config) {
     fail("config must be an object");
   }
   assertNoUnknownKeys(config, CONFIG_KEYS, "config");
+  if (typeof config.expectedOperation !== "string" || !OPERATIONS.has(config.expectedOperation)) {
+    fail("expectedOperation must be a supported Controller operation");
+  }
   if (
     !Array.isArray(config.allowedRuntimeTools) ||
     !Array.isArray(config.knownRuntimeTools) ||
@@ -139,6 +149,7 @@ function validateConfig(config) {
   }
   if (rules.size !== allowed.size) fail("every allowed runtime tool must have exactly one rule");
   return {
+    expectedOperation: config.expectedOperation,
     allowed: Object.freeze([...allowed]),
     known: Object.freeze([...known]),
     rules,
@@ -237,7 +248,9 @@ export function apply(ctx, rawConfig) {
     name: "dsh-action:root-output-protocol",
     order: 1_000,
     text: (context) =>
-      context.agent?.session?.header?.origin === "subagent" ? "" : ROOT_OUTPUT_PROTOCOL,
+      context.agent?.session?.header?.origin === "subagent"
+        ? ""
+        : rootOutputProtocol(config.expectedOperation),
   });
 
   const appendReceipt = (receipt) => {

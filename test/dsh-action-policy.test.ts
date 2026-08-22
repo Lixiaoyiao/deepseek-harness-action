@@ -33,6 +33,7 @@ function textTool(name: string, body: ToolDefinition["execute"]): ToolDefinition
 }
 
 interface SetupOptions {
+  readonly expectedOperation?: "task" | "review" | "diagnose" | "fix" | "implement";
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
   readonly maxCalls?: number;
@@ -68,6 +69,7 @@ async function setup(options: SetupOptions) {
   }
   try {
     policy.apply(context, {
+      expectedOperation: options.expectedOperation ?? "task",
       allowedRuntimeTools: ["allowed"],
       knownRuntimeTools: options.knownRuntimeTools ?? ["allowed", "unauthorized"],
       rules: [
@@ -169,6 +171,8 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     expect(rootAssembly.sections.at(-1)?.text).toContain(
       "exactly one JSON object matching that contract",
     );
+    expect(rootAssembly.sections.at(-1)?.text).toContain('Controller-selected operation is "task"');
+    expect(rootAssembly.sections.at(-1)?.text).toContain('operation field must be exactly "task"');
     expect(renderPrompt(rootAssembly)).toContain("never permits bytes outside the JSON object");
 
     const { agent: childAgent } = await createScopedAgent(context, [], "subagent");
@@ -278,6 +282,7 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     context.tools.register(textTool("second", () => Promise.resolve("second")));
     const policy = await loadPolicy();
     const base = {
+      expectedOperation: "task",
       allowedRuntimeTools: ["first", "second"],
       knownRuntimeTools: ["first", "second"],
       statePath: join(root, "counts.json"),
@@ -338,6 +343,22 @@ describe("Action-owned DSH ToolRuntime policy", () => {
         ],
       }),
     ).toThrow(/unknown key modelMayOverride/u);
+    expect(() =>
+      policy.apply(context, {
+        ...base,
+        expectedOperation: "deploy",
+        rules: [],
+      }),
+    ).toThrow(/expectedOperation must be a supported Controller operation/u);
+    expect(() =>
+      policy.apply(context, {
+        allowedRuntimeTools: [],
+        knownRuntimeTools: [],
+        rules: [],
+        statePath: base.statePath,
+        auditPath: base.auditPath,
+      }),
+    ).toThrow(/expectedOperation must be a supported Controller operation/u);
     await context.fiber.dispose();
   });
 
@@ -360,6 +381,7 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     );
     const policy = await loadPolicy();
     policy.apply(context, {
+      expectedOperation: "task",
       allowedRuntimeTools: ["slow"],
       knownRuntimeTools: ["slow"],
       rules: [

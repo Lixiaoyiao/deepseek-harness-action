@@ -722,6 +722,7 @@ export async function runDsh(
         plan: extensions,
         nativeTools: effectiveNativeTools(request),
         workspaceWrite: workerWorkspaceWrite(request),
+        expectedOperation: request.operation,
         task: prompt,
         workerWorkspacePath: CONTAINER_WORKSPACE,
         policyPluginPath: CONTAINER_POLICY_PLUGIN,

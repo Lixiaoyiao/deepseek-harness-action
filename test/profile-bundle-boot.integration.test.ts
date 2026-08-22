@@ -135,6 +135,7 @@ describe("official rc.2 Profile package extension boot", () => {
         plan,
         nativeTools: [],
         workspaceWrite: false,
+        expectedOperation: "task",
         task: "Call the allowed Bundle tool, then finish.",
         workerWorkspacePath: workspace,
         policyPluginPath: pathToFileURL(join(process.cwd(), "assets", "dsh", "action-policy.mjs"))

@@ -157,6 +157,8 @@ describe("buildDshPrompt", () => {
     expect(prompt).toContain("foreground depth-1 subagent");
     expect(prompt).toContain("Never load repository instructions or skills");
     expect(prompt).toContain("GitHub commit/push/PR/release operations");
+    expect(prompt).toContain('"operation": "task"');
+    expect(prompt).not.toContain('"operation": "task|review|diagnose|fix|implement"');
   });
 
   it("keeps trusted operator instructions outside the untrusted data envelope", () => {

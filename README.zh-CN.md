@@ -176,7 +176,7 @@ with:
 
 v0.5.1 把完整、经过审计的 DSH 依赖集从 `0.1.0-rc.8` 升级到精确固定的 `0.1.1-rc.2`，包括 `@deepseek-ai/dsh`、app-boot、官方 MCP client、Profile/Bundle 支持、原生工具及其它直接使用的 package。rc.2 复核覆盖 app-boot、Profile/Bundle/Plugin 加载、MCP、ToolRuntime、Bash、Web Search、Subagent、receipts 以及 Docker/path/timeout 行为；现有 Action inputs、outputs 与权限语义无需改变。Controller 仍生成受控 `github-action` Profile 与 Cordis patch，通过 `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` 启动，而没有另造 MCP client 或 plugin loader。该路径跳过 workspace 与 `$DSH_HOME` 的 `.env` 发现，也不启用通用 CLI 的动态 user patch 监听/热加载路径。随 Action 交付的 DSH 依赖全部由 lockfile 精确固定；`latest`、semver range、浮动 Git ref 和旧式 MCP SSE 均会被拒绝。
 
-受控 root Profile 会把 Action 的机器输出协议放在 rc.2 各工具的专用 system guidance 之后。尤其是 Web Search 的 Markdown 引用只能位于 JSON 字符串字段中；root Agent 仍必须返回一个完整的 schema-v1 JSON object，Markdown fence、前言、尾注或独立 citation list 都会被拒绝。这个仅适用于 root 的 section 在 `native.subagent` 中为空，子代理仍向父 Agent 返回普通内容，而不是直接面对 Action 输出边界。
+受控 root Profile 会把 Action 的机器输出协议放在 rc.2 各工具的专用 system guidance 之后，并把 JSON `operation` 字段绑定到 Controller 精确选择的操作；Agent 不能仅因任务修改文件，就把 `task` 重新解释为 `implement`。尤其是 Web Search 的 Markdown 引用只能位于 JSON 字符串字段中；root Agent 仍必须返回一个完整的 schema-v1 JSON object，operation 变更、Markdown fence、前言、尾注或独立 citation list 都会被拒绝。这个仅适用于 root 的 section 在 `native.subagent` 中为空，子代理仍向父 Agent 返回普通内容，而不是直接面对 Action 输出边界。
 
 官方 MCP client 在这里开放它实际支持的 transport：
 
