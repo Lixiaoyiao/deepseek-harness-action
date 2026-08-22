@@ -296,7 +296,7 @@ describe("Marketplace action metadata", () => {
     expect(gate).toContain('"$DISPATCH_SHA" == "$default_sha"');
     expect(gate).not.toContain("secrets.");
     expect(workflow.match(/environment: core-e2e/gu)).toHaveLength(3);
-    expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(3);
+    expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(4);
     expect(workflow).not.toContain("run-candidate.mjs");
     expect(workflow).toContain("dsh-e2e:cancellation:v1");
     expect(workflow).toContain("GITHUB_EVENT_NAME=issues");
@@ -306,6 +306,10 @@ describe("Marketplace action metadata", () => {
     expect(workflow).toContain('gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER"');
     expect(workflow).toContain("[.ref,.object.type,.object.sha]");
     expect(workflow).toContain("bodyMarker:");
+    expect(workflow).toContain("dsh-e2e:github-integration:v1");
+    expect(workflow).toContain("github.comment.create");
+    expect(workflow).toContain("github.checks.read");
+    expect(workflow).toContain("[image removed]");
     expect(workflow).toContain("if: always() && needs.gate.result == 'success'");
   });
 });
