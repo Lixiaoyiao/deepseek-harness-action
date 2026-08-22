@@ -3,19 +3,27 @@ name: Core E2E
 on:
   workflow_dispatch:
     inputs:
+      candidate_mode:
+        description: "Qualification target: an open pull request head or the live main release commit"
+        required: true
+        default: pull-request
+        type: choice
+        options:
+          - pull-request
+          - main
       candidate_sha:
         description: Full lowercase SHA of the candidate action commit
         required: true
         type: string
       pull_request:
-        description: Open same-repository PR whose head is candidate_sha
-        required: true
+        description: Open same-repository PR whose head is candidate_sha; omit for main mode
+        required: false
         type: number
 
 permissions: {}
 
 concurrency:
-  group: dsh-core-e2e-${{ github.repository }}-${{ inputs.pull_request }}
+  group: dsh-core-e2e-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +36,7 @@ jobs:
       pull-requests: read
     outputs:
       run_e2e: ${{ steps.bind.outputs.run_e2e }}
+      candidate_mode: ${{ steps.bind.outputs.candidate_mode }}
       candidate_sha: ${{ steps.bind.outputs.candidate_sha }}
       candidate_branch: ${{ steps.bind.outputs.candidate_branch }}
       pull_request: ${{ steps.bind.outputs.pull_request }}
@@ -44,9 +53,10 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           DISPATCH_SHA: ${{ github.sha }}
           ACTOR: ${{ github.actor }}
+          CANDIDATE_MODE: ${{ inputs.candidate_mode }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           CANDIDATE_PR: ${{ inputs.pull_request }}
-          APPROVED_PR_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}
+          APPROVED_CANDIDATE_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}
         run: |
           set -euo pipefail
           sha_pattern='^[a-f0-9]{40}$'
@@ -72,36 +82,60 @@ jobs:
             echo "candidate_sha must be a full lowercase commit SHA" >&2
             exit 1
           }
-          [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]] || {
-            echo "pull_request must be a positive integer" >&2
-            exit 1
-          }
-          [[ "$APPROVED_PR_SHA" =~ $sha_pattern && "$APPROVED_PR_SHA" == "$CANDIDATE_SHA" ]] || {
+          [[ "$APPROVED_CANDIDATE_SHA" =~ $sha_pattern && "$APPROVED_CANDIDATE_SHA" == "$CANDIDATE_SHA" ]] || {
             echo "DSH_E2E_CANDIDATE_SHA must exactly match candidate_sha" >&2
             exit 1
           }
-
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e \
-            --arg sha "$CANDIDATE_SHA" \
-            --arg repo "${REPOSITORY,,}" \
-            --arg base "$DEFAULT_BRANCH" \
-            '(.state == "open") and (.draft == false) and
-             (.head.sha == $sha) and (.head.repo.full_name | ascii_downcase) == $repo and
-             (.base.repo.full_name | ascii_downcase) == $repo and (.base.ref == $base)' \
-            <<<"$pr_json" >/dev/null
 
           permission="$(gh api "repos/$REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || true)"
           [[ "$permission" == "write" || "$permission" == "maintain" || "$permission" == "admin" ]] || {
             echo "The triggering actor must have repository write permission" >&2
             exit 1
           }
+
+          case "$CANDIDATE_MODE" in
+            pull-request)
+              [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]] || {
+                echo "pull_request must be a positive integer in pull-request mode" >&2
+                exit 1
+              }
+              pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+              jq -e \
+                --arg sha "$CANDIDATE_SHA" \
+                --arg repo "${REPOSITORY,,}" \
+                --arg base "$DEFAULT_BRANCH" \
+                '(.state == "open") and (.draft == false) and
+                 (.head.sha == $sha) and (.head.repo.full_name | ascii_downcase) == $repo and
+                 (.base.repo.full_name | ascii_downcase) == $repo and (.base.ref == $base)' \
+                <<<"$pr_json" >/dev/null
+              candidate_branch="$(jq -r .head.ref <<<"$pr_json")"
+              summary="Bound PR #$CANDIDATE_PR to candidate $CANDIDATE_SHA"
+              ;;
+            main)
+              [[ -z "$CANDIDATE_PR" || "$CANDIDATE_PR" == "0" ]] || {
+                echo "pull_request must be omitted in main mode" >&2
+                exit 1
+              }
+              [[ "$CANDIDATE_SHA" == "$DISPATCH_SHA" && "$CANDIDATE_SHA" == "$default_sha" ]] || {
+                echo "main mode requires candidate_sha to equal the live immutable default-branch commit" >&2
+                exit 1
+              }
+              CANDIDATE_PR=""
+              candidate_branch="$DEFAULT_BRANCH"
+              summary="Bound post-merge qualification to live $DEFAULT_BRANCH commit $CANDIDATE_SHA"
+              ;;
+            *)
+              echo "candidate_mode must be pull-request or main" >&2
+              exit 1
+              ;;
+          esac
           echo "run_e2e=true" >> "$GITHUB_OUTPUT"
+          echo "candidate_mode=$CANDIDATE_MODE" >> "$GITHUB_OUTPUT"
           echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
-          echo "candidate_branch=$(jq -r .head.ref <<<"$pr_json")" >> "$GITHUB_OUTPUT"
+          echo "candidate_branch=$candidate_branch" >> "$GITHUB_OUTPUT"
           echo "pull_request=$CANDIDATE_PR" >> "$GITHUB_OUTPUT"
           echo "harness_sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"
-          echo "Bound PR #$CANDIDATE_PR to candidate $CANDIDATE_SHA from the trusted default-branch workflow" >> "$GITHUB_STEP_SUMMARY"
+          echo "$summary from the trusted default-branch workflow" >> "$GITHUB_STEP_SUMMARY"
 
   read_only:
     name: Read-only golden paths
@@ -285,22 +319,18 @@ jobs:
             (.loop.dshToolReceipts | map(select(.id == "native.web-search" and .completed == true and .ok == true)) | length == 1)
           ' <<<"$RESULT_JSON" >/dev/null
 
-      - name: Revalidate candidate PR identity
+      - name: Revalidate candidate identity
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
           set -euo pipefail
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
 
   write:
     name: Write guards and golden paths
@@ -340,6 +370,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           DEEPSEEK_SECRET_PRESENT: ${{ secrets.DEEPSEEK_API_KEY != '' }}
@@ -355,19 +386,29 @@ jobs:
           set -euo pipefail
           export LC_ALL=C
           prefix="$1"
-          : "${REPOSITORY:?}" "${DEFAULT_BRANCH:?}" "${CANDIDATE_PR:?}"
+          : "${REPOSITORY:?}" "${DEFAULT_BRANCH:?}" "${CANDIDATE_MODE:?}"
           gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha > "$prefix.main"
-          gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR" | jq -cS '{
-            number,state,draft,
-            head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
-            base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
-            body:(.body // "")
-          }' > "$prefix.candidate"
+          if [[ "$CANDIDATE_MODE" == "pull-request" ]]; then
+            : "${CANDIDATE_PR:?}"
+            gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR" | jq -cS '{
+              number,state,draft,
+              head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
+              base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
+              body:(.body // "")
+            }' > "$prefix.candidate"
+          else
+            jq -cn --arg mode "$CANDIDATE_MODE" --arg sha "$CANDIDATE_SHA" \
+              '{mode:$mode,sha:$sha}' > "$prefix.candidate"
+          fi
           gh api --paginate "repos/$REPOSITORY/pulls?state=all&per_page=100" \
             --jq '.[].number' | sort -n > "$prefix.prs"
-          gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
-            --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
-            | jq -cS . | sort > "$prefix.comments"
+          if [[ "$CANDIDATE_MODE" == "pull-request" ]]; then
+            gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
+              --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
+              | jq -cS . | sort > "$prefix.comments"
+          else
+            : > "$prefix.comments"
+          fi
           gh api --paginate "repos/$REPOSITORY/git/matching-refs/heads/dsh/task-?per_page=100" \
             --jq '.[] | [.ref,.object.type,.object.sha] | @tsv' | sort > "$prefix.task-refs"
           gh api --paginate "repos/$REPOSITORY/pulls?state=all&per_page=100" --jq '
@@ -389,12 +430,7 @@ jobs:
 
           prefix="$RUNNER_TEMP/dsh-e2e-baseline"
           "$RUNNER_TEMP/dsh-e2e-snapshot.sh" "$prefix"
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
           echo "main_sha=$(cat "$prefix.main")" >> "$GITHUB_OUTPUT"
 
       - name: Validation Integrity blocks weakened entrypoint
@@ -452,6 +488,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
           set -euo pipefail
@@ -492,6 +530,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           RESULT_JSON: ${{ steps.validation.outputs['result-json'] }}
           EXPECTED_FAILURE: ${{ steps.validation.outcome == 'failure' }}
@@ -542,6 +582,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
+          CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           RESULT_JSON: ${{ steps.no_change.outputs['result-json'] }}
         run: |
@@ -591,6 +633,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           BASE_BRANCH: ${{ needs.gate.outputs.candidate_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           RESULT_JSON: ${{ steps.trusted.outputs['result-json'] }}
@@ -631,12 +674,7 @@ jobs:
             | jq -e --arg path "$FILE_PATH" '.files | length == 1 and .[0].filename == $path and .[0].status == "added"' >/dev/null
           content="$(gh api "repos/$REPOSITORY/contents/$FILE_PATH?ref=$head_sha" --jq .content | tr -d '\n' | base64 --decode)"
           [[ "$content" == "trusted-write" ]]
-          candidate_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$candidate_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
 
       - name: Close only the verified E2E PR and delete its branch
         if: ${{ always() && steps.trusted.outcome != 'skipped' }}
@@ -700,23 +738,19 @@ jobs:
             exit 1
           fi
 
-      - name: Revalidate candidate PR identity and credential-free checkout
+      - name: Revalidate candidate identity and credential-free checkout
         if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
           set -euo pipefail
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
           ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
           ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
 
@@ -758,6 +792,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
           DEEPSEEK_SECRET_PRESENT: ${{ secrets.DEEPSEEK_API_KEY != '' }}
@@ -771,24 +806,26 @@ jobs:
           ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
           node --check .github/e2e/hanging-http-server.mjs
 
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
 
           prefix="$RUNNER_TEMP/dsh-e2e-cancel-baseline"
           gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha > "$prefix.main"
-          jq -cS '{
-            number,state,draft,
-            head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
-            base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
-            body:(.body // "")
-          }' <<<"$pr_json" > "$prefix.candidate"
-          gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
-            --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
-            | jq -cS . | sort > "$prefix.comments"
+          if [[ "$CANDIDATE_MODE" == "pull-request" ]]; then
+            pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+            jq -cS '{
+              number,state,draft,
+              head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
+              base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
+              body:(.body // "")
+            }' <<<"$pr_json" > "$prefix.candidate"
+            gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
+              --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
+              | jq -cS . | sort > "$prefix.comments"
+          else
+            jq -cn --arg mode "$CANDIDATE_MODE" --arg sha "$CANDIDATE_SHA" \
+              '{mode:$mode,sha:$sha}' > "$prefix.candidate"
+            : > "$prefix.comments"
+          fi
           gh api --paginate "repos/$REPOSITORY/git/matching-refs/heads/dsh/task-?per_page=100" \
             --jq '.[] | [.ref,.object.type,.object.sha] | @tsv' | sort > "$prefix.task-refs"
           gh api --paginate "repos/$REPOSITORY/pulls?state=all&per_page=100" --jq '
@@ -1035,6 +1072,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
@@ -1043,22 +1081,24 @@ jobs:
           prefix="$RUNNER_TEMP/dsh-e2e-cancel-baseline"
           current="$RUNNER_TEMP/dsh-e2e-cancel-current"
 
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
           gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha > "$current.main"
-          jq -cS '{
-            number,state,draft,
-            head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
-            base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
-            body:(.body // "")
-          }' <<<"$pr_json" > "$current.candidate"
-          gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
-            --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
-            | jq -cS . | sort > "$current.comments"
+          if [[ "$CANDIDATE_MODE" == "pull-request" ]]; then
+            pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+            jq -cS '{
+              number,state,draft,
+              head:{repo:.head.repo.full_name,ref:.head.ref,sha:.head.sha},
+              base:{repo:.base.repo.full_name,ref:.base.ref,sha:.base.sha},
+              body:(.body // "")
+            }' <<<"$pr_json" > "$current.candidate"
+            gh api --paginate "repos/$REPOSITORY/issues/$CANDIDATE_PR/comments?per_page=100" \
+              --jq '.[] | {id,userId:.user.id,updatedAt:.updated_at,body}' \
+              | jq -cS . | sort > "$current.comments"
+          else
+            jq -cn --arg mode "$CANDIDATE_MODE" --arg sha "$CANDIDATE_SHA" \
+              '{mode:$mode,sha:$sha}' > "$current.candidate"
+            : > "$current.comments"
+          fi
           gh api --paginate "repos/$REPOSITORY/git/matching-refs/heads/dsh/task-?per_page=100" \
             --jq '.[] | [.ref,.object.type,.object.sha] | @tsv' | sort > "$current.task-refs"
           gh api --paginate "repos/$REPOSITORY/pulls?state=all&per_page=100" --jq '
@@ -1126,6 +1166,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
@@ -1136,17 +1177,14 @@ jobs:
           ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
           node --check .github/e2e/github-integration-llm.mjs
           node --check .github/e2e/read-action-output.mjs
+          bash -n .github/e2e/assert-candidate-binding.sh
 
           gh api "repos/$REPOSITORY" > "$RUNNER_TEMP/dsh-e2e-integration-repository.json"
-          candidate_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$candidate_json" >/dev/null
+          bash .github/e2e/assert-candidate-binding.sh
 
+          if [[ "$CANDIDATE_MODE" == "pull-request" ]]; then ci_event="pull_request"; else ci_event="push"; fi
           runs="$(gh api --method GET "repos/$REPOSITORY/actions/runs" \
-            -f head_sha="$CANDIDATE_SHA" -f event=pull_request -f status=completed -f per_page=50)"
+            -f head_sha="$CANDIDATE_SHA" -f event="$ci_event" -f status=completed -f per_page=50)"
           ci_run_id="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' <<<"$runs")"
           [[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]]
           [[ "$(gh api "repos/$REPOSITORY/actions/runs/$ci_run_id" --jq .head_sha)" == "$CANDIDATE_SHA" ]]
@@ -1163,6 +1201,14 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- dsh-e2e:github-integration:v1 run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT candidate=$CANDIDATE_SHA -->"
+          label="dsh-e2e-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          label_description="Run-bound Core E2E fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+          label_json="$(gh api --method POST "repos/$REPOSITORY/labels" \
+            -f name="$label" -f color=5319e7 -f description="$label_description")"
+          jq -e --arg name "$label" --arg description "$label_description" '
+            .name == $name and .color == "5319e7" and .description == $description
+          ' <<<"$label_json" >/dev/null
           issue_title="DSH E2E GitHub integration $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           issue_body="$(printf '%s\n\n%s' "$marker" "Temporary Issue owned by the trusted GitHub integration harness.")"
           issue_json="$(gh api --method POST "repos/$REPOSITORY/issues" -f title="$issue_title" -f body="$issue_body")"
@@ -1174,7 +1220,7 @@ jobs:
           jq -e --argjson number "$issue_number" --argjson id "$issue_id" --arg title "$issue_title" --arg body "$issue_body" '
             .number == $number and .id == $id and .state == "open" and
             (has("pull_request") | not) and .user.id == 41898282 and
-            .title == $title and .body == $body
+            .title == $title and .body == $body and .labels == [] and .assignees == []
           ' <<<"$issue_json" >/dev/null
 
           history="DSH_E2E_HISTORY_HIDDEN_$GITHUB_RUN_ID"
@@ -1184,14 +1230,32 @@ jobs:
           echo "history_id=$history_id" >> "$GITHUB_OUTPUT"
 
           branch="dsh-e2e/checks-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fixture_path=".github/dsh-e2e-fixtures/checks-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
+          fixture_content="DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           [[ "$branch" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
+          [[ "$fixture_path" =~ ^\.github/dsh-e2e-fixtures/checks-[1-9][0-9]*-[1-9][0-9]*\.txt$ ]]
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "fixture_path=$fixture_path" >> "$GITHUB_OUTPUT"
           if gh api "repos/$REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
             echo "The isolated checks branch already exists" >&2
             exit 1
           fi
-          gh api --method POST "repos/$REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$CANDIDATE_SHA" >/dev/null
-          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$branch" --jq .object.sha)" == "$CANDIDATE_SHA" ]]
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          blob_sha="$(jq -cn --arg content "$fixture_content" '{content:$content,encoding:"utf-8"}' \
+            | gh api --method POST "repos/$REPOSITORY/git/blobs" --input - --jq .sha)"
+          base_tree_sha="$(gh api "repos/$REPOSITORY/git/commits/$CANDIDATE_SHA" --jq .tree.sha)"
+          tree_sha="$(jq -cn --arg base "$base_tree_sha" --arg path "$fixture_path" --arg sha "$blob_sha" \
+            '{base_tree:$base,tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}' \
+            | gh api --method POST "repos/$REPOSITORY/git/trees" --input - --jq .sha)"
+          commit_message="DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          head_sha="$(jq -cn --arg message "$commit_message" --arg tree "$tree_sha" --arg parent "$CANDIDATE_SHA" \
+            '{message:$message,tree:$tree,parents:[$parent]}' \
+            | gh api --method POST "repos/$REPOSITORY/git/commits" --input - --jq .sha)"
+          [[ "$blob_sha" =~ ^[a-f0-9]{40}$ && "$base_tree_sha" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$tree_sha" =~ ^[a-f0-9]{40}$ && "$head_sha" =~ ^[a-f0-9]{40}$ ]]
+          echo "tree_sha=$tree_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/$REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$head_sha" >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$branch" --jq .object.sha)" == "$head_sha" ]]
 
           pr_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           pr_body="$(printf '%s\n\n%s' "$marker" "Temporary draft PR owned by the trusted GitHub integration harness.")"
@@ -1203,11 +1267,11 @@ jobs:
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "pr_id=$pr_id" >> "$GITHUB_OUTPUT"
           jq -e --argjson number "$pr_number" --argjson id "$pr_id" --arg repo "${REPOSITORY,,}" \
-            --arg branch "$branch" --arg base "$DEFAULT_BRANCH" --arg sha "$CANDIDATE_SHA" \
-            --arg title "$pr_title" --arg body "$pr_body" '
+            --arg branch "$branch" --arg base "$DEFAULT_BRANCH" --arg sha "$head_sha" \
+            --arg candidate "$CANDIDATE_SHA" --arg title "$pr_title" --arg body "$pr_body" '
             .number == $number and .id == $id and .state == "open" and .draft == true and
             (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $candidate and
             .title == $title and .body == $body
           ' <<<"$pr_json" >/dev/null
 
@@ -1221,23 +1285,30 @@ jobs:
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           ISSUE_NUMBER: ${{ steps.integration_entities.outputs.issue_number }}
           ISSUE_ID: ${{ steps.integration_entities.outputs.issue_id }}
+          ISSUE_LABEL: ${{ steps.integration_entities.outputs.label }}
           HISTORY_ID: ${{ steps.integration_entities.outputs.history_id }}
           CHECKS_PR: ${{ steps.integration_entities.outputs.pr_number }}
+          CHECKS_HEAD: ${{ steps.integration_entities.outputs.head_sha }}
           CI_RUN_ID: ${{ steps.integration_baseline.outputs.ci_run_id }}
         run: |
           set -euo pipefail
           [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
           [[ "$ISSUE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ISSUE_LABEL" =~ ^dsh-e2e-[1-9][0-9]*-[1-9][0-9]*$ ]]
           [[ "$HISTORY_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CHECKS_HEAD" =~ ^[a-f0-9]{40}$ ]]
           [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 
           audit="$RUNNER_TEMP/dsh-e2e-github-audit.jsonl"
           fixture_info="$RUNNER_TEMP/dsh-e2e-github-fixture.json"
           fixture_log="$RUNNER_TEMP/dsh-e2e-github-fixture.log"
           fixture_key="sk-dsh-e2e-fixture-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mutated_pull_title="DSH E2E checks updated $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           : > "$audit"
           DSH_E2E_GITHUB_AUDIT="$audit" DSH_E2E_FIXTURE_KEY="$fixture_key" \
+            DSH_E2E_ISSUE_LABEL="$ISSUE_LABEL" DSH_E2E_ISSUE_ASSIGNEE="$GITHUB_ACTOR" \
+            DSH_E2E_PULL_TITLE="$mutated_pull_title" \
             node .github/e2e/github-integration-llm.mjs > "$fixture_info" 2> "$fixture_log" &
           fixture_pid=$!
           cleanup_fixture() {
@@ -1264,11 +1335,18 @@ jobs:
             {action:"assigned",repository:$repository[0],sender:{login:$actor},issue:$issue[0],assignee:{login:"dsh-e2e-assignee"}}
           ' > "$RUNNER_TEMP/dsh-e2e-assignee-event.json"
           trigger_id=$((HISTORY_ID + 1000000))
-          trigger_body="$(printf '%s\n%s\n%s' "/deepseek task --write exercise the typed GitHub comment tool" "DSH_E2E_TRIGGER_VISIBLE_$GITHUB_RUN_ID" "![attachment](https://github.com/user-attachments/assets/dsh-e2e-must-not-forward)")"
+          trigger_body="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+            "/deepseek task --write exercise the typed GitHub comment tool" \
+            "DSH_E2E_TRIGGER_VISIBLE_$GITHUB_RUN_ID" \
+            "![attachment](https://github.com/user-attachments/assets/dsh-e2e-inline-must-not-forward)" \
+            "![reference][dsh-e2e-reference]" \
+            "[dsh-e2e-reference]: https://github.com/user-attachments/assets/dsh-e2e-reference-must-not-forward" \
+            '<picture><source srcset="https://github.com/user-attachments/assets/dsh-e2e-source-must-not-forward"><img src="https://github.com/user-attachments/assets/dsh-e2e-html-must-not-forward"></picture>' \
+            "https://github.com/user-attachments/assets/dsh-e2e-raw-must-not-forward")"
           jq -n --slurpfile repository "$repository_file" --slurpfile issue "$issue_file" \
             --arg actor "$actor" --arg body "$trigger_body" --argjson trigger_id "$trigger_id" '
             {action:"created",repository:$repository[0],sender:{login:$actor},issue:$issue[0],comment:{
-              id:$trigger_id,body:$body,created_at:"2099-01-01T00:00:00Z",updated_at:"2099-01-01T00:00:00Z",user:{login:"github-actions[bot]"}
+              id:$trigger_id,body:$body,created_at:"2099-01-01T00:00:00Z",updated_at:"2099-01-01T00:00:00Z",user:{login:$actor}
             }}
           ' > "$RUNNER_TEMP/dsh-e2e-github-event.json"
           jq -n --slurpfile repository "$repository_file" --slurpfile pull "$pr_file" --arg actor "$actor" '
@@ -1334,36 +1412,49 @@ jobs:
           run_candidate github issue_comment "$RUNNER_TEMP/dsh-e2e-github-event.json" github \
             'INPUT_COMMAND=auto' 'INPUT_TRIGGER-PHRASE=/deepseek' \
             "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_INCLUDE-COMMENTS-BY-ACTOR=*' \
-            'INPUT_EXCLUDE-COMMENTS-BY-ACTOR=github-actions[bot]' \
+            "INPUT_EXCLUDE-COMMENTS-BY-ACTOR=$actor,github-actions[bot]" \
             'INPUT_PERMISSION-PROFILE=custom' \
-            'INPUT_ALLOWED-TOOLS=["workspace.edit","github.comment.create"]' \
+            'INPUT_ALLOWED-TOOLS=["workspace.edit","github.issue.labels.set","github.issue.assignees.set","github.comment.create","github.issue.state.update"]' \
             'INPUT_ALLOW-WRITE=true' 'INPUT_RUN-TESTS=true' \
             'INPUT_VALIDATION-INTEGRITY=strict' \
             'INPUT_TEST-COMMANDS=[["node","-e","process.exit(0)"]]' \
-            "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=2'
+            "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=5'
           github_result="$(read_output github result-json)"
           github_task="$(read_output github task-output)"
           jq -e '
             .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
             .validation.status == "passed" and .validation.commandCount == 1 and
             .write.status == "no-changes" and .taskOutput == {route:"github",accepted:true} and
+            ([.loop.toolReceipts[] | select(.id == "github.issue.labels.set" and .ok == true and .effect == "updated" and .attempts >= 1 and (.reconciled | type) == "boolean")] | length == 1) and
+            ([.loop.toolReceipts[] | select(.id == "github.issue.assignees.set" and .ok == true and .effect == "updated" and .attempts >= 1 and (.reconciled | type) == "boolean")] | length == 1) and
             (.loop.toolReceipts | any(
               .id == "github.comment.create" and .ok == true and .effect == "created" and .reconciled == true and .attempts >= 1
-            ))
+            )) and
+            ([.loop.toolReceipts[] | select(.id == "github.issue.state.update" and .ok == true and .effect == "updated" and .attempts >= 1 and (.reconciled | type) == "boolean")] | length == 1) and
+            ([.loop.toolReceipts[] | select(.id | startswith("github."))] | length == 4)
           ' <<<"$github_result" >/dev/null
           jq -e '. == {route:"github",accepted:true}' <<<"$github_task" >/dev/null
 
           history="DSH_E2E_HISTORY_HIDDEN_$GITHUB_RUN_ID"
           trigger="DSH_E2E_TRIGGER_VISIBLE_$GITHUB_RUN_ID"
-          attachment_url="https://github.com/user-attachments/assets/dsh-e2e-must-not-forward"
-          jq -s -e --arg history "$history" --arg trigger "$trigger" --arg attachment "$attachment_url" '
+          inline_url="https://github.com/user-attachments/assets/dsh-e2e-inline-must-not-forward"
+          reference_url="https://github.com/user-attachments/assets/dsh-e2e-reference-must-not-forward"
+          source_url="https://github.com/user-attachments/assets/dsh-e2e-source-must-not-forward"
+          html_url="https://github.com/user-attachments/assets/dsh-e2e-html-must-not-forward"
+          raw_url="https://github.com/user-attachments/assets/dsh-e2e-raw-must-not-forward"
+          jq -s -e --arg history "$history" --arg trigger "$trigger" \
+            --arg inline "$inline_url" --arg reference "$reference_url" --arg source "$source_url" \
+            --arg html "$html_url" --arg raw "$raw_url" '
             ([.[] | select(.route == "github" and .index == 1)] | length == 1) and
             ([.[] | select(.route == "github" and .index == 1)][0] |
               .authorizationMatches == true and
               (.prompt | contains($trigger)) and
               ((.prompt | contains($history)) | not) and
               (.prompt | contains("[image removed]")) and
-              ((.prompt | contains($attachment)) | not))
+              (.prompt as $prompt | [$inline,$reference,$source,$html,$raw] | all(. as $url;
+                ($prompt | contains($url) | not) and
+                ($prompt | contains(($url | split("/") | last)) | not)
+              )))
           ' "$audit" >/dev/null
           tool_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
           jq -e '
@@ -1372,6 +1463,39 @@ jobs:
             ($tools[0].body | contains("DSH E2E typed GitHub tool completed")) and
             (($tools[0].body | contains("@maintainers")) | not)
           ' <<<"$tool_comments" >/dev/null
+
+          mutated_issue="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER")"
+          jq -e --arg label "$ISSUE_LABEL" --arg actor "$actor" '
+            .state == "closed" and .state_reason == "completed" and
+            [.labels[].name] == [$label] and [.assignees[].login] == [$actor]
+          ' <<<"$mutated_issue" >/dev/null
+          jq -cn '{state:"open",state_reason:"reopened",labels:[],assignees:[]}' \
+            | gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER" --input - >/dev/null
+          gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER" \
+            | jq -e '.state == "open" and .labels == [] and .assignees == []' >/dev/null
+
+          run_candidate metadata pull_request "$RUNNER_TEMP/dsh-e2e-checks-event.json" metadata \
+            'INPUT_COMMAND=task' 'INPUT_PROMPT=Update the bound draft PR metadata exactly as requested.' \
+            'INPUT_TASK-ACCESS=write' "INPUT_ALLOWED-ACTORS=$actor" \
+            'INPUT_PERMISSION-PROFILE=custom' \
+            'INPUT_ALLOWED-TOOLS=["workspace.edit","github.pull.metadata.update"]' \
+            'INPUT_ALLOW-WRITE=true' 'INPUT_RUN-TESTS=true' \
+            'INPUT_VALIDATION-INTEGRITY=strict' \
+            'INPUT_TEST-COMMANDS=[["node","-e","process.exit(0)"]]' 'INPUT_MAX-TURNS=2'
+          metadata_result="$(read_output metadata result-json)"
+          jq -e '
+            .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
+            .validation.status == "passed" and .write.status == "no-changes" and
+            ([.loop.toolReceipts[] | select(
+              .id == "github.pull.metadata.update" and .ok == true and .effect == "updated" and
+              .attempts >= 1 and (.reconciled | type) == "boolean"
+            )] | length == 1)
+          ' <<<"$metadata_result" >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .title)" == "$mutated_pull_title" ]]
+          original_pull_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f title="$original_pull_title" >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .title)" == "$original_pull_title" ]]
+          [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .head.sha)" == "$CHECKS_HEAD" ]]
 
           run_candidate checks pull_request "$RUNNER_TEMP/dsh-e2e-checks-event.json" checks \
             'INPUT_COMMAND=diagnose' 'INPUT_PERMISSION-PROFILE=custom' \
@@ -1383,10 +1507,11 @@ jobs:
           ' <<<"$checks_result" >/dev/null
 
           jq -s -e '
-            length == 6 and all(.authorizationMatches == true) and
+            length == 11 and all(.authorizationMatches == true) and
             ([.[] | select(.route == "label")] | length == 1) and
             ([.[] | select(.route == "assignee")] | length == 1) and
-            ([.[] | select(.route == "github")] | length == 2) and
+            ([.[] | select(.route == "github")] | length == 5) and
+            ([.[] | select(.route == "metadata")] | length == 2) and
             ([.[] | select(.route == "checks")] | length == 2)
           ' "$audit" >/dev/null
 
@@ -1397,72 +1522,138 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
+          ISSUE_LABEL: ${{ steps.integration_entities.outputs.label }}
           ISSUE_NUMBER: ${{ steps.integration_entities.outputs.issue_number }}
           ISSUE_ID: ${{ steps.integration_entities.outputs.issue_id }}
           CHECKS_BRANCH: ${{ steps.integration_entities.outputs.branch }}
+          CHECKS_TREE: ${{ steps.integration_entities.outputs.tree_sha }}
+          CHECKS_HEAD: ${{ steps.integration_entities.outputs.head_sha }}
+          FIXTURE_PATH: ${{ steps.integration_entities.outputs.fixture_path }}
           CHECKS_PR: ${{ steps.integration_entities.outputs.pr_number }}
           CHECKS_PR_ID: ${{ steps.integration_entities.outputs.pr_id }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          cleanup_failures=0
+          record_failure() {
+            echo "::error::Integration cleanup failed for $1; no unverified or broad deletion was attempted."
+            cleanup_failures=$((cleanup_failures + 1))
+          }
           marker="<!-- dsh-e2e:github-integration:v1 run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT candidate=$CANDIDATE_SHA -->"
           issue_title="DSH E2E GitHub integration $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           issue_body="$(printf '%s\n\n%s' "$marker" "Temporary Issue owned by the trusted GitHub integration harness.")"
-          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ && "$ISSUE_ID" =~ ^[1-9][0-9]*$ ]]
-          issue_json="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER")"
-          jq -e --argjson number "$ISSUE_NUMBER" --argjson id "$ISSUE_ID" --arg title "$issue_title" --arg body "$issue_body" '
-            .number == $number and .id == $id and (has("pull_request") | not) and
-            .user.id == 41898282 and .title == $title and .body == $body
-          ' <<<"$issue_json" >/dev/null
-          issue_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
-          jq -e 'all(.[]; .user.id == 41898282)' <<<"$issue_comments" >/dev/null
-          mapfile -t issue_comment_ids < <(jq -r '.[].id' <<<"$issue_comments")
-          for comment_id in "${issue_comment_ids[@]}"; do
-            [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
-            gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
-          done
-          gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER" -f state=closed >/dev/null
-          [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER" --jq .state)" == "closed" ]]
-          [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" --jq length)" -eq 0 ]]
-
-          [[ "$CHECKS_BRANCH" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
-          [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ && "$CHECKS_PR_ID" =~ ^[1-9][0-9]*$ ]]
           pr_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          mutated_pr_title="DSH E2E checks updated $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           pr_body="$(printf '%s\n\n%s' "$marker" "Temporary draft PR owned by the trusted GitHub integration harness.")"
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR")"
-          jq -e --argjson number "$CHECKS_PR" --argjson id "$CHECKS_PR_ID" --arg repo "${REPOSITORY,,}" \
-            --arg branch "$CHECKS_BRANCH" --arg base "$DEFAULT_BRANCH" --arg sha "$CANDIDATE_SHA" \
-            --arg title "$pr_title" --arg body "$pr_body" '
-            .number == $number and .id == $id and .state == "open" and .draft == true and
-            (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and
-            .title == $title and .body == $body
-          ' <<<"$pr_json" >/dev/null
-          pr_comments="$(gh api "repos/$REPOSITORY/issues/$CHECKS_PR/comments?per_page=100")"
-          jq -e 'all(.[]; .user.id == 41898282)' <<<"$pr_comments" >/dev/null
-          mapfile -t pr_comment_ids < <(jq -r '.[].id' <<<"$pr_comments")
-          for comment_id in "${pr_comment_ids[@]}"; do
-            [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
-            gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
-          done
-          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" --jq .object.sha)" == "$CANDIDATE_SHA" ]]
-          gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f state=closed >/dev/null
-          gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"
-          [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .state)" == "closed" ]]
-          if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" >/dev/null 2>&1; then
-            echo "Verified integration checks branch still exists" >&2
-            exit 1
+
+          cleanup_issue() (
+            set -euo pipefail
+            [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            [[ -z "$ISSUE_ID" || "$ISSUE_ID" =~ ^[1-9][0-9]*$ ]]
+            issue_json="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER")"
+            actual_issue_id="$(jq -r .id <<<"$issue_json")"
+            [[ "$actual_issue_id" =~ ^[1-9][0-9]*$ ]]
+            [[ -z "$ISSUE_ID" || "$ISSUE_ID" == "$actual_issue_id" ]]
+            jq -e --argjson number "$ISSUE_NUMBER" --arg title "$issue_title" --arg body "$issue_body" '
+              .number == $number and (has("pull_request") | not) and
+              .user.id == 41898282 and .title == $title and .body == $body
+            ' <<<"$issue_json" >/dev/null
+            jq -cn '{state:"open",state_reason:"reopened",labels:[],assignees:[]}' \
+              | gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER" --input - >/dev/null
+            issue_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
+            jq -e 'all(.[]; .user.id == 41898282)' <<<"$issue_comments" >/dev/null
+            mapfile -t comment_ids < <(jq -r '.[].id' <<<"$issue_comments")
+            for comment_id in "${comment_ids[@]}"; do
+              [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
+              gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
+            done
+            gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER" -f state=closed >/dev/null
+            [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER" --jq .state)" == "closed" ]]
+            [[ "$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" --jq length)" -eq 0 ]]
+          )
+
+          cleanup_label() (
+            set -euo pipefail
+            [[ "$ISSUE_LABEL" =~ ^dsh-e2e-[1-9][0-9]*-[1-9][0-9]*$ ]]
+            label_json="$(gh api "repos/$REPOSITORY/labels/$ISSUE_LABEL" 2>/dev/null)" || return 0
+            label_description="Run-bound Core E2E fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+            jq -e --arg name "$ISSUE_LABEL" --arg description "$label_description" '
+              .name == $name and .color == "5319e7" and .description == $description
+            ' <<<"$label_json" >/dev/null
+            gh api --method DELETE "repos/$REPOSITORY/labels/$ISSUE_LABEL"
+          )
+
+          cleanup_pull() (
+            set -euo pipefail
+            [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ ]]
+            [[ -z "$CHECKS_PR_ID" || "$CHECKS_PR_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$CHECKS_BRANCH" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
+            pr_json="$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR")"
+            actual_pr_id="$(jq -r .id <<<"$pr_json")"
+            expected_head="$CHECKS_HEAD"
+            [[ "$actual_pr_id" =~ ^[1-9][0-9]*$ ]]
+            [[ -z "$CHECKS_PR_ID" || "$CHECKS_PR_ID" == "$actual_pr_id" ]]
+            if [[ -z "$expected_head" ]]; then expected_head="$(jq -r .head.sha <<<"$pr_json")"; fi
+            [[ "$expected_head" =~ ^[a-f0-9]{40}$ ]]
+            jq -e --argjson number "$CHECKS_PR" --arg repo "${REPOSITORY,,}" \
+              --arg branch "$CHECKS_BRANCH" --arg base "$DEFAULT_BRANCH" --arg sha "$expected_head" \
+              --arg candidate "$CANDIDATE_SHA" --arg title "$pr_title" --arg mutated "$mutated_pr_title" --arg body "$pr_body" '
+              .number == $number and .state == "open" and .draft == true and
+              (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
+              (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $candidate and
+              (.title == $title or .title == $mutated) and .body == $body
+            ' <<<"$pr_json" >/dev/null
+            gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f title="$pr_title" >/dev/null
+            pr_comments="$(gh api "repos/$REPOSITORY/issues/$CHECKS_PR/comments?per_page=100")"
+            jq -e 'all(.[]; .user.id == 41898282)' <<<"$pr_comments" >/dev/null
+            mapfile -t comment_ids < <(jq -r '.[].id' <<<"$pr_comments")
+            for comment_id in "${comment_ids[@]}"; do
+              [[ "$comment_id" =~ ^[1-9][0-9]*$ ]]
+              gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"
+            done
+            gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f state=closed >/dev/null
+            [[ "$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR" --jq .state)" == "closed" ]]
+          )
+
+          cleanup_branch() (
+            set -euo pipefail
+            [[ "$CHECKS_BRANCH" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
+            [[ "$FIXTURE_PATH" =~ ^\.github/dsh-e2e-fixtures/checks-[1-9][0-9]*-[1-9][0-9]*\.txt$ ]]
+            ref_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" --jq .object.sha 2>/dev/null)" || return 0
+            [[ "$ref_sha" =~ ^[a-f0-9]{40}$ ]]
+            [[ -z "$CHECKS_HEAD" || "$ref_sha" == "$CHECKS_HEAD" ]]
+            commit_json="$(gh api "repos/$REPOSITORY/git/commits/$ref_sha")"
+            [[ "$(jq -r '.parents | length' <<<"$commit_json")" -eq 1 ]]
+            [[ "$(jq -r '.parents[0].sha' <<<"$commit_json")" == "$CANDIDATE_SHA" ]]
+            [[ "$CHECKS_TREE" =~ ^[a-f0-9]{40}$ && "$(jq -r .tree.sha <<<"$commit_json")" == "$CHECKS_TREE" ]]
+            [[ "$(jq -r .message <<<"$commit_json")" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
+            gh api "repos/$REPOSITORY/compare/$CANDIDATE_SHA...$ref_sha" \
+              | jq -e --arg path "$FIXTURE_PATH" '.files | length == 1 and .[0].filename == $path and .[0].status == "added"' >/dev/null
+            content="$(gh api "repos/$REPOSITORY/contents/$FIXTURE_PATH?ref=$ref_sha" --jq .content | tr -d '\n' | base64 --decode)"
+            [[ "$content" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
+            gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"
+            if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" >/dev/null 2>&1; then return 1; fi
+          )
+
+          if [[ -n "$ISSUE_NUMBER" || -n "$ISSUE_ID" ]]; then
+            cleanup_issue; status=$?; if [[ "$status" -ne 0 ]]; then record_failure issue; fi
+          fi
+          if [[ -n "$ISSUE_LABEL" ]]; then
+            cleanup_label; status=$?; if [[ "$status" -ne 0 ]]; then record_failure label; fi
+          fi
+          if [[ -n "$CHECKS_PR" || -n "$CHECKS_PR_ID" ]]; then
+            cleanup_pull; status=$?; if [[ "$status" -ne 0 ]]; then record_failure pull-request; fi
+          fi
+          if [[ -n "$CHECKS_BRANCH" || -n "$CHECKS_HEAD" || -n "$FIXTURE_PATH" ]]; then
+            cleanup_branch; status=$?; if [[ "$status" -ne 0 ]]; then record_failure branch; fi
           fi
 
-          candidate_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$candidate_json" >/dev/null
-          ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
-          ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          bash .github/e2e/assert-candidate-binding.sh || record_failure candidate-binding
+          ! git -C . config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1 || record_failure harness-credentials
+          ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1 || record_failure candidate-credentials
+          [[ "$cleanup_failures" -eq 0 ]]
 
   revalidate_candidate:
     name: Final candidate binding
@@ -1471,21 +1662,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     steps:
-      - name: Revalidate open same-repository candidate PR
+      - name: Revalidate exact candidate binding
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
           CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
           CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
         run: |
           set -euo pipefail
-          pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
-          jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
-            .state == "open" and .draft == false and .head.sha == $sha and
-            (.head.repo.full_name | ascii_downcase) == $repo and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
-          ' <<<"$pr_json" >/dev/null
+          case "$CANDIDATE_MODE" in
+            pull-request)
+              pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+              jq -e --arg sha "$CANDIDATE_SHA" --arg repo "${REPOSITORY,,}" --arg base "$DEFAULT_BRANCH" '
+                .state == "open" and .draft == false and .head.sha == $sha and
+                (.head.repo.full_name | ascii_downcase) == $repo and
+                (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base
+              ' <<<"$pr_json" >/dev/null
+              ;;
+            main)
+              [[ -z "$CANDIDATE_PR" ]]
+              [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)" == "$CANDIDATE_SHA" ]]
+              ;;
+            *) exit 1 ;;
+          esac
