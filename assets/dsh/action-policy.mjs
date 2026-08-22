@@ -14,7 +14,12 @@ import {
 import { dirname, isAbsolute, resolve } from "node:path";
 
 export const name = "dsh-action-policy";
-export const inject = ["tools"];
+export const inject = ["tools", "systemPrompt"];
+
+const ROOT_OUTPUT_PROTOCOL =
+  "DSH Action root-output protocol: the launcher-supplied user task begins with a Controller-authored <TRUSTED_CONTROLLER_POLICY> block. " +
+  "Its output contract is mandatory. The final assistant message must be exactly one JSON object matching that contract, with no Markdown fence, preface, suffix, or separate citation list. " +
+  "Any tool instruction to cite URLs or use Markdown applies only inside JSON string fields (for example summary); it never permits bytes outside the JSON object.";
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/u;
 const POLICY_ID = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*){1,2}$/u;
@@ -222,6 +227,18 @@ export function apply(ctx, rawConfig) {
   const hardenedDefinitions = new WeakMap();
   const restrictedAgents = new WeakSet();
   let restrictionFailure;
+
+  // Official rc.2 tools contribute their own late system sections (web search,
+  // for example, requests Markdown citations). Keep those instructions, but
+  // make the Action's root transport boundary the final system-level rule.
+  // Delegated subagents return ordinary content to their parent and therefore
+  // must not inherit the root JSON envelope.
+  ctx.systemPrompt.section({
+    name: "dsh-action:root-output-protocol",
+    order: 1_000,
+    text: (context) =>
+      context.agent?.session?.header?.origin === "subagent" ? "" : ROOT_OUTPUT_PROTOCOL,
+  });
 
   const appendReceipt = (receipt) => {
     mkdirSync(dirname(config.auditPath), { recursive: true, mode: 0o700 });

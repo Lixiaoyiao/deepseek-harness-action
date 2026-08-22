@@ -7,7 +7,7 @@ import AgentRegistry, { type Agent } from "@deepseek-ai/dsh-agent";
 import { CallId } from "@deepseek-ai/dsh-llm";
 import { createScope, type Scope } from "@deepseek-ai/dsh-scope";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import SystemPrompt, { renderPrompt } from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime, { type ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -105,6 +105,7 @@ function invoke(context: Context, name: string, callId: string, agent?: Agent) {
 async function createScopedAgent(
   context: Context,
   tools: readonly ToolDefinition[] = [],
+  origin?: "subagent",
 ): Promise<{
   readonly agent: Agent;
   readonly scope: Scope;
@@ -122,7 +123,15 @@ async function createScopedAgent(
   Object.assign(identity, {
     id,
     options: {},
-    session: { id },
+    session: {
+      id,
+      header: {
+        version: 0,
+        id,
+        createdAt: 0,
+        ...(origin === undefined ? {} : { origin }),
+      },
+    },
     inbox: {},
     status: "idle",
     ctx: agentContext,
@@ -140,6 +149,40 @@ async function createScopedAgent(
 }
 
 describe("Action-owned DSH ToolRuntime policy", () => {
+  it("places the root JSON protocol after tool guidance without constraining subagents", async () => {
+    const { context } = await setup({});
+    context.systemPrompt.section({
+      name: "tool:web_search",
+      order: 110,
+      text: "Cite URLs as Markdown links.",
+    });
+    const { agent: rootAgent } = await createScopedAgent(context);
+    const rootAssembly = await context.systemPrompt.assemble({
+      agent: rootAgent,
+      scope: rootAgent,
+    });
+    const rootSections = rootAssembly.sections.map(({ name }) => name);
+    expect(rootSections.indexOf("dsh-action:root-output-protocol")).toBeGreaterThan(
+      rootSections.indexOf("tool:web_search"),
+    );
+    expect(rootAssembly.sections.at(-1)?.name).toBe("dsh-action:root-output-protocol");
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "exactly one JSON object matching that contract",
+    );
+    expect(renderPrompt(rootAssembly)).toContain("never permits bytes outside the JSON object");
+
+    const { agent: childAgent } = await createScopedAgent(context, [], "subagent");
+    const childAssembly = await context.systemPrompt.assemble({
+      agent: childAgent,
+      scope: childAgent,
+    });
+    expect(
+      childAssembly.sections.find(({ name }) => name === "dsh-action:root-output-protocol")?.text,
+    ).toBe("");
+    expect(renderPrompt(childAssembly)).not.toContain("DSH Action root-output protocol");
+    await context.fiber.dispose();
+  });
+
   it("rejects unknown tools and persists the invocation limit", async () => {
     const { context, statePath } = await setup({ maxCalls: 1 });
     expect((await invoke(context, "allowed", "first")).isError).toBe(false);

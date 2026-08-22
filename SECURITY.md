@@ -86,6 +86,11 @@ controller instructions.
 - Agent output is also untrusted. The controller accepts only one complete JSON
   value and rejects unknown fields, invalid paths, unsafe ranges, oversized
   collections and controller-owned tracking markers.
+- The controlled root Profile repeats that machine-output rule after rc.2
+  tool-specific system guidance. Markdown citations are allowed only inside
+  JSON string fields; they never authorize fences, prefixes, suffixes or a
+  separate citation list. This section is empty for delegated subagents, whose
+  ordinary response is consumed by the root Agent rather than the controller.
 - CI evidence is selected by repository and immutable head SHA, bounded,
   redacted and explicitly labelled as untrusted before it reaches DSH.
 - Comment bodies are stripped of reserved markers and sanitized before

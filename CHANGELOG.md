@@ -55,6 +55,10 @@ versioning for published action releases.
   removed validation keys even when unrelated keys are added. Each reproduced
   bypass has regression coverage and still blocks all GitHub mutation in strict
   mode.
+- The controlled root Profile now places its single-JSON output protocol after
+  rc.2 tool guidance. Web Search Markdown citations must remain inside JSON
+  string fields, while fences, prose, and separate citation suffixes still fail
+  closed; delegated subagents continue to return ordinary content to the root.
 
 ### Performance and verification
 
