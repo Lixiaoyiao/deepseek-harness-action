@@ -330,8 +330,10 @@ describe("Marketplace action metadata", () => {
     expect(workflow).not.toMatch(/^ {2}pull_request:\s*$/mu);
     expect(gate).toContain("WORKFLOW_REF: ${{ github.ref }}");
     expect(gate).toContain("DISPATCH_SHA: ${{ github.sha }}");
-    expect(gate).toContain("APPROVED_PR_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}");
+    expect(gate).toContain("APPROVED_CANDIDATE_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}");
     expect(gate).toContain('"$DISPATCH_SHA" == "$default_sha"');
+    expect(gate).toContain("candidate_mode:");
+    expect(gate).toContain('"$CANDIDATE_SHA" == "$DISPATCH_SHA"');
     expect(gate).not.toContain("secrets.");
     expect(workflow.match(/environment: core-e2e/gu)).toHaveLength(3);
     expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(4);
@@ -346,6 +348,10 @@ describe("Marketplace action metadata", () => {
     expect(workflow).toContain("bodyMarker:");
     expect(workflow).toContain("dsh-e2e:github-integration:v1");
     expect(workflow).toContain("github.comment.create");
+    expect(workflow).toContain("github.issue.labels.set");
+    expect(workflow).toContain("github.issue.assignees.set");
+    expect(workflow).toContain("github.issue.state.update");
+    expect(workflow).toContain("github.pull.metadata.update");
     expect(workflow).toContain("github.checks.read");
     expect(workflow).toContain("[image removed]");
     expect(workflow).toContain("if: always() && needs.gate.result == 'success'");
