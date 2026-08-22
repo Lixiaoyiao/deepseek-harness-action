@@ -28,6 +28,17 @@ describe("Marketplace action metadata", () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
     expect(metadata).toMatch(/allow-write:[\s\S]*?default: "false"/u);
     expect(metadata).toMatch(/progress-comment:[\s\S]*?default: "true"/u);
+    expect(metadata).toMatch(/trigger-phrase:[\s\S]*?default: "@dsh"/u);
+    expect(metadata).toMatch(/label-trigger:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/assignee-trigger:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/allowed-actors:[\s\S]*?default: "\*"/u);
+    expect(metadata).toMatch(/allowed-bots:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/include-comments-by-actor:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/exclude-comments-by-actor:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/base-branch:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/branch-prefix:[\s\S]*?default: "dsh\/"/u);
+    expect(metadata).toMatch(/branch-name-template:[\s\S]*?default: ""/u);
+    expect(metadata).toMatch(/task-output-schema:[\s\S]*?default: ""/u);
     expect(metadata).toMatch(/task-access:[\s\S]*?default: "read"/u);
     expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
     expect(metadata).toMatch(/permission-profile:[\s\S]*?default: "strict"/u);
@@ -48,6 +59,7 @@ describe("Marketplace action metadata", () => {
       /tool-receipts:[\s\S]*?bounded controller\/DSH receipt arrays and truncation metadata/u,
     );
     expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
+    expect(metadata).toMatch(/task-output:[\s\S]*?Controller schema validation/u);
     expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
   });
 
@@ -130,12 +142,18 @@ describe("Marketplace action metadata", () => {
       "tool-receipts",
       "action-launcher.mjs",
       "@deepseek-ai/dsh-mcp-client",
+      "trigger-phrase",
+      "branch-name-template",
+      "github.comment.create",
+      "github.checks.read",
+      "task-output-schema",
+      "task-output",
     ]) {
       expect(bundle).toContain(token);
     }
   });
 
-  it("binds the canary to the formal v0.5.3 release and its immutable tag commit", async () => {
+  it("binds the canary to the formal v0.6.0 release and its immutable tag commit", async () => {
     const canary = await readFile(
       new URL("../.github/workflows/release-canary.yml", import.meta.url),
       "utf8",
@@ -209,6 +227,7 @@ describe("Marketplace action metadata", () => {
       "../examples/ci-diagnose.yml",
       "../examples/ci-auto-fix.yml",
       "../examples/task-automation.yml",
+      "../examples/github-integration.yml",
     ]) {
       const example = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(example).toContain(`uses: Lixiaoyiao/deepseek-harness-action@${RELEASE_REFERENCE}`);
@@ -224,6 +243,7 @@ describe("Marketplace action metadata", () => {
       "../examples/ci-diagnose.yml",
       "../examples/ci-auto-fix.yml",
       "../examples/task-automation.yml",
+      "../examples/github-integration.yml",
     ]) {
       const document = await readFile(new URL(relativePath, import.meta.url), "utf8");
       expect(document).not.toMatch(
@@ -232,7 +252,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.5.3 task example with the standard coding profile", async () => {
+  it("ships the v0.6.0 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
@@ -244,6 +264,24 @@ describe("Marketplace action metadata", () => {
     expect(example).toContain("permission-profile: standard");
     expect(example).toContain("validation-integrity: strict");
     expect(example).toContain("test-commands:");
+  });
+
+  it("ships a fail-closed v0.6.0 GitHub integration example", async () => {
+    const example = await readFile(
+      new URL("../examples/github-integration.yml", import.meta.url),
+      "utf8",
+    );
+    expect(example).toContain(`deepseek-harness-action@${RELEASE_REFERENCE}`);
+    expect(example).toContain("trigger-phrase: /deepseek");
+    expect(example).toContain("label-trigger: dsh-ready");
+    expect(example).toContain("allowed-actors: REPLACE_WITH_MAINTAINER_LOGIN");
+    expect(example).toContain("github.issue.labels.set");
+    expect(example).toContain("github.comment.create");
+    expect(example).toContain("task-output-schema:");
+    expect(example).toContain("{{prefix}}");
+    expect(example).toContain("{{key}}");
+    expect(example).toContain("persist-credentials: false");
+    expect(example).toContain("validation-integrity: strict");
   });
 
   it("keeps active command and diagnosis workflows on trusted action code", async () => {
@@ -296,7 +334,7 @@ describe("Marketplace action metadata", () => {
     expect(gate).toContain('"$DISPATCH_SHA" == "$default_sha"');
     expect(gate).not.toContain("secrets.");
     expect(workflow.match(/environment: core-e2e/gu)).toHaveLength(3);
-    expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(3);
+    expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(4);
     expect(workflow).not.toContain("run-candidate.mjs");
     expect(workflow).toContain("dsh-e2e:cancellation:v1");
     expect(workflow).toContain("GITHUB_EVENT_NAME=issues");
@@ -306,6 +344,10 @@ describe("Marketplace action metadata", () => {
     expect(workflow).toContain('gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER"');
     expect(workflow).toContain("[.ref,.object.type,.object.sha]");
     expect(workflow).toContain("bodyMarker:");
+    expect(workflow).toContain("dsh-e2e:github-integration:v1");
+    expect(workflow).toContain("github.comment.create");
+    expect(workflow).toContain("github.checks.read");
+    expect(workflow).toContain("[image removed]");
     expect(workflow).toContain("if: always() && needs.gate.result == 'success'");
   });
 });

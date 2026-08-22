@@ -29,8 +29,52 @@ inputs:
     description: "Trusted task prompt. With command=auto on dispatch/schedule events, a non-empty prompt selects generic task mode."
     required: false
     default: ""
+  trigger-phrase:
+    description: "Maintainer-controlled literal used for first-line comment commands. Routing only; it never grants authority."
+    required: false
+    default: "@dsh"
+  label-trigger:
+    description: "Optional exact label that routes Issue tasks or pull request reviews. Empty disables this route."
+    required: false
+    default: ""
+  assignee-trigger:
+    description: "Optional exact assignee login that routes Issue tasks or pull request reviews. Empty disables this route."
+    required: false
+    default: ""
+  allowed-actors:
+    description: "Comma-separated maintainer routing allowlist for originating actors. * preserves the default route; authorization remains separate."
+    required: false
+    default: "*"
+  allowed-bots:
+    description: "Comma-separated bot allowlist. Empty preserves the fail-closed bot write gate; listed bots still need repository write permission."
+    required: false
+    default: ""
+  include-comments-by-actor:
+    description: "Optional comma-separated allowlist for historical comments included as untrusted context. The audited trigger comment is retained."
+    required: false
+    default: ""
+  exclude-comments-by-actor:
+    description: "Optional comma-separated deny list for historical comment context. Exclusion wins over inclusion."
+    required: false
+    default: ""
+  base-branch:
+    description: "Maintainer-selected base branch for Issue and automation tasks. Empty uses the trusted repository default branch; PR fixes stay bound to their head."
+    required: false
+    default: ""
+  branch-prefix:
+    description: "Validated prefix for Controller-created task branches."
+    required: false
+    default: "dsh/"
+  branch-name-template:
+    description: "Optional deterministic branch template using {{prefix}}, {{key}}, {{operation}}, {{entityType}}, and {{entityNumber}}; {{prefix}} and {{key}} are required."
+    required: false
+    default: ""
+  task-output-schema:
+    description: "Optional bounded maintainer-owned JSON Schema for a Controller-validated taskOutput. It never replaces result-json or grants authority."
+    required: false
+    default: ""
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version. v0.5.3 accepts only the audited 0.1.1-rc.2 runtime."
+    description: "Pinned @deepseek-ai/dsh version. v0.6.0 accepts only the audited 0.1.1-rc.2 runtime."
     required: false
     default: "0.1.1-rc.2"
   dsh-executable:
@@ -90,7 +134,7 @@ inputs:
     required: false
     default: "strict"
   allowed-tools:
-    description: "JSON allowlist of workspace.*, native.*, command.<name>, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
+    description: "JSON allowlist of workspace.*, native.*, command.<name>, typed github.*, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
     required: false
     default: "[]"
   disallowed-tools:
@@ -125,7 +169,7 @@ outputs:
   findings-count:
     description: "Selected review findings, or validated agent findings for other operations"
   branch-name:
-    description: "Created or updated dsh branch"
+    description: "Created or updated Controller task branch"
   pull-request-url:
     description: "Created pull request URL"
   commit-sha:
@@ -154,6 +198,8 @@ outputs:
     description: "SHA-256 digest of the redacted controller-generated DSH extension audit profile, empty when unavailable"
   tool-receipts:
     description: "JSON object with bounded controller/DSH receipt arrays and truncation metadata; never an authorization input"
+  task-output:
+    description: "JSON-encoded maintainer-defined task output after Controller schema validation; empty when not configured or unavailable"
   result-json:
     description: "Versioned JSON envelope containing status, result, policy, permissions, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
 
