@@ -22,7 +22,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["assets/**/*.mjs", "test/fixtures/**/*.mjs"],
+    files: [".github/e2e/**/*.mjs", "assets/**/*.mjs", "test/fixtures/**/*.mjs"],
     languageOptions: {
       parserOptions: { projectService: false },
       globals: {
