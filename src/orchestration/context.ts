@@ -44,10 +44,14 @@ export function taskIdentity(
         allowedTools: inputs.allowedTools,
         disallowedTools: inputs.disallowedTools,
         validationIntegrity: inputs.validationIntegrity,
-        taskOutputSchema: command.operation === "task" ? inputs.taskOutputSchema : undefined,
-        baseBranch: inputs.baseBranch,
-        branchPrefix: inputs.branchPrefix,
-        branchNameTemplate: inputs.branchNameTemplate,
+        ...(command.operation === "task" && inputs.taskOutputSchema !== undefined
+          ? { taskOutputSchema: inputs.taskOutputSchema }
+          : {}),
+        ...(inputs.baseBranch === "" ? {} : { baseBranch: inputs.baseBranch }),
+        ...(inputs.branchPrefix === "dsh/" ? {} : { branchPrefix: inputs.branchPrefix }),
+        ...(inputs.branchNameTemplate === ""
+          ? {}
+          : { branchNameTemplate: inputs.branchNameTemplate }),
         toolConfig: inputs.toolConfig,
         // This identity can influence public branch names and PR markers. Bind
         // it to the redacted audit surface, never the secret-bearing effective

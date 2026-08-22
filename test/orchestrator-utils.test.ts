@@ -9,6 +9,7 @@ import {
 import type { EntitySnapshot } from "../src/github/fetch.js";
 import type { GitHubContext } from "../src/github/context.js";
 import { taskIdentity } from "../src/orchestration/context.js";
+import { buildAutomationTaskOperation } from "../src/write/task.js";
 import { inputs } from "./helpers.js";
 
 describe("orchestrator bounds and failure reporting", () => {
@@ -38,9 +39,33 @@ describe("orchestrator bounds and failure reporting", () => {
       inputs({ baseBranch: "release/next" }),
       inputs({ branchPrefix: "automation/" }),
       inputs({ branchNameTemplate: "{{prefix}}{{operation}}-{{key}}" }),
+      inputs({ taskOutputSchema: { type: "object" } }),
     ]) {
       expect(taskIdentity(command, configured, "extensions", "permissions")).not.toBe(baseline);
     }
+  });
+
+  it("preserves the v0.5.3 task identity and reconciliation branch under v0.6 defaults", () => {
+    const command = {
+      operation: "task" as const,
+      source: "explicit-prompt" as const,
+      instructions: "update dependencies",
+      requestedAccess: "write" as const,
+    };
+    const identity = taskIdentity(command, inputs(), "extensions", "permissions");
+
+    expect(identity).toBe("1d55bac07265c1ab290c32b560a6272de8c00539bce5702a84c0d02d6808afa3");
+    const operation = buildAutomationTaskOperation({
+      owner: "Octo",
+      repo: "Repo",
+      baseSha: "a".repeat(40),
+      runIdentity: "run-123",
+      taskIdentity: identity,
+      branchPrefix: "dsh/",
+      branchNameTemplate: "",
+    });
+    expect(operation.key).toBe("f048348ee2d7da32ac9a4b5b");
+    expect(operation.branch).toBe("dsh/task-f048348ee2d7da32ac9a4b5b");
   });
 
   it("redacts controller secrets and caps reported failures", () => {

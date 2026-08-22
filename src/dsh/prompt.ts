@@ -3,6 +3,7 @@ import { DshConfigurationError } from "./errors.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
 import type { NativeToolId } from "../tools/schema.js";
 import type { TaskOutputSchema } from "./task-output.js";
+import { removeMarkdownImages } from "../security/redaction.js";
 
 export const DEFAULT_MAX_PROMPT_BYTES = 96 * 1024;
 export const WINDOWS_MAX_PROMPT_BYTES = 24 * 1024;
@@ -198,7 +199,8 @@ export function buildDshPrompt(input: DshPromptInput): string {
     throw new DshConfigurationError("max prompt bytes must be a positive integer");
   }
 
-  const originalUntrustedBytes = Buffer.byteLength(input.prompt, "utf8");
+  const prompt = removeMarkdownImages(input.prompt);
+  const originalUntrustedBytes = Buffer.byteLength(prompt, "utf8");
   const nativeTools =
     input.nativeTools ??
     (input.trust === "trusted-write"
@@ -223,13 +225,13 @@ export function buildDshPrompt(input: DshPromptInput): string {
       ...(input.taskOutputSchema === undefined ? {} : { taskOutputSchema: input.taskOutputSchema }),
     });
   const fits = (value: string): boolean => Buffer.byteLength(value, "utf8") <= limit;
-  const trustedInstructions = input.trustedInstructions ?? "";
-  const complete = render(trustedInstructions, encodeUntrustedData(input.prompt), false);
+  const trustedInstructions = removeMarkdownImages(input.trustedInstructions ?? "");
+  const complete = render(trustedInstructions, encodeUntrustedData(prompt), false);
   if (fits(complete)) return complete;
 
   // Preserve the controller policy and as much trusted operator intent as
   // possible, while reserving a valid JSON truncation envelope for context.
-  const emptyTruncationEnvelope = truncatedUntrustedJson(input.prompt, 0);
+  const emptyTruncationEnvelope = truncatedUntrustedJson(prompt, 0);
   let boundedTrusted = trustedInstructions;
   if (!fits(render(boundedTrusted, emptyTruncationEnvelope, true))) {
     boundedTrusted = largestPrefixThatFits(
@@ -245,14 +247,14 @@ export function buildDshPrompt(input: DshPromptInput): string {
   }
 
   const boundedUntrustedPrefix = largestPrefixThatFits(
-    input.prompt,
+    prompt,
     (candidate) =>
-      fits(render(boundedTrusted, truncatedUntrustedJson(input.prompt, candidate.length), true)),
+      fits(render(boundedTrusted, truncatedUntrustedJson(prompt, candidate.length), true)),
     "",
   );
   const bounded = render(
     boundedTrusted,
-    truncatedUntrustedJson(input.prompt, boundedUntrustedPrefix.length),
+    truncatedUntrustedJson(prompt, boundedUntrustedPrefix.length),
     true,
   );
   const finalBytes = Buffer.byteLength(bounded, "utf8");

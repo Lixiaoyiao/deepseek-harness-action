@@ -105,6 +105,41 @@ describe("routeCommand", () => {
     });
   });
 
+  it("removes reference, HTML, and raw attachment sources from command instructions", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: {
+        comment: {
+          body: [
+            "@dsh task --read inspect these",
+            "![upload][attachment]",
+            "[attachment]: https://github.com/user-attachments/assets/example?token=secret",
+            '<picture><source srcset="https://example.test/a"><img src="https://example.test/b"></picture>',
+            "raw https://user-images.githubusercontent.com/1/example.png?sig=secret",
+          ].join("\n"),
+        },
+      },
+    });
+    const routed = routeCommand(context, inputs());
+    expect(routed?.instructions).not.toContain("user-attachments");
+    expect(routed?.instructions).not.toContain("example.test");
+    expect(routed?.instructions).not.toContain("user-images.githubusercontent.com");
+    expect(routed?.instructions).toContain("[image removed]");
+  });
+
+  it("applies the same text-only boundary to configured prompts", () => {
+    const routed = routeCommand(
+      pullRequestContext(),
+      inputs({
+        command: "review",
+        prompt:
+          'inspect <img src="https://example.test/private.png"> and https://github.com/user-attachments/assets/example?token=secret',
+      }),
+    );
+    expect(routed?.instructions).toBe("inspect [image removed] and [image removed]");
+  });
+
   it("routes maintainer-configured label and assignee events by entity kind", () => {
     const issue = pullRequestContext({
       rawEventName: "issues",

@@ -93,13 +93,13 @@ function configuredEntityTrigger(
     ? {
         operation: "review",
         source: "automatic-event",
-        instructions: inputs.prompt,
+        instructions: removeMarkdownImages(inputs.prompt),
         requestedAccess: "read",
       }
     : {
         operation: "task",
         source: "automatic-event",
-        instructions: inputs.prompt,
+        instructions: removeMarkdownImages(inputs.prompt),
         requestedAccess: inputs.taskAccess,
       };
 }
@@ -114,7 +114,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: inputs.command,
       source: "explicit-input",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess:
         inputs.command === "task"
           ? inputs.taskAccess
@@ -147,7 +147,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: "review",
       source: "automatic-event",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: "read",
     };
   }
@@ -156,7 +156,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: inputs.allowWrite ? "fix" : "diagnose",
       source: "automatic-event",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: inputs.allowWrite ? "write" : "read",
     };
   }
@@ -165,7 +165,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: "task",
       source: "explicit-prompt",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: inputs.taskAccess,
     };
   }

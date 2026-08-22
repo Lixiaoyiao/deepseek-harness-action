@@ -176,6 +176,24 @@ describe("buildDshPrompt", () => {
     );
   });
 
+  it("removes deferred image sources from trusted and untrusted prompt channels", () => {
+    const prompt = buildDshPrompt({
+      operation: "review",
+      prompt: [
+        "![context][attachment]",
+        "[attachment]: https://example.test/private.png?token=secret",
+        "ordinary https://github.com/openai/codex",
+      ].join("\n"),
+      trustedInstructions:
+        '<img src="https://example.test/operator.png"> https://github.com/user-attachments/assets/example?signed=secret',
+      trust: "trusted-read",
+    });
+    expect(prompt).not.toContain("private.png");
+    expect(prompt).not.toContain("operator.png");
+    expect(prompt).not.toContain("signed=secret");
+    expect(prompt).toContain("ordinary https://github.com/openai/codex");
+  });
+
   it("binds the maintainer schema into trusted policy only for task output", () => {
     const taskOutputSchema = parseTaskOutputSchema(
       JSON.stringify({
