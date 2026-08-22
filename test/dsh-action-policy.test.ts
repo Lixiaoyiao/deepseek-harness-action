@@ -173,6 +173,12 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     );
     expect(rootAssembly.sections.at(-1)?.text).toContain('Controller-selected operation is "task"');
     expect(rootAssembly.sections.at(-1)?.text).toContain('operation field must be exactly "task"');
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "Controller catalog tools are requested only through a state=needs_tool final JSON object",
+    );
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "Never imitate, prepare for, or replace a Controller catalog tool",
+    );
     expect(renderPrompt(rootAssembly)).toContain("never permits bytes outside the JSON object");
 
     const { agent: childAgent } = await createScopedAgent(context, [], "subagent");
@@ -184,6 +190,9 @@ describe("Action-owned DSH ToolRuntime policy", () => {
       childAssembly.sections.find(({ name }) => name === "dsh-action:root-output-protocol")?.text,
     ).toBe("");
     expect(renderPrompt(childAssembly)).not.toContain("DSH Action root-output protocol");
+    expect(renderPrompt(childAssembly)).not.toContain(
+      "Controller catalog tools are requested only",
+    );
     await context.fiber.dispose();
   });
 

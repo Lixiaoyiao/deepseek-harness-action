@@ -65,6 +65,11 @@ versioning for published action releases.
   inside JSON string fields, while inferred operation changes, fences, prose,
   and separate citation suffixes still fail closed; delegated subagents
   continue to return ordinary content to the root.
+- Root turns now treat Controller-catalog requests as an immediate
+  `needs_tool` boundary instead of attempting to emulate the fixed Controller
+  command with DSH runtime tools. This prevents an rc.2 internal tool loop from
+  consuming the Agent budget before the Controller can run the requested
+  bounded command; delegated subagents remain unaffected.
 
 ### Performance and verification
 
