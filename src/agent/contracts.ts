@@ -61,7 +61,11 @@ export interface AgentTurnRequest {
   readonly context: unknown;
   readonly tools: readonly AgentToolManifest[];
   readonly workspacePath: string;
+  /** Immutable controller-wide deadline; setup and turns may not extend it. */
+  readonly deadlineMs: number;
+  /** Per-turn Agent execution cap, started only after runtime setup completes. */
   readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
   readonly session?: AgentSessionHandle;
 }
 
@@ -83,6 +87,7 @@ export interface AgentEngine<TOutput = unknown, TMetadata = unknown> {
 export interface ToolInvocationContext {
   readonly workspacePath: string;
   readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface ToolProvider {

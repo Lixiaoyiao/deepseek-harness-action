@@ -126,6 +126,7 @@ describe("fresh official DSH workers share Controller MCP limits", () => {
         plan,
         nativeTools: [],
         workspaceWrite: false,
+        expectedOperation: "task",
         task: "Call the allowed MCP ping tool exactly once, then finish.",
         workerWorkspacePath: workspace,
         policyPluginPath: pathToFileURL(join(process.cwd(), "assets", "dsh", "action-policy.mjs"))

@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 
 import type { Operation } from "../commands/parse.js";
+import { PHASE_TIMEOUTS } from "../lifecycle/deadline.js";
 import type { ActionFailure } from "../result.js";
 import { createTrackingMarker, type TrackingKind } from "../review/tracking.js";
 import type { SecurityPolicy } from "../security/policy.js";
@@ -17,6 +18,8 @@ export interface ProgressReporterOptions {
   readonly operation: Operation;
   readonly policy: SecurityPolicy;
   readonly runUrl: string;
+  /** Controller cancellation applies only to non-terminal lifecycle updates. */
+  readonly signal?: AbortSignal;
   readonly warning?: (message: string) => void;
 }
 
@@ -27,6 +30,13 @@ interface ProgressView {
   readonly stage: ProgressStage;
   readonly message: string;
   readonly failure?: ActionFailure;
+}
+
+type PublicationState = Pick<ProgressView, "stage" | "message" | "failure">;
+
+interface QueuedPublication {
+  readonly state: PublicationState;
+  readonly resolve: () => void;
 }
 
 const stages: readonly {
@@ -139,35 +149,126 @@ export class StickyProgressReporter {
   private stage: ProgressStage = "context";
   private lastBody: string | undefined;
   private readonly warning: (message: string) => void;
+  private readonly queue: QueuedPublication[] = [];
+  private activeNonTerminal: AbortController | undefined;
+  private draining = false;
+  private terminal = false;
+  private terminalState: PublicationState | undefined;
+  private activeTerminal: AbortController | undefined;
+  private terminalPublication: Promise<void> | undefined;
 
   public constructor(private readonly options: ProgressReporterOptions) {
     this.warning = options.warning ?? core.warning;
   }
 
   public async update(stage: Exclude<ProgressStage, "complete">, message: string): Promise<void> {
+    if (this.terminal) return await this.terminalPublication;
     this.stage = stage;
-    await this.publish({ stage, message });
+    await this.enqueueNonTerminal({ stage, message });
   }
 
   public async complete(message: string): Promise<void> {
+    if (this.terminal) return await this.terminalPublication;
     this.stage = "complete";
-    await this.publish({ stage: "complete", message });
+    await this.publishTerminal({ stage: "complete", message });
   }
 
   public async blocked(message: string): Promise<void> {
+    if (this.terminal) return await this.terminalPublication;
     this.stage = "blocked";
-    await this.publish({ stage: "blocked", message });
+    await this.publishTerminal({ stage: "blocked", message });
   }
 
   public async fail(failure: ActionFailure): Promise<void> {
-    await this.publish({
+    const state: PublicationState = {
       stage: this.stage,
       message: "The run stopped before completion.",
       failure,
+    };
+    if (!this.terminal) {
+      await this.publishTerminal(state);
+      return;
+    }
+    if (this.terminalState?.failure?.code === "DSH_ABORTED" && failure.code !== "DSH_ABORTED") {
+      await this.correctProvisionalTerminal(state);
+      return;
+    }
+    await this.terminalPublication;
+  }
+
+  private async enqueueNonTerminal(state: PublicationState): Promise<void> {
+    await new Promise<void>((resolve) => {
+      this.queue.push({ state, resolve });
+      this.startDrain();
     });
   }
 
-  private async publish(state: Pick<ProgressView, "stage" | "message" | "failure">): Promise<void> {
+  private startDrain(): void {
+    if (this.draining) return;
+    this.draining = true;
+    void this.drainNonTerminal();
+  }
+
+  private async drainNonTerminal(): Promise<void> {
+    try {
+      while (this.queue.length > 0) {
+        const publication = this.queue.shift();
+        if (publication === undefined) continue;
+        if (this.terminal || this.options.signal?.aborted === true) {
+          publication.resolve();
+          continue;
+        }
+        const controller = new AbortController();
+        this.activeNonTerminal = controller;
+        const signal =
+          this.options.signal === undefined
+            ? controller.signal
+            : AbortSignal.any([controller.signal, this.options.signal]);
+        await this.publish(publication.state, signal, false);
+        if (this.activeNonTerminal === controller) this.activeNonTerminal = undefined;
+        publication.resolve();
+      }
+    } finally {
+      this.activeNonTerminal = undefined;
+      this.draining = false;
+      if (this.queue.length > 0) this.startDrain();
+    }
+  }
+
+  private async publishTerminal(state: PublicationState): Promise<void> {
+    this.terminal = true;
+    this.terminalState = state;
+    this.activeNonTerminal?.abort(new Error("Superseded by terminal progress"));
+    for (const publication of this.queue.splice(0)) publication.resolve();
+
+    await this.startTerminalPublication(state);
+  }
+
+  private async correctProvisionalTerminal(state: PublicationState): Promise<void> {
+    this.terminalState = state;
+    this.activeTerminal?.abort(new Error("Superseded by authoritative terminal failure"));
+    await this.startTerminalPublication(state);
+  }
+
+  private async startTerminalPublication(state: PublicationState): Promise<void> {
+    const controller = new AbortController();
+    this.activeTerminal = controller;
+    const timeout = setTimeout(
+      () => controller.abort(new Error("Terminal progress finalization timed out")),
+      PHASE_TIMEOUTS.cancellationFinalizationMs,
+    );
+    this.terminalPublication = this.publish(state, controller.signal, true).finally(() => {
+      clearTimeout(timeout);
+      if (this.activeTerminal === controller) this.activeTerminal = undefined;
+    });
+    await this.terminalPublication;
+  }
+
+  private async publish(
+    state: PublicationState,
+    signal: AbortSignal,
+    terminal: boolean,
+  ): Promise<void> {
     const body = renderProgressComment({
       operation: this.options.operation,
       policy: this.options.policy,
@@ -182,9 +283,12 @@ export class StickyProgressReporter {
         this.options.expectedAuthorId,
         trackingKind(this.options.operation),
         body,
+        { signal },
       );
+      if (signal.aborted) return;
       this.lastBody = body;
     } catch (error: unknown) {
+      if (signal.aborted && (!terminal || this.activeTerminal?.signal !== signal)) return;
       const detail = redactSecrets(error instanceof Error ? error.message : String(error)).slice(
         0,
         500,

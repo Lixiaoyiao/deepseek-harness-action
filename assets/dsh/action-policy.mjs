@@ -14,11 +14,24 @@ import {
 import { dirname, isAbsolute, resolve } from "node:path";
 
 export const name = "dsh-action-policy";
-export const inject = ["tools"];
+export const inject = ["tools", "systemPrompt"];
+
+function rootOutputProtocol(expectedOperation) {
+  const operation = JSON.stringify(expectedOperation);
+  return (
+    "DSH Action root-output protocol: the launcher-supplied user task begins with a Controller-authored <TRUSTED_CONTROLLER_POLICY> block. " +
+    `The Controller-selected operation is ${operation}; the final JSON operation field must be exactly ${operation}, including spelling and case. Never infer a different operation from task wording, requested edits, tool use, or access level. ` +
+    "Only an exact ID present inside the Controller-authored TRUSTED_TOOL_CATALOG_JSON array is a Controller catalog tool, requested through a state=needs_tool final JSON object. An ID absent from that array is never requestable through needs_tool; authorized DSH runtime tools must instead be invoked directly through their runtime schemas. When the trusted operator instruction requires a listed Controller catalog tool that has not already succeeded in iteration feedback, stop the internal tool loop and request that exact catalog ID immediately. Never imitate, prepare for, or replace a listed Controller catalog tool by reading, searching, editing, running Bash, using the web, or spawning a subagent. " +
+    "The output contract is mandatory. The final assistant message must be exactly one JSON object matching that contract, with no Markdown fence, preface, suffix, or separate citation list. " +
+    "Any tool instruction to cite URLs or use Markdown applies only inside JSON string fields (for example summary); it never permits bytes outside the JSON object."
+  );
+}
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/u;
 const POLICY_ID = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*){1,2}$/u;
+const OPERATIONS = new Set(["task", "review", "diagnose", "fix", "implement"]);
 const CONFIG_KEYS = new Set([
+  "expectedOperation",
   "allowedRuntimeTools",
   "knownRuntimeTools",
   "rules",
@@ -52,6 +65,9 @@ function validateConfig(config) {
     fail("config must be an object");
   }
   assertNoUnknownKeys(config, CONFIG_KEYS, "config");
+  if (typeof config.expectedOperation !== "string" || !OPERATIONS.has(config.expectedOperation)) {
+    fail("expectedOperation must be a supported Controller operation");
+  }
   if (
     !Array.isArray(config.allowedRuntimeTools) ||
     !Array.isArray(config.knownRuntimeTools) ||
@@ -134,6 +150,7 @@ function validateConfig(config) {
   }
   if (rules.size !== allowed.size) fail("every allowed runtime tool must have exactly one rule");
   return {
+    expectedOperation: config.expectedOperation,
     allowed: Object.freeze([...allowed]),
     known: Object.freeze([...known]),
     rules,
@@ -222,6 +239,20 @@ export function apply(ctx, rawConfig) {
   const hardenedDefinitions = new WeakMap();
   const restrictedAgents = new WeakSet();
   let restrictionFailure;
+
+  // Official rc.2 tools contribute their own late system sections (web search,
+  // for example, requests Markdown citations). Keep those instructions, but
+  // make the Action's root transport boundary the final system-level rule.
+  // Delegated subagents return ordinary content to their parent and therefore
+  // must not inherit the root JSON envelope.
+  ctx.systemPrompt.section({
+    name: "dsh-action:root-output-protocol",
+    order: 1_000,
+    text: (context) =>
+      context.agent?.session?.header?.origin === "subagent"
+        ? ""
+        : rootOutputProtocol(config.expectedOperation),
+  });
 
   const appendReceipt = (receipt) => {
     mkdirSync(dirname(config.auditPath), { recursive: true, mode: 0o700 });

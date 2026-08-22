@@ -1,4 +1,4 @@
-name: v0.5 release canary
+name: v0.5.1 release canary
 
 on:
   workflow_dispatch:
@@ -9,25 +9,104 @@ permissions:
   contents: read
 
 concurrency:
-  group: dsh-v050-release-canary
+  group: dsh-release-canary
   cancel-in-progress: false
 
 jobs:
-  smoke:
+  gate:
+    name: Bind canary to the live default branch
     if: github.repository == 'Lixiaoyiao/deepseek-harness-action'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate trusted workflow identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha_pattern='^[a-f0-9]{40}$'
+          [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
+            echo "The release canary must run from refs/heads/main" >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SHA" =~ $sha_pattern && "$RUN_SHA" =~ $sha_pattern ]] || {
+            echo "The workflow and run SHAs must be full lowercase commit SHAs" >&2
+            exit 1
+          }
+          [[ "$RUN_SHA" == "$WORKFLOW_SHA" ]] || {
+            echo "The canary run SHA must equal its immutable workflow SHA" >&2
+            exit 1
+          }
+
+          repository_json="$(gh api "repos/$REPOSITORY")"
+          [[ "$(jq -r .default_branch <<<"$repository_json")" == "main" ]] || {
+            echo "The trusted canary branch must remain the repository default branch" >&2
+            exit 1
+          }
+          live_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          [[ "$live_sha" =~ $sha_pattern ]] || {
+            echo "The live main ref must resolve to a full lowercase commit SHA" >&2
+            exit 1
+          }
+          [[ "$RUN_SHA" == "$live_sha" ]] || {
+            echo "The canary run SHA must equal the live main SHA" >&2
+            exit 1
+          }
+
+  smoke:
+    needs: gate
+    if: needs.gate.result == 'success'
+    runs-on: ubuntu-latest
+    environment: core-e2e
     timeout-minutes: 15
     env:
-      RELEASE_SHA: ${{ vars.DSH_V050_CANARY_SHA }}
+      RELEASE_TAG: v0.5.1
+      RELEASE_SHA: ${{ vars.DSH_RELEASE_CANARY_SHA }}
     steps:
-      - name: Validate immutable release ref
+      - name: Validate protected canary secret
+        env:
+          DEEPSEEK_SECRET_PRESENT: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: test "$DEEPSEEK_SECRET_PRESENT" = true
+
+      - name: Validate formal release and immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Set repository variable DSH_V050_CANARY_SHA to the full v0.5.0 release commit SHA." >&2
+            echo "Set repository variable DSH_RELEASE_CANARY_SHA to the full $RELEASE_TAG release commit SHA." >&2
             exit 1
           fi
 
-      - name: Checkout the fixed v0.5.0 action
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag_name == $tag and .draft == false and .prerelease == false
+          ' <<<"$release_json" >/dev/null
+
+          # A formal Release is bound through tag_name. Resolve lightweight or
+          # annotated tags to the canonical commit before trusting the canary SHA.
+          ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+          object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+          object_type="$(jq -r '.object.type' <<<"$ref_json")"
+          for _ in 1 2 3 4 5; do
+            [[ "$object_type" != "tag" ]] && break
+            tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+            object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+            object_type="$(jq -r '.object.type' <<<"$tag_json")"
+          done
+          if [[ "$object_type" != "commit" || "$object_sha" != "$RELEASE_SHA" ]]; then
+            echo "Formal release $RELEASE_TAG resolves to $object_type $object_sha, expected commit $RELEASE_SHA." >&2
+            exit 1
+          fi
+
+      - name: Checkout the fixed release action
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Lixiaoyiao/deepseek-harness-action
@@ -36,13 +115,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      - name: Confirm checked out release commit
+        run: test "$(git -C release-action rev-parse HEAD)" = "$RELEASE_SHA"
+
       - name: Run one read-only smoke task
         id: dsh
         uses: ./release-action
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           command: task
-          prompt: "Return one concise sentence confirming that the v0.5.0 canary reached a final answer. Do not request tools."
+          prompt: "Return one concise sentence confirming that the release canary reached a final answer. Do not request tools."
           task-access: read
           allow-write: "false"
           permission-profile: strict

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DshAbortedError,
   DshConfigurationError,
   DshIsolationUnavailableError,
   DshOutputLimitError,
@@ -27,6 +28,7 @@ import type {
   DshProcessSpec,
   DshRunRequest,
 } from "../src/dsh/runner.js";
+import { PHASE_TIMEOUTS } from "../src/dsh/timeouts.js";
 import { resolveExtensionPlan } from "../src/extensions/plan.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
 
@@ -81,7 +83,7 @@ function request(overrides: Partial<DshRunRequest>): DshRunRequest {
     apiKey: "controller-real-key",
     baseUrl: "https://api.deepseek.com",
     webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
-    dshVersion: "0.1.0-rc.8",
+    dshVersion: "0.1.1-rc.2",
     containerImage: "node:24-bookworm",
     ...overrides,
   };
@@ -148,6 +150,16 @@ describe("executeBoundedDshProcess", () => {
     ).rejects.toBeInstanceOf(DshTimeoutError);
   }, 15_000);
 
+  it("terminates the process tree when the run is cancelled", async () => {
+    const controller = new AbortController();
+    const execution = executeBoundedDshProcess(
+      spec('process.on("SIGTERM",()=>process.exit(0)); setInterval(()=>{},1000)'),
+      limits({ signal: controller.signal }),
+    );
+    setTimeout(() => controller.abort(), 25);
+    await expect(execution).rejects.toBeInstanceOf(DshAbortedError);
+  }, 15_000);
+
   it("kills on stdout and aggregate output caps", async () => {
     await expect(
       executeBoundedDshProcess(
@@ -196,7 +208,7 @@ describe("runDsh", () => {
   });
 
   it("binds policy patches to the audited DSH version", () => {
-    expect(() => assertSupportedDshVersion("0.1.0-rc.8")).not.toThrow();
+    expect(() => assertSupportedDshVersion("0.1.1-rc.2")).not.toThrow();
     expect(() => assertSupportedDshVersion("latest")).toThrow(/exact semver/u);
     expect(() => assertSupportedDshVersion("0.1.0-rc.6")).toThrow(/no audited/u);
   });
@@ -254,6 +266,259 @@ describe("runDsh", () => {
     expect(Object.values(captured?.env ?? {})).not.toContain("controller-real-key");
     expect(captured?.env).not.toHaveProperty("GITHUB_TOKEN");
     expect(captured?.env.DEEPSEEK_API_KEY).toBe("ephemeral-worker-token");
+    expect(proxy.closeMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["none", "docker"] as const)(
+    "rejects a Controller credential in the complete %s worker prompt before launch",
+    async (isolation) => {
+      const fixture = await fixtures();
+      const controllerCredential = "ghs_controller-prompt-secret";
+      const startProxy = vi.fn(() => Promise.resolve(fakeProxy()));
+      const executeProcess = vi.fn();
+      let failure: unknown;
+
+      try {
+        await runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            isolation,
+            ...(isolation === "none" ? { dshExecutable: fixture.executable } : {}),
+            controllerCredentials: [controllerCredential],
+            prompt: `review packet ${controllerCredential}`,
+          }),
+          {
+            assetsDirectory: fixture.assets,
+            temporaryDirectory: fixture.root,
+            startProxy,
+            executeProcess,
+          },
+        );
+      } catch (error: unknown) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({ code: "DSH_CREDENTIAL_LEAK" });
+      expect(String(failure)).not.toContain(controllerCredential);
+      expect(startProxy).not.toHaveBeenCalled();
+      expect(executeProcess).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["none", "docker"] as const)(
+    "rejects a Controller credential in the final %s worker argv/environment",
+    async (isolation) => {
+      const fixture = await fixtures();
+      const proxy = fakeProxy();
+      const workerExecutions: DshProcessSpec[] = [];
+
+      await expect(
+        runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            isolation,
+            ...(isolation === "none" ? { dshExecutable: fixture.executable } : {}),
+            // Exercise the final launch scanner by making an invalid proxy
+            // capability collide with a Controller-owned credential.
+            controllerCredentials: [proxy.workerToken],
+          }),
+          {
+            assetsDirectory: fixture.assets,
+            temporaryDirectory: fixture.root,
+            startProxy: () => Promise.resolve(proxy),
+            executeProcess: (spec) => {
+              if (spec.args.includes(CONTAINER_LAUNCHER)) workerExecutions.push(spec);
+              return Promise.resolve(
+                networkInspectResult(spec) ?? {
+                  stdout: "",
+                  stderr: "",
+                  exitCode: 0,
+                  signal: null,
+                },
+              );
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ code: "DSH_CREDENTIAL_LEAK" });
+      expect(workerExecutions).toHaveLength(0);
+    },
+  );
+
+  it("rejects an explicit Controller credential in stdout without echoing it", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+    const controllerCredential = "ghs_controller-stdout-secret";
+    let failure: unknown;
+
+    try {
+      await runDsh(
+        request({
+          workspacePath: fixture.workspace,
+          dshExecutable: fixture.executable,
+          controllerCredentials: [controllerCredential],
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess: () =>
+            Promise.resolve({
+              stdout: JSON.stringify({
+                protocolVersion: 1,
+                operation: "review",
+                state: "final",
+                summary: controllerCredential,
+                findings: [],
+              }),
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            }),
+        },
+      );
+    } catch (error: unknown) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: "DSH_CREDENTIAL_LEAK" });
+    expect(String(failure)).not.toContain(controllerCredential);
+  });
+
+  it("preserves a successful result when proxy cleanup rejects", async () => {
+    const fixture = await fixtures();
+    const warning = vi.fn();
+    const close = vi.fn(() => Promise.reject(new Error("close failed")));
+    const proxy = { ...fakeProxy(), close };
+
+    await expect(
+      runDsh(request({ workspacePath: fixture.workspace, dshExecutable: fixture.executable }), {
+        assetsDirectory: fixture.assets,
+        temporaryDirectory: fixture.root,
+        warning,
+        startProxy: () => Promise.resolve(proxy),
+        executeProcess: () =>
+          Promise.resolve({
+            stdout: JSON.stringify({
+              protocolVersion: 1,
+              operation: "review",
+              state: "final",
+              summary: "Done.",
+              findings: [],
+            }),
+            stderr: "",
+            exitCode: 0,
+            signal: null,
+          }),
+      }),
+    ).resolves.toMatchObject({ output: { summary: "Done." } });
+    expect(close).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("primary result was preserved"));
+  });
+
+  it("preserves the original execution failure when proxy cleanup rejects", async () => {
+    const fixture = await fixtures();
+    const warning = vi.fn();
+    const primary = new DshTimeoutError(123);
+    const close = vi.fn(() => Promise.reject(new Error("close failed")));
+    let caught: unknown;
+
+    try {
+      await runDsh(
+        request({ workspacePath: fixture.workspace, dshExecutable: fixture.executable }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          warning,
+          startProxy: () => Promise.resolve({ ...fakeProxy(), close }),
+          executeProcess: () => Promise.reject(primary),
+        },
+      );
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(caught).toBe(primary);
+    expect(close).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  it("hard-bounds proxy startup and closes a proxy that resolves after the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = await fixtures();
+      const proxy = fakeProxy();
+      let resolveProxy: ((value: DeepSeekProxyHandle) => void) | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      const running = runDsh(
+        request({
+          workspacePath: fixture.workspace,
+          dshExecutable: fixture.executable,
+          timeoutMs: 2 * PHASE_TIMEOUTS.setupMs,
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          startProxy: () => {
+            markStarted?.();
+            return new Promise<DeepSeekProxyHandle>((resolve) => {
+              resolveProxy = resolve;
+            });
+          },
+          executeProcess: vi.fn(),
+        },
+      );
+
+      await started;
+      const outcome = expect(running).rejects.toBeInstanceOf(DshTimeoutError);
+      await vi.advanceTimersByTimeAsync(PHASE_TIMEOUTS.setupMs);
+      await outcome;
+      resolveProxy?.(proxy);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(proxy.closeMock).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts proxy startup and closes a proxy that resolves after cancellation", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+    const controller = new AbortController();
+    const cancellation = new DshAbortedError();
+    let resolveProxy: ((value: DeepSeekProxyHandle) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolveStarted) => {
+      markStarted = resolveStarted;
+    });
+    const running = runDsh(
+      request({
+        workspacePath: fixture.workspace,
+        dshExecutable: fixture.executable,
+        timeoutMs: 2 * PHASE_TIMEOUTS.setupMs,
+        signal: controller.signal,
+      }),
+      {
+        assetsDirectory: fixture.assets,
+        temporaryDirectory: fixture.root,
+        startProxy: () => {
+          markStarted?.();
+          return new Promise<DeepSeekProxyHandle>((resolve) => {
+            resolveProxy = resolve;
+          });
+        },
+        executeProcess: vi.fn(),
+      },
+    );
+
+    await started;
+    controller.abort(cancellation);
+    await expect(running).rejects.toBe(cancellation);
+    resolveProxy?.(proxy);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(proxy.closeMock).toHaveBeenCalledOnce();
   });
 
@@ -517,11 +782,7 @@ describe("runDsh", () => {
   it("counts proxy startup and process execution against one overall deadline", async () => {
     const fixture = await fixtures();
     const proxy = fakeProxy();
-    const clock = vi
-      .fn()
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_375)
-      .mockReturnValueOnce(1_500);
+    let clock = 1_000;
     let limitsSeen: DshProcessLimits | undefined;
     await runDsh(
       request({
@@ -532,10 +793,14 @@ describe("runDsh", () => {
       {
         assetsDirectory: fixture.assets,
         temporaryDirectory: fixture.root,
-        now: clock,
-        startProxy: () => Promise.resolve(proxy),
+        now: () => clock,
+        startProxy: () => {
+          clock = 1_375;
+          return Promise.resolve(proxy);
+        },
         executeProcess: (_spec, limits) => {
           limitsSeen = limits;
+          clock = 1_500;
           return Promise.resolve({
             stdout: JSON.stringify({
               protocolVersion: 1,
@@ -552,6 +817,74 @@ describe("runDsh", () => {
       },
     );
     expect(limitsSeen?.timeoutMs).toBe(625);
+  });
+
+  it("applies independent setup and agent caps while forwarding the request signal", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+    const controller = new AbortController();
+    const observed: { readonly spec: DshProcessSpec; readonly limits: DshProcessLimits }[] = [];
+    let clock = 1_000;
+
+    await runDsh(
+      request({
+        isolation: "docker",
+        workspacePath: fixture.workspace,
+        deadlineMs: clock + 20 * 60_000,
+        timeoutMs: PHASE_TIMEOUTS.agentTurnMs,
+        signal: controller.signal,
+      }),
+      {
+        assetsDirectory: fixture.assets,
+        temporaryDirectory: fixture.root,
+        now: () => clock,
+        startProxy: () => Promise.resolve(proxy),
+        executeProcess: (spec, limits) => {
+          observed.push({ spec, limits });
+          const inspected = networkInspectResult(spec);
+          if (spec.args.includes("ci")) clock += 4 * 60_000;
+          if (spec.args[0] === "network" && spec.args[1] === "create") clock += 60_000;
+          if (inspected !== undefined) {
+            clock += 60_000;
+            return Promise.resolve(inspected);
+          }
+          const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
+          return Promise.resolve({
+            stdout: isDsh
+              ? JSON.stringify({
+                  protocolVersion: 1,
+                  operation: "review",
+                  state: "final",
+                  summary: "Done.",
+                  findings: [],
+                })
+              : "",
+            stderr: "",
+            exitCode: 0,
+            signal: null,
+          });
+        },
+      },
+    );
+
+    const runtimeInstall = observed.find(({ spec }) => spec.args.includes("ci"));
+    const networkCreate = observed.find(
+      ({ spec }) => spec.args[0] === "network" && spec.args[1] === "create",
+    );
+    const networkInspect = observed.find(({ spec }) => spec.args[1] === "inspect");
+    const worker = observed.find(({ spec }) => spec.args.includes(CONTAINER_LAUNCHER));
+    const networkCleanup = observed.find(
+      ({ spec }) => spec.args[0] === "network" && spec.args[1] === "rm",
+    );
+    expect(runtimeInstall?.limits.timeoutMs).toBe(PHASE_TIMEOUTS.runtimeInstallMs);
+    expect(networkCreate?.limits.timeoutMs).toBe(PHASE_TIMEOUTS.setupMs);
+    expect(networkInspect?.limits.timeoutMs).toBe(PHASE_TIMEOUTS.setupMs);
+    expect(worker?.limits.timeoutMs).toBe(PHASE_TIMEOUTS.agentTurnMs);
+    for (const phase of [runtimeInstall, networkCreate, networkInspect, worker]) {
+      expect(phase?.limits.signal).toBe(controller.signal);
+    }
+    expect(networkCleanup?.limits).toMatchObject({ timeoutMs: PHASE_TIMEOUTS.cleanupMs });
+    expect(networkCleanup?.limits.signal).toBeUndefined();
   });
 
   it("rejects model output containing a known controller credential", async () => {
@@ -727,6 +1060,103 @@ describe("runDsh", () => {
       ).rejects.toMatchObject({ code: "DSH_CREDENTIAL_LEAK" });
     },
   );
+
+  it.each(["abort", "credential-leak"] as const)(
+    "preserves a primary %s failure when the receipt log is also malformed",
+    async (mode) => {
+      const fixture = await fixtures();
+      const proxy = fakeProxy();
+      const controllerCredential = "ghs_controller-primary-secret";
+      const primary = new DshAbortedError();
+      let failure: unknown;
+
+      try {
+        await runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            isolation: "docker",
+            containerImage: PINNED_NODE_IMAGE,
+            controllerCredentials: [controllerCredential],
+          }),
+          {
+            assetsDirectory: fixture.assets,
+            temporaryDirectory: fixture.root,
+            startProxy: () => Promise.resolve(proxy),
+            executeProcess: async (spec) => {
+              const inspected = networkInspectResult(spec);
+              if (inspected !== undefined) return inspected;
+              if (!spec.args.includes(CONTAINER_LAUNCHER)) {
+                return { stdout: "", stderr: "", exitCode: 0, signal: null };
+              }
+              await writeFile(
+                join(actionStateDirectory(spec), "tool-receipts.jsonl"),
+                "not-json\n",
+              );
+              if (mode === "abort") throw primary;
+              return {
+                stdout: JSON.stringify({
+                  protocolVersion: 1,
+                  operation: "review",
+                  state: "final",
+                  summary: controllerCredential,
+                  findings: [],
+                }),
+                stderr: "",
+                exitCode: 0,
+                signal: null,
+              };
+            },
+          },
+        );
+      } catch (error: unknown) {
+        failure = error;
+      }
+
+      if (mode === "abort") expect(failure).toBe(primary);
+      else expect(failure).toMatchObject({ code: "DSH_CREDENTIAL_LEAK" });
+      expect(String(failure)).not.toContain(controllerCredential);
+    },
+  );
+
+  it("fails closed on a malformed receipt after an otherwise successful worker", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+
+    await expect(
+      runDsh(
+        request({
+          workspacePath: fixture.workspace,
+          isolation: "docker",
+          containerImage: PINNED_NODE_IMAGE,
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess: async (spec) => {
+            const inspected = networkInspectResult(spec);
+            if (inspected !== undefined) return inspected;
+            if (!spec.args.includes(CONTAINER_LAUNCHER)) {
+              return { stdout: "", stderr: "", exitCode: 0, signal: null };
+            }
+            await writeFile(join(actionStateDirectory(spec), "tool-receipts.jsonl"), "not-json\n");
+            return {
+              stdout: JSON.stringify({
+                protocolVersion: 1,
+                operation: "review",
+                state: "final",
+                summary: "Done.",
+                findings: [],
+              }),
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            };
+          },
+        },
+      ),
+    ).rejects.toThrow(/malformed tool receipt/u);
+  });
 
   it("aggregates raw admission and completion events into one public receipt", async () => {
     const fixture = await fixtures();
@@ -1000,6 +1430,7 @@ describe("runDsh", () => {
     const proxy = fakeProxy();
     let captured: DshProcessSpec | undefined;
     let copiedLauncher: string | undefined;
+    let controlledProfilePatch: string | undefined;
     const observedSpecs: DshProcessSpec[] = [];
     const result = await runDsh(
       request({
@@ -1035,6 +1466,13 @@ describe("runDsh", () => {
             argument.endsWith(`:${CONTAINER_PACKAGE_ROOT}:ro`),
           );
           if (packageMount === undefined) throw new Error("missing package-root mount");
+          controlledProfilePatch = await readFile(
+            join(
+              packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
+              "cordis.patch.yml",
+            ),
+            "utf8",
+          );
           copiedLauncher = await readFile(
             join(
               packageMount.slice(0, -`:${CONTAINER_PACKAGE_ROOT}:ro`.length),
@@ -1143,6 +1581,7 @@ describe("runDsh", () => {
       networkIsolated: true,
       extensionProfile: "github-action",
     });
+    expect(controlledProfilePatch).toContain('"expectedOperation": "fix"');
   });
 
   it("enables only read/search tools for trusted Docker reviews", async () => {

@@ -291,7 +291,7 @@ export async function createDshRuntime(temporaryDirectory = tmpdir()): Promise<D
   const dshHome = join(root, "home");
   const packageRoot = join(dshHome, "profiles", DSH_RUNTIME_PROFILE_NAME);
   const npmCache = join(root, "npm-cache");
-  await Promise.all(
+  const directoryResults = await Promise.allSettled(
     [
       packageRoot,
       npmCache,
@@ -300,6 +300,15 @@ export async function createDshRuntime(temporaryDirectory = tmpdir()): Promise<D
       join(dshHome, "attachments"),
     ].map((directory) => mkdir(directory, { recursive: true, mode: 0o700 })),
   );
+  const failed = directoryResults.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed !== undefined) {
+    // All mkdir operations have settled before rollback, so none can recreate a
+    // partially initialized runtime after the root is removed.
+    await rm(root, { force: true, recursive: true }).catch(() => undefined);
+    throw failed.reason;
+  }
   return { root, dshHome, packageRoot, npmCache };
 }
 

@@ -1,4 +1,4 @@
-# v0.5.0 profile-based example. Replace the action tag below with its full
+# v0.5.1 profile-based example. Replace the action tag below with its full
 # release commit SHA before production use; keep the validation image immutable.
 name: DSH general task
 
@@ -40,10 +40,11 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          dsh-version: 0.1.1-rc.2
           command: auto
           prompt: ${{ inputs.task }}
           task-access: ${{ inputs.access }}

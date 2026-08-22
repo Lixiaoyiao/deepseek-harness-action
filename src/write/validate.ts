@@ -110,6 +110,7 @@ export async function runValidationCommands(
   cwd: string,
   commands: readonly (readonly string[])[],
   timeoutMs = 10 * 60_000,
+  signal?: AbortSignal,
 ): Promise<readonly ValidationResult[]> {
   const deadline = validationDeadline(timeoutMs);
   const env: NodeJS.ProcessEnv = {};
@@ -133,6 +134,7 @@ export async function runValidationCommands(
       env,
       timeoutMs: remainingMs,
       maxOutputBytes: 2 * 1024 * 1024,
+      ...(signal === undefined ? {} : { signal }),
     });
     results.push({ argv, result });
     if (result.exitCode !== 0 || result.timedOut) break;
@@ -146,6 +148,7 @@ export async function runValidationCommandsInDocker(
   containerImage: string,
   timeoutMs = 10 * 60_000,
   processRunner: ValidationProcessRunner = runCommand,
+  signal?: AbortSignal,
 ): Promise<readonly ValidationResult[]> {
   // Repeat the check at this boundary so future callers cannot run
   // trusted-write validation with a mutable image tag.
@@ -230,6 +233,7 @@ export async function runValidationCommandsInDocker(
           env: process.env.PATH === undefined ? {} : { PATH: process.env.PATH },
           timeoutMs: remainingMs,
           maxOutputBytes: 2 * 1024 * 1024,
+          ...(signal === undefined ? {} : { signal }),
         });
       } catch (error: unknown) {
         await cleanup();

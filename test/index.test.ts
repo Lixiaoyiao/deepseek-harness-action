@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunOutcome } from "../src/result.js";
 
 const mocks = vi.hoisted(() => ({
-  runAction: vi.fn(),
+  runAction: vi.fn<(options: { readonly signal: AbortSignal }) => Promise<RunOutcome>>(),
   setOutput: vi.fn(),
   setFailed: vi.fn(),
   warning: vi.fn(),
@@ -62,6 +62,7 @@ describe("action entrypoint finalization", () => {
     mocks.runAction.mockResolvedValue(failure);
 
     await import("../src/index.js");
+    expect(mocks.runAction.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
     expect(mocks.setFailed).toHaveBeenCalledOnce();
 
     const outputCalls = mocks.setOutput.mock.calls as [string, string | number][];

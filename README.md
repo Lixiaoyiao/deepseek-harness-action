@@ -59,16 +59,17 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          dsh-version: 0.1.1-rc.2
 ```
 
 Open a non-draft pull request. The action reads the diff and repository context, then posts a review summary. When it finds a concrete problem, it also comments on the relevant line.
 
 See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
 
-> This Quick start tracks the v0.5.0 release tag so new users start on the current version. For production, replace the tag with the full immutable commit SHA published for v0.5.0. Historical v0.3/v0.4 behavior remains documented in [`CHANGELOG.md`](CHANGELOG.md).
+> This Quick start tracks the v0.5.1 release tag so new users start on the current version. For production, replace the tag with the full immutable commit SHA published for v0.5.1. Historical v0.3/v0.4/v0.5.0 behavior remains documented in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
@@ -88,8 +89,8 @@ The command must be on the first line of the comment. Ready-to-copy workflows ar
 - [`examples/commands.yml`](examples/commands.yml) for `@dsh` commands, fixes, and Issue → PR
 - [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml) for failed CI diagnosis
 - [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml) for trusted CI auto-fix
-- [`examples/task-automation.yml`](examples/task-automation.yml) for v0.5 profile-based explicit-prompt automation
-- [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) for v0.5 custom MCP and DSH Bundle/Profile configuration
+- [`examples/task-automation.yml`](examples/task-automation.yml) for v0.5.1 profile-based explicit-prompt automation
+- [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) for v0.5.1 custom MCP and DSH Bundle/Profile configuration
 
 Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"`, keep `run-tests: "true"`, and provide at least one `test-commands` argv array. See [`action.yml`](action.yml) for all inputs.
 
@@ -119,17 +120,17 @@ A read-only automation task without an issue or pull-request entity returns its 
 
 ## Multi-turn edit, validation, and repair loop
 
-The controller loop introduced in v0.3 remains the execution model in v0.5. It belongs to the Action controller, not to a shell inside DSH. Every iteration is a fresh DSH turn constrained by the same task anchor and capability policy:
+The controller loop introduced in v0.3 remains the execution model in v0.5.1. It belongs to the Action controller, not to a shell inside DSH. Every iteration is a fresh DSH turn constrained by the same task anchor and capability policy:
 
 ```text
 DSH turn
   ├─ needs_tool → controller runs one allowed tool → bounded/redacted untrusted result → next turn
   ├─ final → controller validation fails → stdout/stderr as untrusted feedback → next edit turn
   ├─ final → validation passes → controller publishes, commits, or opens a pull request
-  └─ blocked → stop safely with a neutral result
+  └─ blocked → neutral only when no unresolved Controller validation failure is pending
 ```
 
-The default `strict` Agent toolset has no shell. A trusted maintainer may select `standard` or an exact `custom` policy that exposes DSH's audited native Bash tool inside the credential-free Docker worker. No profile gives DSH GitHub credentials, the real DeepSeek key, permission to approve or expand its own tools, or commit/push/PR/release authority. An explicitly allowed third-party extension is trusted worker code and can have the process-level side effects described below. The controller owns validation, actual-change inspection, and every final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
+The default `strict` Agent toolset has no shell. A trusted maintainer may select `standard` or an exact `custom` policy that exposes DSH's audited native Bash tool inside the credential-free Docker worker. No profile gives DSH GitHub credentials, the real DeepSeek key, permission to approve or expand its own tools, or commit/push/PR/release authority. An explicitly allowed third-party extension is trusted worker code and can have the process-level side effects described below. The controller owns validation, actual-change inspection, and every final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. A repair turn cannot erase the pending validation failure by reporting `blocked`, exhausting its turns, or emitting malformed structured output: the original failure and any Validation Integrity audit remain authoritative until a later finalization passes. Independent cancellation, credential-leak, isolation, and runtime failures keep their own classifications. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
 
 ## Permission profiles
 
@@ -173,7 +174,9 @@ Replace the sample argv with a deterministic command for your repository. A comm
 
 ## Official MCP, Bundle, and Profile integration
 
-v0.4 upgraded the audited runtime from `@deepseek-ai/dsh@0.1.0-rc.6` to the exact `0.1.0-rc.8` release and adopted the official `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`; v0.5 retains those exact audited pins. It does not introduce a parallel MCP client or plugin loader. The controller validates trusted workflow configuration, generates a controlled DSH `github-action` Profile, lists the approved Bundles in the Profile manifest, adds approved plugin and MCP rows to its Cordis patch, and starts that Profile through the official `@deepseek-ai/dsh-app-boot@0.1.0-rc.8` public API. This controlled boot skips workspace and `$DSH_HOME` `.env` discovery and the general CLI's dynamic user-patch watch/hot-reload path. All shipped DSH dependencies are exact lockfile pins; `latest`, semver ranges, floating Git refs, and legacy MCP SSE are rejected.
+v0.5.1 upgrades the complete audited DSH dependency set from `0.1.0-rc.8` to exact `0.1.1-rc.2` pins, including `@deepseek-ai/dsh`, app-boot, the official MCP client, Profile/Bundle support, native tools, and their directly used packages. The rc.2 review covered app-boot, Profile/Bundle/Plugin loading, MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, and Docker/path/timeout behavior; it found no need to change existing Action inputs, outputs, or permission semantics. The controller still generates the controlled `github-action` Profile and Cordis patch and starts it through `@deepseek-ai/dsh-app-boot@0.1.1-rc.2`, without a parallel MCP client or plugin loader. This path skips workspace and `$DSH_HOME` `.env` discovery and the general CLI's dynamic user-patch watch/hot-reload path. All shipped DSH dependencies are exact lockfile pins; `latest`, semver ranges, floating Git refs, and legacy MCP SSE are rejected.
+
+The controlled root Profile places the Action's machine-output protocol after rc.2 tool-specific system guidance and binds the JSON `operation` field to the exact Controller-selected operation; the Agent cannot reinterpret a `task` as `implement` merely because it edits files. In particular, Web Search citations may use Markdown only inside JSON string fields; the root Agent must still return one complete schema-v1 JSON object, and operation changes, fences, prefaces, suffixes, or a separate citation list are rejected. This root-only section is empty for `native.subagent`, whose ordinary response is returned to the parent Agent instead of the Action output boundary.
 
 The official MCP client supports the transports exposed here:
 
@@ -239,7 +242,7 @@ See [`docs/extension-contracts.md`](docs/extension-contracts.md) for the exact P
 
 ### Compatibility
 
-The default `strict` profile preserves the v0.4 review, diagnose, fix, implement, auto, task, multi-turn, sticky-comment, and Controller-owned GitHub-write paths. Existing input names, scalar outputs, and the schema-v1 `result-json` envelope remain compatible. v0.5 adds opt-in `standard`/`custom` Agent permissions and validation-definition integrity without adding session resume, label/assignee triggers, custom trigger phrases, branch templates, Agent Teams, or other platform expansion.
+The default `strict` profile preserves the v0.4/v0.5.0 review, diagnose, fix, implement, auto, task, multi-turn, sticky-comment, and Controller-owned GitHub-write paths. Existing input names, scalar outputs, and the schema-v1 `result-json` envelope remain compatible. v0.5.1 is a runtime-compatibility, architecture, and stability release; it does not add Session/Resume, Label/Assignee triggers, custom trigger phrases, branch templates, Agent Teams, a GitHub App/installer, or unrelated product expansion.
 
 ## Progress and structured outputs
 
@@ -254,6 +257,8 @@ When an authorized read-only operation resolves to a pull request or issue, the 
 
 On success, the detailed review, diagnosis, or validated write result replaces that same comment. A read-only failure can update it with a stable error code, phase, redacted bounded message, and next step. If an authorized `@dsh task --write` finishes with no repository changes, the Controller makes no commit, ref, pull-request, or release mutation but still publishes the final answer to the resolved Issue/PR and records the no-change result in outputs and the step summary. A blocked request or a write that fails before/during final validation still emits only outputs and a step summary. Only markers authored by the expected numeric bot ID are updated; user-forged markers are ignored. Eligible lifecycle comment updates are best effort, so a temporary GitHub comments API failure does not hide the real agent, validation, or write outcome.
 
+On `SIGTERM` or `SIGINT`, v0.5.1 aborts the active worker and immediately starts a bounded, best-effort terminal lifecycle update while run-scoped cleanup proceeds. A later authoritative non-cancellation failure can correct a provisional cancellation state, and terminal-state guards prevent queued “In progress” work from overwriting the result. A forced `SIGKILL`, runner/host loss, process crash, or a network/GitHub API outage can prevent all finalization code from running, so a sticky comment can still remain at “In progress.” Workflow concurrency remains important, and operators should diagnose the authoritative Actions conclusion rather than treating a stale comment as proof that work is still running.
+
 `progress-comment` defaults to `true`. Disable intermediate lifecycle updates with:
 
 ```yaml
@@ -263,7 +268,7 @@ with:
 
 This disables lifecycle updates only. It does not disable normal inline review comments, review summaries, CI diagnoses, or final fix status publication.
 
-Keep the job-level `timeout-minutes` a few minutes above the action input of the same name. This gives the internal DSH watchdog time to stop the worker and finalize failure outputs, the step summary, and any eligible read-only sticky comment.
+Keep the job-level `timeout-minutes` a few minutes above the action input of the same name. This gives the internal DSH watchdog time to stop the worker and finalize failure outputs, the step summary, and any eligible read-only sticky comment. Runtime creation and installation, extension installation, each Agent turn, and validation each receive the smaller of their own cap and the remaining overall execution deadline, so setup cannot silently consume the complete task budget. Cleanup and cancellation-comment finalization instead receive separate, fixed short best-effort grace periods after the outcome or deadline; they cannot hang indefinitely, but they can extend wall-clock time slightly beyond the configured execution deadline.
 
 The action sets `result-json` on success, neutral, and failure paths. This is a `schemaVersion: 1` JSON envelope containing the applicable `status`, operation, summary, timing, policy/capabilities, permission audit, effective extension audit, bounded tool receipts, actual isolation report, publication statistics, controller validation and validation-integrity audit, write result, sticky comment ID, and error. `status` is one of `success`, `neutral`, `failed`, `timed_out`, `validation_failed`, or `denied`. `validation_failed` covers both invalid DSH structured output and controller validation failure; `error.code` distinguishes them. A failure object carries stable `code`, `phase`, `title`, `message`, `guidance`, and `retryable` fields.
 
@@ -354,7 +359,7 @@ Workflow permissions used by the supplied templates are:
 | Commands that support fix / implement    | `contents: write`, `actions: read`, `checks: read`, `issues: write`, `pull-requests: write` |
 | CI auto-fix                              | Same as the preceding row                                                                   |
 
-Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH workspace, MCP/Plugin configuration, or validation commands. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.5.0 retains only the audited `@deepseek-ai/dsh@0.1.0-rc.8` and `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8` lock; another version requires a matching policy/profile review.
+Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH prompt, workspace, MCP/Plugin configuration, worker argv/environment, or validation commands. Input and pre-launch checks reject accidental interpolation without echoing the credential. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.5.1 accepts only the audited `@deepseek-ai/dsh@0.1.1-rc.2` family and committed exact lock; another version requires a matching policy/profile review.
 
 ## Architecture
 
@@ -379,9 +384,17 @@ Action outputs: legacy scalars + versioned result-json
 
 The DSH worker does not hold a GitHub client. Model output must pass schema validation before the controller maps it to diff lines or invokes an authorized tool. Read-only tracking comments remain Controller-owned; write-task comments and every trusted write additionally wait for successful final repository validation. The controlled Profile is generated only from trusted workflow inputs after Controller validation; repository content and model output cannot modify the MCP/Bundle/Plugin set.
 
+v0.5.1 keeps that external flow while separating runtime installation and inventory audit, process launch, Docker/network policy, Profile setup, receipt reconciliation, timeout, and cleanup into run-scoped responsibilities. Validation integrity likewise builds a normalized command graph before planning any baseline replay. Receipt collection advances from the prior byte offset and uses set-based reconciliation, avoiding repeated whole-file scans without changing the public output format.
+
+## Core release E2E
+
+The permanent [Core E2E workflow](.github/workflows/e2e.yml) must first be reviewed and merged to the default branch as trusted harness code. A maintainer then dispatches that default-branch workflow with the full candidate SHA and its open, non-draft, same-repository PR number after setting `DSH_E2E_CANDIDATE_SHA` to the same SHA. The gate has no secret access: it requires a write-capable actor, binds the PR head and default base, and verifies that the dispatch/workflow SHA equals the live default-branch SHA. The read-only, write, and cancellation jobs all use the protected `core-e2e` environment; configure that environment to allow only the default branch before adding `DEEPSEEK_API_KEY`.
+
+Harness files and fixtures are checked out at the immutable default-branch SHA emitted by the gate, while candidate Action code is checked out only at the separately bound candidate SHA and every checkout uses `persist-credentials: false`. No-mutation paths compare default-branch state, the complete candidate identity/comments, every `dsh/task-*` ref with its object type/SHA, and Controller task-PR state/draft/head/base/body data. The cancellation path creates a run/attempt/candidate-marked temporary Issue, locks the single bot comment ID through its in-progress-to-cancelled transition, then strictly deletes that comment and closes the Issue; it never reuses or overwrites the candidate PR sticky comment.
+
 ## Release canary
 
-The lightweight [release canary](.github/workflows/release-canary.yml) runs weekly or manually with `contents: read`, one `strict` read-only task, and no matrix or mutation scope. Release maintainers set repository variable `DSH_V050_CANARY_SHA` to the lowercase, full 40-character v0.5.0 release commit SHA and provide `DEEPSEEK_API_KEY`; the workflow validates and checks out that immutable ref before using the local action.
+The lightweight [release canary](.github/workflows/release-canary.yml) runs weekly or manually with `contents: read`, one `strict` read-only task, and no matrix or mutation scope. Its secretless gate requires the workflow ref to be `refs/heads/main` and the run/workflow SHA to equal the live default-branch SHA; the secret-bearing smoke job uses the same protected, main-only `core-e2e` environment as Core E2E. Release maintainers set repository variable `DSH_RELEASE_CANARY_SHA` to the lowercase, full 40-character commit SHA referenced by the formal v0.5.1 tag and GitHub Release, and provide `DEEPSEEK_API_KEY`. The workflow verifies that the tag, non-draft/non-prerelease Release, and variable resolve to the same immutable commit before checkout and local Action execution.
 
 ## Development
 

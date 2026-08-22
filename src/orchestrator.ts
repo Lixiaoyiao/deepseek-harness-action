@@ -3,28 +3,19 @@
  * Copyright (c) 2025 Anthropic, PBC. MIT licensed; see THIRD_PARTY_NOTICES.md.
  */
 import * as core from "@actions/core";
-import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { finalizeWorkflowRunRoute, routeCommand, type RoutedCommand } from "./commands/router.js";
 import { finishDiagnosis } from "./commands/diagnose.js";
-import { finishImplementation } from "./commands/implement.js";
 import { finishReview } from "./commands/review.js";
-import { finishAutomationTask, publishTaskAnswer } from "./commands/task.js";
+import { publishTaskAnswer } from "./commands/task.js";
 import { AgentDeadlineError, runAgentLoop } from "./agent/loop.js";
-import type { DshRunResult } from "./dsh/runner.js";
-import { formatCiEvidence } from "./ci/diagnose.js";
-import { fetchCiEvidence } from "./github/checks.js";
-import { createGitHubClient, type GitHubClient } from "./github/client.js";
-import {
-  fetchEntitySnapshot,
-  fetchPullRequestSnapshot,
-  type EntitySnapshot,
-  type PullRequestSnapshot,
-} from "./github/fetch.js";
-import { parseGitHubContext, isWorkflowRunContext, type GitHubContext } from "./github/context.js";
+import { DshAbortedError } from "./dsh/errors.js";
+import { createGitHubClient } from "./github/client.js";
+import { fetchEntitySnapshot, type EntitySnapshot } from "./github/fetch.js";
+import { parseGitHubContext } from "./github/context.js";
 import { isFailedWorkflowRun, readEventPayload } from "./github/payload.js";
 import { checkActorPermissions } from "./github/permissions.js";
 import { StickyProgressReporter } from "./github/progress.js";
@@ -33,15 +24,17 @@ import { materializeRepositoryAtSha } from "./github/repository.js";
 import { createWorkspaceSnapshot, type WorkspaceSnapshot } from "./write/workspace.js";
 import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
-import { sanitizeUntrustedText } from "./security/redaction.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
 import { buildPermissionAudit, type PermissionAudit } from "./permissions/profile.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
 import { ToolRouter } from "./tools/router.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
+import { throwIfCancelled } from "./lifecycle/cancellation.js";
+import { PHASE_TIMEOUTS, phaseTimeoutMs, settleWithin } from "./lifecycle/deadline.js";
 import {
   describeActionFailure,
+  type ActionFailure,
   type ActionPhase,
   type AgentRunSummary,
   type RunOutcome,
@@ -53,6 +46,27 @@ import {
   ValidationIntegrityError,
   type ValidationIntegritySummary,
 } from "./write/validation-integrity.js";
+import {
+  remainingValidationMs as remainingSharedValidationMs,
+  withinValidationDeadline as withinSharedValidationDeadline,
+  type ValidationDeadline,
+} from "./write/validation-deadline.js";
+import {
+  assertOperationContext,
+  buildContextPacket,
+  deferProgressUntilWriteValidation,
+  requireWorkspace,
+  resolvePullRequest,
+  runUrl,
+  taskIdentity,
+} from "./orchestration/context.js";
+import { executeWrite, type WriteOutcome } from "./orchestration/write.js";
+
+export {
+  assertOperationContext,
+  boundedText,
+  deferProgressUntilWriteValidation,
+} from "./orchestration/context.js";
 
 interface RunState {
   phase: ActionPhase;
@@ -65,15 +79,86 @@ interface RunState {
   permission?: PermissionAudit;
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
+  progressFailure?: ProgressFailureFinalization;
 }
 
-interface WriteOutcome {
-  readonly writeStatus: "success" | "partial-success";
-  readonly commitSha?: string;
-  readonly changedPaths?: readonly string[];
-  readonly branchName?: string;
-  readonly pullRequestNumber?: number;
-  readonly pullRequestUrl?: string;
+interface ProgressFailureFinalization {
+  readonly failure: ActionFailure;
+  readonly deadlineMs: number;
+  status: "pending" | "succeeded" | "failed";
+  promise: Promise<void>;
+}
+
+function progressFailureStatus(
+  attempt: ProgressFailureFinalization,
+): ProgressFailureFinalization["status"] {
+  // The promise callbacks mutate this field asynchronously. Reading it through
+  // a function prevents control-flow narrowing from treating the earlier
+  // "pending" observation as immutable across the await below.
+  return attempt.status;
+}
+
+export interface RunActionOptions {
+  readonly signal?: AbortSignal;
+}
+
+function startProgressFailure(
+  state: RunState,
+  error: unknown,
+): ProgressFailureFinalization | undefined {
+  const progress = state.progress;
+  if (progress === undefined) return undefined;
+  const failure = describeActionFailure(error, state.phase);
+  const existing = state.progressFailure;
+  if (
+    existing !== undefined &&
+    (existing.failure.code !== "DSH_ABORTED" || failure.code === "DSH_ABORTED")
+  ) {
+    return existing;
+  }
+  const attempt: ProgressFailureFinalization = {
+    failure,
+    deadlineMs: Date.now() + PHASE_TIMEOUTS.cancellationFinalizationMs,
+    status: "pending",
+    promise: Promise.resolve(),
+  };
+  attempt.promise = Promise.resolve()
+    .then(async () => progress.fail(attempt.failure))
+    .then(
+      () => {
+        attempt.status = "succeeded";
+      },
+      () => {
+        attempt.status = "failed";
+      },
+    );
+  state.progressFailure = attempt;
+  return attempt;
+}
+
+async function finishProgressFailure(state: RunState, error: unknown): Promise<void> {
+  const attempt = state.progressFailure ?? startProgressFailure(state, error);
+  if (attempt === undefined || attempt.status === "succeeded") return;
+  if (attempt.status === "failed") {
+    core.warning(
+      "The best-effort progress comment finalization failed; the primary action result was preserved.",
+    );
+    return;
+  }
+  const remainingMs = Math.max(0, attempt.deadlineMs - Date.now());
+  if (remainingMs > 0) {
+    const result = await settleWithin(attempt.promise, remainingMs);
+    if (result.settled && progressFailureStatus(attempt) === "succeeded") return;
+    if (result.settled && progressFailureStatus(attempt) === "failed") {
+      core.warning(
+        "The best-effort progress comment finalization failed; the primary action result was preserved.",
+      );
+      return;
+    }
+  }
+  core.warning(
+    "The best-effort progress comment finalization timed out; the primary action result was preserved.",
+  );
 }
 
 type FinalizedOperation =
@@ -86,388 +171,6 @@ type FinalizedOperation =
     }
   | { readonly kind: "blocked" }
   | { readonly kind: "write"; readonly write: WriteOutcome };
-
-function runUrl(context: GitHubContext): string {
-  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  return `${server}/${context.repository.fullName}/actions/runs/${context.runId}`;
-}
-
-export function deferProgressUntilWriteValidation(
-  command: Pick<RoutedCommand, "requestedAccess">,
-): boolean {
-  return command.requestedAccess === "write";
-}
-
-function taskIdentity(
-  command: RoutedCommand,
-  inputs: ActionInputs,
-  extensionAuditDigest: string,
-  permissionDigest: string,
-): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        operation: command.operation,
-        access: command.requestedAccess,
-        instructions: command.instructions,
-        permissionProfile: inputs.permissionProfile,
-        allowedTools: inputs.allowedTools,
-        disallowedTools: inputs.disallowedTools,
-        validationIntegrity: inputs.validationIntegrity,
-        toolConfig: inputs.toolConfig,
-        // This identity can influence public branch names and PR markers. Bind
-        // it to the redacted audit surface, never the secret-bearing effective
-        // MCP/Plugin configuration used by the private runtime lock.
-        extensionAuditDigest,
-        permissionDigest,
-        allowPluginInstall: inputs.allowPluginInstall,
-      }),
-      "utf8",
-    )
-    .digest("hex");
-}
-
-function issueTaskIdentity(
-  baseIdentity: string,
-  snapshot: Extract<EntitySnapshot, { kind: "issue" }>,
-): string {
-  return createHash("sha256")
-    .update([baseIdentity, snapshot.state, snapshot.contentFingerprint].join("\0"), "utf8")
-    .digest("hex");
-}
-
-export function boundedText(value: string, maximumBytes: number): string {
-  const raw = Buffer.from(value, "utf8");
-  if (raw.byteLength <= maximumBytes) return value;
-  const marker = Buffer.from("\n[truncated by dsh-action]", "utf8");
-  let prefix = raw.subarray(0, Math.max(0, maximumBytes - marker.byteLength)).toString("utf8");
-  while (Buffer.byteLength(prefix, "utf8") + marker.byteLength > maximumBytes) {
-    prefix = prefix.slice(0, -1);
-  }
-  return prefix + marker.toString("utf8");
-}
-
-/** Enforce the Claude-style operation/entity state machine before invoking DSH. */
-export function assertOperationContext(
-  command: RoutedCommand,
-  context: GitHubContext,
-  snapshot: EntitySnapshot | undefined,
-): void {
-  const assertTrustedWriteTarget = (): void => {
-    const defaultBranch = context.repository.defaultBranch;
-    if (defaultBranch === undefined) {
-      throw new Error("Cannot authorize a trusted write without the default branch identity");
-    }
-    if (snapshot?.kind === "pull_request" && snapshot.headRef === defaultBranch) {
-      throw new Error("Refusing to update the repository default branch from a pull-request write");
-    }
-  };
-  if (command.operation === "task") {
-    if (command.requestedAccess === "write") assertTrustedWriteTarget();
-    return;
-  }
-  if (command.operation === "implement") {
-    if (snapshot?.kind !== "issue") {
-      throw new Error("@dsh implement is supported only on issues");
-    }
-    if (command.requestedAccess === "write") assertTrustedWriteTarget();
-    return;
-  }
-  if (command.operation === "review" || command.operation === "fix") {
-    if (snapshot?.kind !== "pull_request") {
-      throw new Error(`@dsh ${command.operation} is supported only on pull requests`);
-    }
-    if (command.operation === "fix" && command.requestedAccess === "write") {
-      assertTrustedWriteTarget();
-    }
-    return;
-  }
-  if (snapshot?.kind !== "pull_request" && !isWorkflowRunContext(context)) {
-    throw new Error("@dsh diagnose requires a pull request or workflow_run context");
-  }
-}
-
-function sanitizedSnapshot(snapshot: EntitySnapshot): unknown {
-  if (snapshot.kind === "issue") {
-    let commentBytes = 0;
-    return {
-      ...snapshot,
-      title: boundedText(sanitizeUntrustedText(snapshot.title), 2 * 1024),
-      body: boundedText(sanitizeUntrustedText(snapshot.body), 12 * 1024),
-      comments: snapshot.comments.slice(-20).flatMap((comment) => {
-        const body = boundedText(sanitizeUntrustedText(comment.body), 2 * 1024);
-        const bytes = Buffer.byteLength(body, "utf8");
-        if (commentBytes + bytes > 6 * 1024) return [];
-        commentBytes += bytes;
-        return [{ ...comment, body }];
-      }),
-    };
-  }
-  let contentBytes = 0;
-  let commentBytes = 0;
-  return {
-    kind: snapshot.kind,
-    number: snapshot.number,
-    author: snapshot.author,
-    baseSha: snapshot.baseSha,
-    baseRef: snapshot.baseRef,
-    baseRepository: snapshot.baseRepository,
-    baseRepositoryId: snapshot.baseRepositoryId,
-    headSha: snapshot.headSha,
-    headRef: snapshot.headRef,
-    headRepository: snapshot.headRepository,
-    headRepositoryId: snapshot.headRepositoryId,
-    draft: snapshot.draft,
-    isFork: snapshot.isFork,
-    diffTruncated: snapshot.diffTruncated,
-    title: boundedText(sanitizeUntrustedText(snapshot.title), 2 * 1024),
-    body: boundedText(sanitizeUntrustedText(snapshot.body), 12 * 1024),
-    comments: snapshot.comments.slice(-20).flatMap((comment) => {
-      const body = boundedText(sanitizeUntrustedText(comment.body), 2 * 1024);
-      const bytes = Buffer.byteLength(body, "utf8");
-      if (commentBytes + bytes > 6 * 1024) return [];
-      commentBytes += bytes;
-      return [{ ...comment, body }];
-    }),
-    changedFiles: snapshot.changedFiles.slice(0, 100).map((file) => {
-      const remaining = Math.max(0, 36 * 1024 - contentBytes);
-      const patch =
-        file.patch === undefined
-          ? undefined
-          : boundedText(sanitizeUntrustedText(file.patch), Math.min(12 * 1024, remaining));
-      contentBytes += patch === undefined ? 0 : Buffer.byteLength(patch, "utf8");
-      const sourceRemaining = Math.max(0, 36 * 1024 - contentBytes);
-      const source =
-        file.source === undefined
-          ? undefined
-          : boundedText(sanitizeUntrustedText(file.source), Math.min(4 * 1024, sourceRemaining));
-      contentBytes += source === undefined ? 0 : Buffer.byteLength(source, "utf8");
-      return { ...file, patch, source };
-    }),
-  };
-}
-
-async function resolvePullRequest(
-  client: GitHubClient,
-  context: GitHubContext,
-): Promise<PullRequestSnapshot | undefined> {
-  if (context.kind === "entity" && context.isPullRequest) {
-    return fetchPullRequestSnapshot(client, context, context.entityNumber);
-  }
-  if (isWorkflowRunContext(context)) {
-    const pullNumber = context.workflowRun.pullRequestNumbers[0];
-    if (pullNumber !== undefined) return fetchPullRequestSnapshot(client, context, pullNumber);
-  }
-  return undefined;
-}
-
-function requireWorkspace(): string {
-  const workspace = process.env.GITHUB_WORKSPACE;
-  if (workspace === undefined || workspace === "") throw new Error("GITHUB_WORKSPACE is missing");
-  return resolve(workspace);
-}
-
-async function buildContextPacket(
-  client: GitHubClient,
-  context: GitHubContext,
-  command: RoutedCommand,
-  snapshot: EntitySnapshot | undefined,
-  inputs: ActionInputs,
-): Promise<unknown> {
-  let ci: string | undefined;
-  if (
-    (command.operation === "diagnose" || command.operation === "fix") &&
-    snapshot?.kind === "pull_request"
-  ) {
-    ci = formatCiEvidence(
-      await fetchCiEvidence(client, context.repository.owner, context.repository.repo, {
-        headSha: snapshot.headSha,
-        secrets: [inputs.githubToken, inputs.deepseekApiKey],
-        ...(isWorkflowRunContext(context) ? { workflowRunId: context.workflowRun.id } : {}),
-      }),
-    );
-  } else if (
-    command.operation === "diagnose" &&
-    isWorkflowRunContext(context) &&
-    snapshot === undefined
-  ) {
-    ci = formatCiEvidence(
-      await fetchCiEvidence(client, context.repository.owner, context.repository.repo, {
-        headSha: context.workflowRun.headSha,
-        workflowRunId: context.workflowRun.id,
-        secrets: [inputs.githubToken, inputs.deepseekApiKey],
-      }),
-    );
-  }
-  return {
-    event: { name: context.rawEventName, action: context.eventAction },
-    repository: context.repository.fullName,
-    entity: snapshot === undefined ? undefined : sanitizedSnapshot(snapshot),
-    ci: ci === undefined ? undefined : boundedText(ci, 32 * 1024),
-  };
-}
-
-async function executeWrite(
-  client: GitHubClient,
-  context: GitHubContext,
-  command: RoutedCommand,
-  inputs: ActionInputs,
-  policy: SecurityPolicy,
-  snapshot: EntitySnapshot | undefined,
-  workspaceCopy: WorkspaceSnapshot,
-  boundWriteSha: string,
-  agentResult: DshRunResult,
-  validationTimeoutMs: number,
-  taskIdentity: string,
-  onPhase: (phase: "validation" | "write") => void,
-): Promise<WriteOutcome> {
-  if (
-    command.operation === "implement" &&
-    snapshot?.kind === "issue" &&
-    policy.capabilities.createPullRequest
-  ) {
-    const result = await finishImplementation({
-      client,
-      owner: context.repository.owner,
-      repo: context.repository.repo,
-      issueNumber: snapshot.number,
-      issueTitle: snapshot.title,
-      issueIdentity: {
-        state: snapshot.state,
-        updatedAt: snapshot.updatedAt,
-        contentFingerprint: snapshot.contentFingerprint,
-      },
-      baseBranch: context.repository.defaultBranch ?? "main",
-      snapshot: workspaceCopy,
-      boundHeadSha: boundWriteSha,
-      operationKey: context.runId,
-      result: agentResult,
-      inputs,
-      validationTimeoutMs,
-      onPhase,
-    });
-    return {
-      writeStatus: "success",
-      branchName: result.branch,
-      pullRequestNumber: result.pullNumber,
-      pullRequestUrl: result.url,
-    };
-  }
-  if (
-    command.operation === "task" &&
-    snapshot?.kind === "issue" &&
-    policy.capabilities.createPullRequest
-  ) {
-    const result = await finishAutomationTask({
-      client,
-      owner: context.repository.owner,
-      repo: context.repository.repo,
-      baseBranch: context.repository.defaultBranch ?? "main",
-      boundHeadSha: boundWriteSha,
-      runIdentity: context.runId,
-      taskIdentity: issueTaskIdentity(taskIdentity, snapshot),
-      snapshot: workspaceCopy,
-      result: agentResult,
-      runUrl: runUrl(context),
-      runTests: inputs.runTests,
-      testCommands: inputs.testCommands,
-      containerImage: inputs.containerImage,
-      validationTimeoutMs,
-      relatedIssue: {
-        number: snapshot.number,
-        identity: {
-          state: snapshot.state,
-          updatedAt: snapshot.updatedAt,
-          contentFingerprint: snapshot.contentFingerprint,
-        },
-      },
-      onPhase,
-    });
-    return {
-      writeStatus: "success",
-      branchName: result.branch,
-      pullRequestNumber: result.pullNumber,
-      pullRequestUrl: result.url,
-    };
-  }
-  // Same-repository PR fixes are committed through the controller's GitHub API
-  // after one final immutable-head check; DSH never receives that credential.
-  if (
-    snapshot?.kind === "pull_request" &&
-    policy.capabilities.modifyWorkspace &&
-    policy.capabilities.commit &&
-    policy.capabilities.push
-  ) {
-    const { finishFix } = await import("./commands/fix.js");
-    onPhase("write");
-    await revalidatePullRequestHead(
-      client,
-      context.repository.owner,
-      context.repository.repo,
-      snapshot.number,
-      snapshot.headSha,
-    );
-    const result = await finishFix({
-      client,
-      target: {
-        owner: context.repository.owner,
-        repo: context.repository.repo,
-        issueNumber: snapshot.number,
-      },
-      expectedAuthorId: inputs.botUserId,
-      snapshot: workspaceCopy,
-      boundHeadSha: snapshot.headSha,
-      headBranch: snapshot.headRef,
-      identity: {
-        headSha: snapshot.headSha,
-        headRef: snapshot.headRef,
-        headRepositoryId: snapshot.headRepositoryId ?? -1,
-        baseRepositoryId: snapshot.baseRepositoryId,
-      },
-      result: agentResult,
-      inputs,
-      runUrl: runUrl(context),
-      validationTimeoutMs,
-      onPhase,
-    });
-    return {
-      writeStatus: result.status,
-      commitSha: result.commitSha,
-      changedPaths: result.paths,
-    };
-  }
-  if (
-    command.operation === "task" &&
-    snapshot === undefined &&
-    context.kind === "automation" &&
-    policy.capabilities.createPullRequest
-  ) {
-    const result = await finishAutomationTask({
-      client,
-      owner: context.repository.owner,
-      repo: context.repository.repo,
-      baseBranch: context.repository.defaultBranch ?? "main",
-      boundHeadSha: boundWriteSha,
-      runIdentity: context.runId,
-      taskIdentity,
-      snapshot: workspaceCopy,
-      result: agentResult,
-      runUrl: runUrl(context),
-      runTests: inputs.runTests,
-      testCommands: inputs.testCommands,
-      containerImage: inputs.containerImage,
-      validationTimeoutMs,
-      onPhase,
-    });
-    return {
-      writeStatus: "success",
-      branchName: result.branch,
-      pullRequestNumber: result.pullNumber,
-      pullRequestUrl: result.url,
-    };
-  }
-  throw new Error("The resolved entity does not support this write operation");
-}
 
 function outcomeContext(state: RunState, startedAt: number) {
   return {
@@ -493,7 +196,12 @@ function successfulValidation(
 }
 
 /** Claude Action-style prepare -> route -> authorize -> run -> finalize orchestration. */
-async function runActionInternal(state: RunState, startedAt: number): Promise<RunOutcome> {
+async function runActionInternal(
+  state: RunState,
+  startedAt: number,
+  options: RunActionOptions,
+): Promise<RunOutcome> {
+  throwIfCancelled(options.signal);
   state.phase = "configuration";
   const inputs = loadInputs();
   state.validationCommandCount = inputs.testCommands.length;
@@ -538,6 +246,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
   }
 
   const client = createGitHubClient(inputs.githubToken);
+  throwIfCancelled(options.signal);
   state.phase = "authorization";
   const permissions = await checkActorPermissions(client, context);
   state.phase = "context";
@@ -583,6 +292,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       operation: command.operation,
       policy,
       runUrl: currentRunUrl,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     return state.progress;
   };
@@ -591,6 +301,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       "context",
       "Permission checks passed. Preparing a bounded, immutable context snapshot.",
     );
+    throwIfCancelled(options.signal);
   }
 
   state.phase = "context";
@@ -708,6 +419,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       inputs,
       {
         deadlineMs,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(toolProvider === undefined ? {} : { toolProvider }),
         redact,
         onTurn: async (turn, maxTurns) => {
@@ -779,10 +491,34 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
           return { kind: "blocked" };
         },
         finalize: async (agentResult, remainingMs): Promise<FinalizedOperation> => {
+          let validationBudget: ValidationDeadline | undefined;
           const remainingControllerMs = (): number => {
+            throwIfCancelled(options.signal);
             const remaining = Math.min(remainingMs, deadlineMs - Date.now());
             if (remaining <= 0) throw new AgentDeadlineError();
             return remaining;
+          };
+          const controllerValidationBudget = (): ValidationDeadline => {
+            throwIfCancelled(options.signal);
+            if (validationBudget === undefined) {
+              const phaseMs = Math.min(
+                remainingControllerMs(),
+                phaseTimeoutMs(deadlineMs, PHASE_TIMEOUTS.validationMs, Date.now),
+              );
+              validationBudget = {
+                deadlineMs: Date.now() + phaseMs,
+                ...(options.signal === undefined ? {} : { signal: options.signal }),
+              };
+            }
+            return validationBudget;
+          };
+          const remainingValidationMs = (): number => {
+            remainingControllerMs();
+            return remainingSharedValidationMs(controllerValidationBudget());
+          };
+          const withinValidationDeadline = async <T>(start: () => Promise<T>): Promise<T> => {
+            remainingControllerMs();
+            return await withinSharedValidationDeadline(start, controllerValidationBudget());
           };
           if (command.operation === "review" && snapshot?.kind === "pull_request") {
             state.phase = "publication";
@@ -839,12 +575,15 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
           ) {
             state.phase = "validation";
             remainingControllerMs();
-            const integrity = await inspectValidationIntegrity({
-              snapshot: workspaceCopy,
-              changes,
-              commands: inputs.testCommands,
-              mode: inputs.validationIntegrity,
-            });
+            const validationWorkspace = workspaceCopy;
+            const integrity = await withinValidationDeadline(async () =>
+              inspectValidationIntegrity({
+                snapshot: validationWorkspace,
+                changes,
+                commands: inputs.testCommands,
+                mode: inputs.validationIntegrity,
+              }),
+            );
             state.validationIntegrity = integrity;
             if (integrity.status === "warned") {
               const warningKey = JSON.stringify(
@@ -897,16 +636,21 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             "The structured change is ready. Running configured validation before any GitHub write.",
           );
           if (state.validationIntegrity !== undefined) {
+            const integrityAudit = state.validationIntegrity;
+            const validationWorkspace = workspaceCopy;
             try {
-              state.validationIntegrity = await enforceValidationIntegrity({
-                snapshot: workspaceCopy,
-                commands: inputs.testCommands,
-                audit: state.validationIntegrity,
-                baselineReplay: {
-                  containerImage: inputs.containerImage,
-                  timeoutMs: remainingControllerMs(),
-                },
-              });
+              state.validationIntegrity = await withinValidationDeadline(async () =>
+                enforceValidationIntegrity({
+                  snapshot: validationWorkspace,
+                  commands: inputs.testCommands,
+                  audit: integrityAudit,
+                  baselineReplay: {
+                    containerImage: inputs.containerImage,
+                    timeoutMs: remainingValidationMs(),
+                    ...(options.signal === undefined ? {} : { signal: options.signal }),
+                  },
+                }),
+              );
             } catch (error: unknown) {
               if (error instanceof ValidationIntegrityError) {
                 state.validationIntegrity = error.audit;
@@ -914,7 +658,7 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
               throw error;
             }
           }
-          const writeRemainingMs = remainingControllerMs();
+          const writeValidationDeadlineMs = controllerValidationBudget().deadlineMs;
           const write = await executeWrite(
             client,
             context,
@@ -925,11 +669,12 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
             workspaceCopy,
             boundWriteSha,
             agentResult,
-            writeRemainingMs,
+            writeValidationDeadlineMs,
             operationIdentity,
             (phase) => {
               state.phase = phase;
             },
+            options.signal,
           );
           return { kind: "write", write };
         },
@@ -1017,10 +762,23 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
       validation: successfulValidation(inputs, state.validationIntegrity),
       ...write,
     };
+  } catch (error: unknown) {
+    if (error instanceof ValidationIntegrityError) state.validationIntegrity = error.audit;
+    // Begin terminal publication before temporary-directory cleanup. For
+    // signal-driven Agent cancellation an even earlier abort listener starts
+    // the same idempotent attempt while nested runtime cleanup is still active.
+    startProgressFailure(state, error);
+    throw error;
   } finally {
     if (tempRoot !== undefined) {
       try {
-        await rm(tempRoot, { recursive: true, force: true });
+        const cleanup = await settleWithin(
+          rm(tempRoot, { recursive: true, force: true }),
+          PHASE_TIMEOUTS.cleanupMs,
+        );
+        if (!cleanup.settled) {
+          core.warning("The temporary DeepSeek Harness workspace cleanup timed out.");
+        }
       } catch {
         // Cleanup is secondary. It must not turn an already-published review or
         // completed remote write into a failed run that may be retried.
@@ -1030,14 +788,27 @@ async function runActionInternal(state: RunState, startedAt: number): Promise<Ru
   }
 }
 
-export async function runAction(): Promise<RunOutcome> {
+export async function runAction(options: RunActionOptions = {}): Promise<RunOutcome> {
   const startedAt = Date.now();
   const state: RunState = { phase: "configuration" };
+  const beginCancellationFinalization = (): void => {
+    if (state.progress === undefined || state.phase === "publication" || state.phase === "write") {
+      return;
+    }
+    const cancellation =
+      options.signal?.reason instanceof Error ? options.signal.reason : new DshAbortedError();
+    startProgressFailure(state, cancellation);
+  };
+  options.signal?.addEventListener("abort", beginCancellationFinalization, { once: true });
+  if (options.signal?.aborted === true) beginCancellationFinalization();
   try {
-    return await runActionInternal(state, startedAt);
+    return await runActionInternal(state, startedAt, options);
   } catch (error: unknown) {
+    // Abort-aware boundaries throw their own DshAbortedError. Never replace an
+    // independent validation/security/write failure merely because a signal
+    // happened to arrive before this catch ran.
     const failure = describeActionFailure(error, state.phase);
-    await state.progress?.fail(failure);
+    await finishProgressFailure(state, error);
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
@@ -1057,6 +828,8 @@ export async function runAction(): Promise<RunOutcome> {
       ...(validation === undefined ? {} : { validation }),
       error: failure,
     };
+  } finally {
+    options.signal?.removeEventListener("abort", beginCancellationFinalization);
   }
 }
 

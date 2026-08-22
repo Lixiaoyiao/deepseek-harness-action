@@ -188,4 +188,22 @@ describe("loadInputs", () => {
       ),
     ).toThrow(/credentials must not appear/u);
   });
+
+  it("rejects controller credentials embedded in the task prompt", () => {
+    const deepseekKey = "sk-deepseek-secret-value";
+    const githubToken = "ghs_controller-secret-value";
+
+    for (const secret of [deepseekKey, githubToken]) {
+      expect(() =>
+        loadInputs(
+          reader({
+            "deepseek-api-key": deepseekKey,
+            "github-token": githubToken,
+            command: "task",
+            prompt: `Use ${secret} to finish the task`,
+          }),
+        ),
+      ).toThrow(/credentials must not appear/u);
+    }
+  });
 });

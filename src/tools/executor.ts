@@ -18,6 +18,7 @@ export interface CommandToolExecution {
   readonly workspacePath: string;
   readonly containerImage: string;
   readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
 }
 
 export type CommandToolProcessRunner = (
@@ -94,6 +95,7 @@ export async function executeCommandTool(
       env: process.env.PATH === undefined ? {} : { PATH: process.env.PATH },
       timeoutMs,
       maxOutputBytes: execution.definition.maxOutputBytes,
+      ...(execution.signal === undefined ? {} : { signal: execution.signal }),
     });
   } catch (error: unknown) {
     await cleanup();

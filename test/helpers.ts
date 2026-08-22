@@ -1,6 +1,7 @@
 import type { ActionInputs } from "../src/inputs.js";
 import type { GitHubContext } from "../src/github/context.js";
 import type { PermissionCheck } from "../src/github/permissions.js";
+import { DSH_VERSION } from "../src/release.js";
 
 export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
   return {
@@ -10,7 +11,7 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     command: "auto",
     taskAccess: "read",
     prompt: "",
-    dshVersion: "0.1.0-rc.8",
+    dshVersion: DSH_VERSION,
     dshExecutable: "",
     isolation: "docker",
     containerImage: "node:24-bookworm",

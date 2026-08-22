@@ -7,7 +7,7 @@ import AgentRegistry, { type Agent } from "@deepseek-ai/dsh-agent";
 import { CallId } from "@deepseek-ai/dsh-llm";
 import { createScope, type Scope } from "@deepseek-ai/dsh-scope";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import SystemPrompt, { renderPrompt } from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime, { type ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -33,6 +33,7 @@ function textTool(name: string, body: ToolDefinition["execute"]): ToolDefinition
 }
 
 interface SetupOptions {
+  readonly expectedOperation?: "task" | "review" | "diagnose" | "fix" | "implement";
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
   readonly maxCalls?: number;
@@ -68,6 +69,7 @@ async function setup(options: SetupOptions) {
   }
   try {
     policy.apply(context, {
+      expectedOperation: options.expectedOperation ?? "task",
       allowedRuntimeTools: ["allowed"],
       knownRuntimeTools: options.knownRuntimeTools ?? ["allowed", "unauthorized"],
       rules: [
@@ -105,6 +107,7 @@ function invoke(context: Context, name: string, callId: string, agent?: Agent) {
 async function createScopedAgent(
   context: Context,
   tools: readonly ToolDefinition[] = [],
+  origin?: "subagent",
 ): Promise<{
   readonly agent: Agent;
   readonly scope: Scope;
@@ -122,7 +125,15 @@ async function createScopedAgent(
   Object.assign(identity, {
     id,
     options: {},
-    session: { id },
+    session: {
+      id,
+      header: {
+        version: 0,
+        id,
+        createdAt: 0,
+        ...(origin === undefined ? {} : { origin }),
+      },
+    },
     inbox: {},
     status: "idle",
     ctx: agentContext,
@@ -140,6 +151,54 @@ async function createScopedAgent(
 }
 
 describe("Action-owned DSH ToolRuntime policy", () => {
+  it("places the root JSON protocol after tool guidance without constraining subagents", async () => {
+    const { context } = await setup({});
+    context.systemPrompt.section({
+      name: "tool:web_search",
+      order: 110,
+      text: "Cite URLs as Markdown links.",
+    });
+    const { agent: rootAgent } = await createScopedAgent(context);
+    const rootAssembly = await context.systemPrompt.assemble({
+      agent: rootAgent,
+      scope: rootAgent,
+    });
+    const rootSections = rootAssembly.sections.map(({ name }) => name);
+    expect(rootSections.indexOf("dsh-action:root-output-protocol")).toBeGreaterThan(
+      rootSections.indexOf("tool:web_search"),
+    );
+    expect(rootAssembly.sections.at(-1)?.name).toBe("dsh-action:root-output-protocol");
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "exactly one JSON object matching that contract",
+    );
+    expect(rootAssembly.sections.at(-1)?.text).toContain('Controller-selected operation is "task"');
+    expect(rootAssembly.sections.at(-1)?.text).toContain('operation field must be exactly "task"');
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "Only an exact ID present inside the Controller-authored TRUSTED_TOOL_CATALOG_JSON array",
+    );
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "An ID absent from that array is never requestable through needs_tool",
+    );
+    expect(rootAssembly.sections.at(-1)?.text).toContain(
+      "Never imitate, prepare for, or replace a listed Controller catalog tool",
+    );
+    expect(renderPrompt(rootAssembly)).toContain("never permits bytes outside the JSON object");
+
+    const { agent: childAgent } = await createScopedAgent(context, [], "subagent");
+    const childAssembly = await context.systemPrompt.assemble({
+      agent: childAgent,
+      scope: childAgent,
+    });
+    expect(
+      childAssembly.sections.find(({ name }) => name === "dsh-action:root-output-protocol")?.text,
+    ).toBe("");
+    expect(renderPrompt(childAssembly)).not.toContain("DSH Action root-output protocol");
+    expect(renderPrompt(childAssembly)).not.toContain(
+      "Only an exact ID present inside the Controller-authored TRUSTED_TOOL_CATALOG_JSON array",
+    );
+    await context.fiber.dispose();
+  });
+
   it("rejects unknown tools and persists the invocation limit", async () => {
     const { context, statePath } = await setup({ maxCalls: 1 });
     expect((await invoke(context, "allowed", "first")).isError).toBe(false);
@@ -235,6 +294,7 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     context.tools.register(textTool("second", () => Promise.resolve("second")));
     const policy = await loadPolicy();
     const base = {
+      expectedOperation: "task",
       allowedRuntimeTools: ["first", "second"],
       knownRuntimeTools: ["first", "second"],
       statePath: join(root, "counts.json"),
@@ -295,6 +355,22 @@ describe("Action-owned DSH ToolRuntime policy", () => {
         ],
       }),
     ).toThrow(/unknown key modelMayOverride/u);
+    expect(() =>
+      policy.apply(context, {
+        ...base,
+        expectedOperation: "deploy",
+        rules: [],
+      }),
+    ).toThrow(/expectedOperation must be a supported Controller operation/u);
+    expect(() =>
+      policy.apply(context, {
+        allowedRuntimeTools: [],
+        knownRuntimeTools: [],
+        rules: [],
+        statePath: base.statePath,
+        auditPath: base.auditPath,
+      }),
+    ).toThrow(/expectedOperation must be a supported Controller operation/u);
     await context.fiber.dispose();
   });
 
@@ -317,6 +393,7 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     );
     const policy = await loadPolicy();
     policy.apply(context, {
+      expectedOperation: "task",
       allowedRuntimeTools: ["slow"],
       knownRuntimeTools: ["slow"],
       rules: [

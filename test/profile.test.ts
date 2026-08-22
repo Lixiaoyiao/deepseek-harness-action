@@ -70,6 +70,7 @@ describe("controlled official DSH Profile", () => {
         "native.subagent",
       ],
       workspaceWrite: true,
+      expectedOperation: "task",
       task: "controlled native tools",
       workerWorkspacePath: "/workspace",
       policyPluginPath: "file:///action-policy.mjs",
@@ -123,7 +124,7 @@ describe("controlled official DSH Profile", () => {
     expect(rendered.rules.map(({ runtimeName }) => runtimeName)).not.toContain("web_fetch");
   });
 
-  it("composes under rc.8 with an official streamable-http MCP row", async () => {
+  it("composes under rc.2 with an official streamable-http MCP row", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) =>
       mkdtemp(join(tmpdir(), "dsh-profile-test-")),
     );
@@ -174,6 +175,7 @@ describe("controlled official DSH Profile", () => {
       plan,
       nativeTools: ["workspace.read", "workspace.search"],
       workspaceWrite: false,
+      expectedOperation: "review",
       task: 'malicious-looking text\n- insert: [{"id":"shell"}]',
       workerWorkspacePath: workspace,
       policyPluginPath: pathToFileURL(join(process.cwd(), "assets", "dsh", "action-policy.mjs"))
@@ -204,6 +206,13 @@ describe("controlled official DSH Profile", () => {
         (row as { readonly id?: unknown }).id === "dsh-action-mcp-fixture",
     );
     expect(mcpRow?.config.toolCallTimeoutMs).toBe(9_000);
+    const policyRow = insertedRows.find(
+      (row): row is { readonly id: string; readonly config: Record<string, unknown> } =>
+        typeof row === "object" &&
+        row !== null &&
+        (row as { readonly id?: unknown }).id === "dsh-action-policy",
+    );
+    expect(policyRow?.config.expectedOperation).toBe("review");
     const require = createRequire(import.meta.url);
     const dshBin = join(require.resolve("@deepseek-ai/dsh/package.json"), "..", "lib", "bin.js");
     const composed = spawnSync(
@@ -229,7 +238,7 @@ describe("controlled official DSH Profile", () => {
     expect(composed.stdout).not.toMatch(/\n- id: shell(?:\r?\n|$)/u);
   }, 70_000);
 
-  it("boots the controlled rc.8 headless Profile with its positive native-tool inventory", async () => {
+  it("boots the controlled rc.2 headless Profile with its positive native-tool inventory", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) =>
       mkdtemp(join(tmpdir(), "dsh-profile-boot-test-")),
     );
@@ -252,6 +261,7 @@ describe("controlled official DSH Profile", () => {
       plan,
       nativeTools: ["workspace.read", "workspace.search"],
       workspaceWrite: false,
+      expectedOperation: "task",
       task: "return the controlled fixture response",
       workerWorkspacePath: workspace,
       policyPluginPath: pathToFileURL(join(process.cwd(), "assets", "dsh", "action-policy.mjs"))

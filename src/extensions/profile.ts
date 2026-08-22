@@ -2,6 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { DshOperation } from "../dsh/schema.js";
 import type { NativeToolId } from "../tools/schema.js";
 import { mcpPublicToolName } from "./plan.js";
 import type { EffectiveExtensionPlan, ExtensionToolGrant } from "./plan.js";
@@ -36,6 +37,7 @@ export interface PrepareControlledProfileOptions {
   readonly plan: EffectiveExtensionPlan;
   readonly nativeTools: readonly NativeToolId[];
   readonly workspaceWrite: boolean;
+  readonly expectedOperation: DshOperation;
   readonly task: string;
   readonly workerWorkspacePath: string;
   readonly policyPluginPath: string;
@@ -157,7 +159,7 @@ function mcpEntry(
   const common = {
     serverName: definition.id,
     transport: definition.transport,
-    // The official rc.8 MCP client exposes one timeout for the whole server.
+    // The official rc.2 MCP client exposes one timeout for the whole server.
     // Use the widest approved tool timeout here; the Action-owned ToolRuntime
     // policy still applies each tool's smaller cooperative deadline.
     toolCallTimeoutMs: Math.max(...server.tools.map((tool) => tool.timeoutMs)),
@@ -364,6 +366,7 @@ export function renderControlledProfilePatch(options: PrepareControlledProfileOp
       id: "dsh-action-policy",
       name: loaderModuleSpecifier(options.policyPluginPath),
       config: {
+        expectedOperation: options.expectedOperation,
         allowedRuntimeTools: rules.map((rule) => rule.runtimeName),
         knownRuntimeTools: [
           ...new Set([

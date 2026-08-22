@@ -86,6 +86,19 @@ controller instructions.
 - Agent output is also untrusted. The controller accepts only one complete JSON
   value and rejects unknown fields, invalid paths, unsafe ranges, oversized
   collections and controller-owned tracking markers.
+- The controlled root Profile repeats that machine-output rule after rc.2
+  tool-specific system guidance and binds the JSON `operation` field to the
+  exact Controller-selected operation. Markdown citations are allowed only
+  inside JSON string fields; they never authorize operation changes, fences,
+  prefixes, suffixes or a separate citation list. This section is empty for
+  delegated subagents, whose ordinary response is consumed by the root Agent
+  rather than the controller.
+- A repair turn cannot downgrade an unresolved Controller validation or
+  Validation Integrity failure by returning `blocked`, exhausting its turns, or
+  emitting malformed structured output. The original failure and integrity audit
+  remain authoritative, and no GitHub mutation is attempted. Cancellation,
+  credential-leak, isolation, and other independent runtime failures retain their
+  own higher-priority classifications.
 - CI evidence is selected by repository and immutable head SHA, bounded,
   redacted and explicitly labelled as untrusted before it reaches DSH.
 - Comment bodies are stripped of reserved markers and sanitized before
@@ -175,14 +188,17 @@ maintainer configuration, `allowed-tools` and the controller policy:
   destinations permitted by the runner network.
 - The real GitHub token and DeepSeek key are never placed in the command
   container. Input validation rejects either controller credential if a trusted
-  workflow interpolates it into command-tool or validation argv. Command output
-  remains untrusted even though the argv is trusted.
+  workflow interpolates it into the task prompt, command-tool argv, or
+  validation argv. Immediately before launch, the complete worker prompt, argv,
+  and environment are checked again; worker output and receipts also fail
+  closed if they contain a withheld credential, without echoing the value.
+  Command output remains untrusted even though the argv is trusted.
 
 #### Controlled DSH native, MCP, Bundle, and plugin tools
 
-v0.4 introduced the official DSH extension mechanisms, which v0.5 retains. It pins
-`@deepseek-ai/dsh@0.1.0-rc.8` and
-`@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`, generates a controlled Profile, and
+v0.4 introduced the official DSH extension mechanisms. v0.5.1 re-audits them
+against the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family, generates a
+controlled Profile, and
 loads the approved Bundle and Cordis plugin rows from that Profile. It does not
 read extension authorization from the repository or model response and does not
 run model-generated `npm`, Git, or plugin-install commands. The generated Cordis
@@ -190,8 +206,14 @@ patch serializes workflow values as JSON data so a configured string cannot add
 a patch row or become a YAML `!!js` expression; an approved Bundle's own patch
 remains trusted package code.
 
+The rc.8-to-rc.2 compatibility audit covered app-boot, Profile/Bundle/Plugin,
+MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, Docker/path/timeout
+handling, and the packaged `dist` entrypoint. It did not require a change to
+the Action's existing input, output, or permission semantics. That conclusion
+does not approve any release after `0.1.1-rc.2`.
+
 The Action starts this generated Profile through the official
-`@deepseek-ai/dsh-app-boot@0.1.0-rc.8` public API. It does not use the general
+`@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API. It does not use the general
 CLI path that discovers workspace or `$DSH_HOME` `.env` files, nor does it
 enable dynamic user patch discovery, watch or hot reload. The only Profile and
 Cordis patch inputs come from the Controller-validated run configuration.
@@ -250,6 +272,9 @@ ToolRouter. The same capability compiler supplies both enforcement planes:
   event afterwards. The Controller reconciles those two phases into one final
   receipt per call, retains an incomplete receipt after a post-admission crash,
   and aggregates receipts across fresh DSH turns before final Action output.
+  Collection reads only the newly appended byte range and uses set membership
+  for ordering, avoiding repeated whole-file scans without changing the receipt
+  schema or its non-authoritative security role.
   The bounded `tool-receipts` output always includes separate `controller` and
   `dsh` arrays, a `truncated` boolean, and `droppedCount`. Neither a receipt,
   model explanation nor tool success is authorization. Persistent invocation
@@ -259,8 +284,8 @@ ToolRouter. The same capability compiler supplies both enforcement planes:
 
 ToolRuntime controls calls routed through DSH's model tool dispatcher. It is not
 a sandbox for already-approved executable code. A stdio server, Bundle, or
-plugin can act during startup, in background work, or through direct process
-I/O without waiting for a model-routed tool call. The Docker mount/network
+plugin can act during launch or startup, in background work, or through direct
+process I/O without waiting for a model-routed tool call. The Docker mount/network
 boundary and review of that complete code are therefore authoritative for its
 process-level effects.
 
@@ -310,11 +335,19 @@ Bundle patch stays within its installed package before startup.
 #### Validation-definition integrity
 
 Repository validation is meaningful only if the Controller notices when the
-candidate also changes its definition. v0.5 classifies package scripts, test
+candidate also changes its definition. v0.5.1 classifies package scripts, test
 sources/configuration, lint, typecheck, build configuration, validation runtime
 files, and other effective entrypoints independently from ordinary code changes.
 Changing tests with the implementation is supported; a test change is not a
 denial by itself.
+
+The audit follows a normalized command graph rather than only the first argv
+token. It includes package-script entrypoints and Node wrapper options such as
+preload modules, and treats replacement/removal of bound toolchain
+manifests/locks or validation keys hidden by unrelated additions as
+control-plane changes. Graph construction and replay planning remain separate
+from execution; validation and validation integrity must both pass before any
+GitHub mutation.
 
 - `off` records the classified changes without blocking them.
 - `warn` is the default and reports changed categories and weakening signals.
@@ -366,28 +399,55 @@ mutation.
   success, neutral and failure outcomes. Stable failure codes distinguish DSH
   timeout/output errors, validation failure/timeout, policy denial and the
   controller phase that failed.
+- Runtime creation and installation, extension installation, each Agent turn,
+  and Controller validation have separate bounded budgets. Each receives the
+  smaller of its cap and the remaining overall execution deadline, so setup
+  cannot exhaust or extend that deadline. Cleanup and cancellation
+  finalization have separate fixed short best-effort grace periods after an
+  outcome or deadline; they are bounded but may slightly extend wall-clock
+  duration beyond the configured execution deadline.
 
 ### Workflow token permissions
 
 Use the smallest token permission set that supports the selected entry point.
 The supplied templates use the following sets:
 
-| Scenario                                        | Permissions                                                                                 |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Automatic or fork PR review                     | `contents: read`, `pull-requests: write`                                                    |
-| CI diagnosis                                    | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
-| Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write` |
-| CI auto-fix                                     | Same as the preceding row                                                                   |
-| v0.5 release canary                             | `contents: read`                                                                            |
+| Scenario                                        | Permissions                                                                                                                                   |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Automatic or fork PR review                     | `contents: read`, `pull-requests: write`                                                                                                      |
+| CI diagnosis                                    | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`                                                    |
+| Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                   |
+| CI auto-fix                                     | Same as the preceding row                                                                                                                     |
+| Core E2E gate/read/write/cancellation           | Split per job: read-only gate, `contents`/PR write only for the write golden path, and Issue write only for the isolated cancellation fixture |
+| v0.5.1 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
 
-The release canary requires repository variable `DSH_V050_CANARY_SHA` to be the
-lowercase full 40-character v0.5.0 release commit SHA. It validates that value,
-checks out the immutable release ref, and runs one `strict` read-only task using
+The release canary requires repository variable `DSH_RELEASE_CANARY_SHA` to be
+the lowercase full 40-character commit SHA referenced by the formal v0.5.1 tag
+and its non-draft, non-prerelease GitHub Release. Before any environment secret
+is available, a secretless gate requires `refs/heads/main`, requires the
+run/workflow SHA to equal the live default-branch SHA, and fails if `main` is no
+longer the default branch. The smoke job uses the protected, main-only
+`core-e2e` environment, validates that all release identities agree, checks out
+the immutable release commit, and runs one `strict` read-only task using
 `DEEPSEEK_API_KEY`; it receives no Issue/PR write or repository mutation scope.
+
+The permanent Core E2E workflow is trusted release infrastructure and must be
+bootstrapped onto the default branch before it qualifies a candidate. Its gate
+has no secret access and requires the dispatch ref, workflow/dispatch SHA, and
+live default-branch SHA to agree before it binds the explicit full candidate
+SHA, `DSH_E2E_CANDIDATE_SHA`, a write-capable actor, and an open non-draft
+same-repository PR targeting the default branch. The three jobs that can access
+`DEEPSEEK_API_KEY` all use the `core-e2e` environment; repository operators must
+configure that environment with a default-branch-only deployment policy.
+Harness/fixture code is checked out at the immutable trusted SHA and candidate
+code only at the bound candidate SHA, always without persisted checkout
+credentials. Cancellation uses a dedicated temporary Issue and one locked bot
+comment ID, then strictly deletes the comment and closes the Issue instead of
+touching the candidate PR's sticky comment.
 
 ## Known boundary
 
@@ -435,13 +495,20 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred in v0.5.0.
+A marker-level freshness guard remains deferred in v0.5.1. On `SIGTERM` or
+`SIGINT`, the Controller aborts the active worker and immediately starts a
+bounded, best-effort terminal comment update while run-scoped cleanup proceeds.
+A later authoritative non-cancellation failure can correct a provisional
+cancellation, and terminal-state guards prevent queued progress work from
+reverting the result to “In progress.” `SIGKILL`, runner/host loss, a process
+crash, or a network/GitHub API outage can prevent all finalization code from
+running; an “In progress” comment may therefore remain stale. The Actions run
+conclusion is authoritative.
 
-v0.5 retains v0.4's binding of its generated Profile and positive native-tool
-policy to the exact
-DSH version whose complete tool surface was audited. It accepts only
-`@deepseek-ai/dsh@0.1.0-rc.8` and the matching official
-`@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`; another tag, range or exact version is
+v0.5.1 retains the binding of its generated Profile and positive native-tool
+policy to the exact DSH version whose complete tool surface was audited. It
+accepts only the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family; another
+tag, range or exact version is
 rejected until a matching profile is reviewed and shipped. The Action's DSH
 dependency graph is installed from the committed lockfile in an ephemeral
 container with no controller credentials. Production users should mirror the

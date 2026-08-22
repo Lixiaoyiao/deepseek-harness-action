@@ -27,6 +27,7 @@ export interface AgentTask {
 export interface RunAgentTaskOptions {
   readonly timeoutMs?: number;
   readonly runtime?: DshRuntime;
+  readonly signal?: AbortSignal;
 }
 
 export interface DshTurnMetadata {
@@ -92,9 +93,12 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
         ...(this.extensions === undefined ? {} : { extensions: this.extensions }),
         trust: this.policy.trust,
         isolation: this.inputs.isolation,
+        deadlineMs: request.deadlineMs,
         timeoutMs: request.timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
         maxOutputBytes: 2 * 1024 * 1024,
         apiKey: this.inputs.deepseekApiKey,
+        controllerCredentials: [this.inputs.githubToken],
         baseUrl: this.inputs.baseUrl,
         webSearchBaseUrl: this.inputs.webSearchBaseUrl,
         dshVersion: this.inputs.dshVersion,
@@ -121,6 +125,7 @@ export async function runAgentTask(
   inputs: ActionInputs,
   options: RunAgentTaskOptions = {},
 ): Promise<DshRunResult> {
+  const timeoutMs = options.timeoutMs ?? inputs.timeoutMinutes * 60_000;
   const turn = await new DshAgentEngine(
     inputs,
     task.policy,
@@ -134,7 +139,9 @@ export async function runAgentTask(
     context: task.contextPacket,
     tools: task.tools.manifests,
     workspacePath: task.workspacePath,
-    timeoutMs: options.timeoutMs ?? inputs.timeoutMinutes * 60_000,
+    deadlineMs: Date.now() + timeoutMs,
+    timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   return {
     output: turn.output,

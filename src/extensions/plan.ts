@@ -23,7 +23,7 @@ import type { ExtensionRuntimeLockAudit } from "./runtime-lock.js";
 
 const MAX_PUBLIC_TOOL_NAME_LENGTH = 64;
 const PUBLIC_TOOL_HASH_LENGTH = 12;
-// Keep rc.8's UTF-16 code-unit replacement semantics exactly: the official
+// Keep rc.2's UTF-16 code-unit replacement semantics exactly: the official
 // client intentionally uses this expression without the Unicode flag.
 const INVALID_PUBLIC_TOOL_CHARACTERS = /[^A-Za-z0-9_-]/g;
 const forbiddenCredentialNames = new Set([

@@ -8,10 +8,15 @@ import {
   runAgentLoop,
 } from "../src/agent/loop.js";
 import { buildDshPrompt, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
-import { DshProcessError } from "../src/dsh/errors.js";
+import {
+  DshCredentialLeakError,
+  DshMalformedOutputError,
+  DshProcessError,
+} from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
 import type { DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
+import { ValidationIntegrityError } from "../src/write/validation-integrity.js";
 import { ValidationFailureError } from "../src/write/validate.js";
 import { inputs } from "./helpers.js";
 
@@ -114,6 +119,27 @@ function engine(
   };
 }
 
+function repairTurnFailureEngine(
+  error: Error,
+  requests: AgentTurnRequest[],
+): AgentEngine<DshOutput, DshTurnMetadata> {
+  let turn = 0;
+  return {
+    id: "fake-repair-failure",
+    version: "1",
+    runTurn: (request) => {
+      requests.push(request);
+      turn += 1;
+      if (turn > 1) return Promise.reject(error);
+      return Promise.resolve({
+        output: output("final"),
+        durationMs: 10,
+        metadata: { isolationReport: isolation },
+      });
+    },
+  };
+}
+
 function validationFailure(stderr: string): ValidationFailureError {
   return new ValidationFailureError({
     argv: ["npm", "test"],
@@ -127,7 +153,138 @@ function validationFailure(stderr: string): ValidationFailureError {
   });
 }
 
+function validationIntegrityFailure(): ValidationIntegrityError {
+  return new ValidationIntegrityError({
+    schemaVersion: 1,
+    mode: "strict",
+    status: "blocked",
+    changeCount: 1,
+    dangerousChangeCount: 1,
+    controlPlaneChangeCount: 1,
+    testChangeCount: 0,
+    changes: [],
+    truncated: false,
+  });
+}
+
 describe("controller-owned agent loop", () => {
+  it("caps an Agent turn independently and forwards the run cancellation signal", async () => {
+    const controller = new AbortController();
+    const requests: AgentTurnRequest[] = [];
+    const result = await runAgentLoop(
+      task(),
+      inputs(),
+      {
+        deadlineMs: 2_000_000,
+        signal: controller.signal,
+        blocked: () => Promise.resolve("blocked"),
+        finalize: () => Promise.resolve("done"),
+      },
+      {
+        now: () => 1_000,
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => engine([output("final")], requests),
+      },
+    );
+
+    expect(result.finalization).toBe("done");
+    expect(requests[0]?.deadlineMs).toBe(2_000_000);
+    expect(requests[0]?.timeoutMs).toBe(10 * 60_000);
+    expect(requests[0]?.signal).toBe(controller.signal);
+  });
+
+  it("stops before invoking the Agent when the run was cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort(new DshProcessError(null, "SIGTERM", "cancelled"));
+    const runTurn = vi.fn();
+    const createRuntime = vi.fn(() => Promise.resolve(runtime));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          signal: controller.signal,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          createRuntime,
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => ({ id: "cancelled", version: "1", runTurn }),
+        },
+      ),
+    ).rejects.toThrow("cancelled");
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it("hard-bounds a hanging turn progress hook by its phase cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const onTurn = vi.fn(() => new Promise<void>(() => undefined));
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: 20 * 60_000,
+          onTurn,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final")], []),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onTurn).toHaveBeenCalledOnce();
+      const outcome = expect(running).rejects.toThrow(/turn progress hook exceeded/u);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hard-bounds a hanging validation retry progress hook", async () => {
+    vi.useFakeTimers();
+    try {
+      const onValidationRetry = vi.fn(() => new Promise<void>(() => undefined));
+      const running = runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: 20 * 60_000,
+          onValidationRetry,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.reject(validationFailure("retry")),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final")], []),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onValidationRetry).toHaveBeenCalledOnce();
+      const outcome = expect(running).rejects.toThrow(/validation retry progress hook exceeded/u);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes tool -> validation error -> repair -> pass with newest feedback preserved", async () => {
     const requests: AgentTurnRequest[] = [];
     const disposeRuntime = vi.fn(() => Promise.resolve());
@@ -310,6 +467,159 @@ describe("controller-owned agent loop", () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
+  it("does not let a blocked repair turn erase a pending validation-integrity failure", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const blocked = vi.fn(() => Promise.resolve("blocked"));
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        { deadlineMs: Date.now() + 60_000, blocked, finalize },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final"), output("blocked")], requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(blocked).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pending validation-integrity failure when a repair tool request exhausts turns", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const provider: ToolProvider = {
+      id: "command",
+      manifest: () => [],
+      invoke: (call) =>
+        Promise.resolve({
+          callId: call.callId,
+          id: call.id,
+          ok: true,
+          output: { repaired: false },
+        }),
+    };
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: provider,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () =>
+            engine(
+              [
+                output("final"),
+                output("needs_tool", { toolRequest: { id: "command.test", input: {} } }),
+              ],
+              requests,
+            ),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
+  it("does not let malformed repair output erase a pending validation-integrity failure", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const onEngineFailure = vi.fn();
+    const malformed = new DshMalformedOutputError(
+      "DSH stdout was not one complete JSON value",
+    ).attachTelemetry({
+      durationMs: 25,
+      isolationReport: isolation,
+      toolReceipts: [
+        {
+          schemaVersion: 1,
+          callId: "repair-malformed",
+          id: "native.bash",
+          runtimeName: "bash",
+          provider: "builtin",
+          counted: true,
+          completed: true,
+          ok: true,
+          durationMs: 4,
+        },
+      ],
+    });
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+          onEngineFailure,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => repairTurnFailureEngine(malformed, requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(onEngineFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durationMs: 35,
+        toolReceipts: [expect.objectContaining({ callId: "repair-malformed", ok: true })],
+      }),
+      expect.objectContaining({ turns: 2, validationRetries: 1 }),
+    );
+  });
+
+  it("does not let a pending validation failure hide a repair-turn credential leak", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const credentialLeak = new DshCredentialLeakError("stdout").attachTelemetry({
+      durationMs: 25,
+      isolationReport: isolation,
+    });
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => repairTurnFailureEngine(credentialLeak, requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(credentialLeak);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
   it("rechecks the deadline after progress hooks and disposes runtime if engine creation fails", async () => {
     let now = 0;
     const disposeRuntime = vi.fn(() => Promise.resolve());
@@ -393,6 +703,52 @@ describe("controller-owned agent loop", () => {
       "engine:engine cleanup failed",
       "runtime:runtime cleanup failed",
     ]);
+  });
+
+  it("shares one cleanup grace period without skipping later disposers", async () => {
+    vi.useFakeTimers();
+    try {
+      const cleanupErrors: string[] = [];
+      const engineDispose = vi.fn(() => Promise.reject(new Error("late engine cleanup failure")));
+      const runtimeDispose = vi.fn(() => Promise.reject(new Error("late runtime cleanup failure")));
+      const provider: ToolProvider = {
+        id: "command",
+        manifest: () => [],
+        invoke: () => Promise.reject(new Error("not called")),
+        dispose: () => new Promise<void>(() => undefined),
+      };
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: provider,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("published"),
+          onCleanupError: (component) => {
+            cleanupErrors.push(component);
+          },
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: runtimeDispose,
+          createEngine: () => ({
+            ...engine([output("final")], []),
+            dispose: engineDispose,
+          }),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(running).resolves.toMatchObject({ finalization: "published" });
+      expect(cleanupErrors).toEqual(["tool-provider", "engine", "runtime"]);
+      expect(engineDispose).toHaveBeenCalledOnce();
+      expect(runtimeDispose).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports an auditable failed receipt before propagating a provider error", async () => {

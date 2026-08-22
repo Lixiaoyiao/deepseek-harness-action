@@ -16,6 +16,7 @@ import {
   parseToolConfiguration,
   validateAllowedToolReferences,
 } from "./tools/schema.js";
+import { DSH_VERSION } from "./release.js";
 
 const booleanInput = z.enum(["true", "false"]).transform((value) => value === "true");
 
@@ -135,7 +136,7 @@ const defaults = {
   command: "auto",
   taskAccess: "read",
   prompt: "",
-  dshVersion: "0.1.0-rc.8",
+  dshVersion: DSH_VERSION,
   dshExecutable: "",
   isolation: "docker",
   containerImage:
@@ -164,19 +165,20 @@ function optionalInput(reader: InputReader, name: string, fallback: string): str
   return value === "" ? fallback : value;
 }
 
-function assertControllerSecretsAbsentFromArgv(inputs: ActionInputs): void {
+function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): void {
   const secrets = [inputs.deepseekApiKey, inputs.githubToken];
   const configuredArgv = [
     ...inputs.testCommands,
     ...inputs.toolConfig.commands.map(({ argv }) => argv),
   ];
   if (
+    secrets.some((secret) => inputs.prompt.includes(secret)) ||
     configuredArgv.some((argv) =>
       argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
     )
   ) {
     throw new Error(
-      "Invalid action inputs: controller credentials must not appear in test-commands or tool-config argv",
+      "Invalid action inputs: controller credentials must not appear in the task prompt, test-commands, or tool-config argv",
     );
   }
 }
@@ -250,7 +252,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       { cause: error },
     );
   }
-  assertControllerSecretsAbsentFromArgv(parsed.data);
+  assertControllerSecretsAbsentFromWorkerInputs(parsed.data);
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
     throw new Error("Invalid action inputs: prompt is required when command is task");
   }

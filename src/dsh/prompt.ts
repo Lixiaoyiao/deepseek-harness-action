@@ -20,9 +20,10 @@ export interface DshPromptInput {
   readonly maxBytes?: number;
 }
 
-const outputContract = `{
+function outputContract(operation: DshOperation): string {
+  return `{
   "protocolVersion": 1,
-  "operation": "task|review|diagnose|fix|implement",
+  "operation": ${JSON.stringify(operation)},
   "state": "final|needs_tool|blocked",
   "summary": "non-empty string",
   "findings": [{
@@ -44,6 +45,7 @@ const outputContract = `{
   "verification": [{"command":"argv rendered for humans","status":"passed|failed|skipped","summary":"optional result"}],
   "toolRequest": {"id":"provider.tool-id","input":{},"reason":"optional reason; allowed only with state=needs_tool"}
 }`;
+}
 
 function encodeUntrustedData(value: string): string {
   // Untrusted data is the terminal section: there is deliberately no closing
@@ -137,7 +139,7 @@ function renderPrompt(input: RenderPromptInput): string {
     "For review and diagnosis, report only high-confidence correctness, security, concurrency, reliability, or regression issues. Verify suspicions with permitted evidence; omit style-only speculation.",
     "Return exactly one JSON object and nothing else: no Markdown fence, preface, suffix, progress report, or commentary.",
     "The JSON must use only the following fields and satisfy this contract:",
-    outputContract,
+    outputContract(input.operation),
     "The protocolVersion must be 1 and the operation field must exactly match the requested operation. Use an empty findings array when there are no actionable findings. Omit optional top-level fields when they do not apply.",
     "Use state=needs_tool only to request one tool from the authoritative catalog below. Use only its exact id and an input allowed by its JSON schema; v0.3 command tools accept an empty input and never accept model-defined argv. The controller will return the result as untrusted iteration feedback in a later turn. Use state=final when the task is complete and state=blocked when it cannot safely proceed.",
     `The following JSON array is the complete controller-authorized tool catalog for this turn: <TRUSTED_TOOL_CATALOG_JSON>${toolCatalog}</TRUSTED_TOOL_CATALOG_JSON>`,

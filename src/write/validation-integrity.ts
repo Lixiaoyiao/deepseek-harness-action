@@ -11,7 +11,18 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
+
+import {
+  dependencyReplacementReasons,
+  lockReplacementReasons,
+  manifestControlChanges,
+} from "../validation/toolchain-integrity.js";
+import {
+  buildValidationCommandGraph,
+  recordScripts,
+  type PackageGraphDetail,
+} from "../validation/validation-command-graph.js";
 
 import {
   runValidationCommandsInDocker,
@@ -20,6 +31,7 @@ import {
 } from "./validate.js";
 import {
   isIgnoredGeneratedRootEntry,
+  inspectWorkspaceChanges,
   type WorkspaceChanges,
   type WorkspaceSnapshot,
 } from "./workspace.js";
@@ -79,13 +91,24 @@ export type ValidationIntegrityRunner = (
   commands: readonly (readonly string[])[],
   containerImage: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ) => Promise<readonly ValidationResult[]>;
 
 export interface ValidationBaselineReplayOptions {
   readonly containerImage: string;
   readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
   readonly runner?: ValidationIntegrityRunner;
 }
+
+const defaultValidationIntegrityRunner: ValidationIntegrityRunner = async (
+  cwd,
+  commands,
+  containerImage,
+  timeoutMs,
+  signal,
+) =>
+  await runValidationCommandsInDocker(cwd, commands, containerImage, timeoutMs, undefined, signal);
 
 export interface EnforceValidationIntegrityInput {
   readonly snapshot: WorkspaceSnapshot;
@@ -93,11 +116,6 @@ export interface EnforceValidationIntegrityInput {
   readonly audit: ValidationIntegritySummary;
   /** Omit only when the Controller deliberately wants classification-only strict enforcement. */
   readonly baselineReplay?: ValidationBaselineReplayOptions;
-}
-
-interface PackageScriptTarget {
-  readonly manifestPath: string;
-  readonly script: string;
 }
 
 type ClassifiedChange = ValidationDefinitionChange;
@@ -108,6 +126,7 @@ const MAX_REASON_COUNT = 4;
 
 const TEST_FILE_PATTERN =
   /(?:^|\/)(?:__tests__|tests?|spec)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)[^/]+_test\.(?:go|py|rb|rs)$|(?:^|\/)test_[^/]+\.py$/iu;
+const EXECUTABLE_TEST_EXTENSION = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|kts|cs|php|swift)$/iu;
 const TEST_CONFIG_PATTERN =
   /(?:^|\/)(?:vitest|jest|playwright|cypress|karma|ava|wdio|mocha)\.config\.[^/]+$|(?:^|\/)(?:pytest\.ini|tox\.ini|noxfile\.py|conftest\.py|phpunit\.xml(?:\.dist)?|\.mocharc(?:\.[^/]+)?)$/iu;
 const LINT_CONFIG_PATTERN =
@@ -118,32 +137,7 @@ const BUILD_CONFIG_PATTERN =
   /(?:^|\/)(?:vite|webpack|rollup|esbuild|next|nuxt|astro)\.config\.[^/]+$|(?:^|\/)(?:turbo\.json|nx\.json|lerna\.json|Makefile|GNUmakefile|justfile|Taskfile\.ya?ml)$/iu;
 const VALIDATION_RUNTIME_PATTERN =
   /(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|poetry\.lock|uv\.lock|Cargo\.lock)$/iu;
-
-const SCRIPT_MANAGERS = new Set([
-  "npm",
-  "npm.cmd",
-  "pnpm",
-  "pnpm.cmd",
-  "yarn",
-  "yarn.cmd",
-  "bun",
-  "bun.exe",
-]);
-const SCRIPT_INTERPRETERS = new Set([
-  "node",
-  "node.exe",
-  "python",
-  "python3",
-  "python.exe",
-  "bash",
-  "sh",
-  "zsh",
-  "pwsh",
-  "powershell",
-  "powershell.exe",
-  "ruby",
-  "perl",
-]);
+const PACKAGE_MANIFEST_PATTERN = /(?:^|\/)package\.json$/iu;
 
 function normalizePath(value: string): string | undefined {
   const normalized = value.replaceAll("\\", "/").replace(/^\.\//u, "");
@@ -186,6 +180,22 @@ async function textIfPresent(root: string, path: string): Promise<string | undef
   }
 }
 
+function buildCommandDependencyGraph(
+  snapshot: WorkspaceSnapshot,
+  commands: readonly (readonly string[])[],
+  additionalPaths: readonly string[] = [],
+) {
+  return buildValidationCommandGraph(
+    {
+      baselinePaths: snapshot.baseline.keys(),
+      additionalPaths,
+      readBaseline: async (path) => await textIfPresent(snapshot.sourceRoot, path),
+      readCandidate: async (path) => await textIfPresent(snapshot.workerRoot, path),
+    },
+    commands,
+  );
+}
+
 function changeType(
   path: string,
   changes: WorkspaceChanges,
@@ -205,122 +215,77 @@ function categoryForPath(path: string): ValidationDefinitionCategory | undefined
   return undefined;
 }
 
-function commandName(value: string): string {
-  return value.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() ?? "";
-}
-
-function optionValue(argv: readonly string[], names: readonly string[]): string | undefined {
-  for (let index = 1; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === undefined) continue;
-    const exact = names.indexOf(argument);
-    if (exact !== -1) return argv[index + 1];
-    for (const name of names) {
-      if (argument.startsWith(`${name}=`)) return argument.slice(name.length + 1);
-    }
+function testExecutionShape(path: string): string | undefined {
+  const lower = path.toLowerCase();
+  if (/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(lower)) return "javascript-discovery";
+  if (/(?:^|\/)__tests__\/.*\.[cm]?[jt]sx?$/u.test(lower)) return "javascript-discovery";
+  if (/(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$/u.test(lower)) return "python-discovery";
+  if (/(?:^|\/)[^/]+_test\.go$/u.test(lower)) return "go-discovery";
+  if (/(?:^|\/)[^/]+_test\.(?:rb|rs)$/u.test(lower)) return "native-suffix-discovery";
+  if (TEST_FILE_PATTERN.test(path) && EXECUTABLE_TEST_EXTENSION.test(path)) {
+    return `test-directory:${posix.extname(lower)}`;
   }
   return undefined;
 }
 
-function packageScriptTarget(argv: readonly string[]): PackageScriptTarget | undefined {
-  const executable = argv[0] === undefined ? "" : commandName(argv[0]);
-  if (!SCRIPT_MANAGERS.has(executable)) return undefined;
-  const cwd = optionValue(argv, ["--prefix", "--dir", "--cwd", "-C"]);
-  const normalizedCwd = cwd === undefined || cwd === "." ? "" : normalizePath(cwd);
-  if (normalizedCwd === undefined) return undefined;
-  const ignoredWithValue = new Set(["--prefix", "--dir", "--cwd", "-C", "--workspace", "-w"]);
-  const positional: string[] = [];
-  for (let index = 1; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === undefined) continue;
-    if (ignoredWithValue.has(value)) {
-      index += 1;
-      continue;
-    }
-    if (value.startsWith("-")) continue;
-    positional.push(value);
+function isSafeTestRename(previousPath: string, nextPath: string): boolean {
+  const previousShape = testExecutionShape(previousPath);
+  return previousShape !== undefined && previousShape === testExecutionShape(nextPath);
+}
+
+function manifestTestDiscoveryPatterns(value: string | undefined): readonly string[] | undefined {
+  const manifest = jsonObject(parseJson(value));
+  if (manifest === undefined) return undefined;
+  const jest = jsonObject(manifest.jest);
+  if (jest !== undefined && Object.hasOwn(jest, "testMatch")) {
+    return Array.isArray(jest.testMatch) &&
+      jest.testMatch.every((entry) => typeof entry === "string")
+      ? jest.testMatch
+      : [];
   }
-  if (positional[0] === "run" || positional[0] === "run-script") positional.shift();
-  const script = positional[0];
-  if (script === undefined) return undefined;
-  return {
-    manifestPath: normalizedCwd === "" ? "package.json" : `${normalizedCwd}/package.json`,
-    script,
-  };
-}
-
-function looksLikeScriptPath(value: string): boolean {
-  return (
-    value.startsWith("./") ||
-    value.includes("/") ||
-    /\.(?:[cm]?[jt]s|py|rb|pl|sh|ps1)$/iu.test(value)
-  );
-}
-
-function directEntrypoint(argv: readonly string[]): string | undefined {
-  const executable = argv[0];
-  if (executable === undefined) return undefined;
-  const executableName = commandName(executable);
-  if (SCRIPT_MANAGERS.has(executableName)) return undefined;
-  if (SCRIPT_INTERPRETERS.has(executableName)) {
-    const fileFlag = argv.findIndex((value) => value === "-File" || value === "--file");
-    const candidate =
-      fileFlag === -1
-        ? argv.find((value, index) => index > 0 && !value.startsWith("-"))
-        : argv[fileFlag + 1];
-    return candidate === undefined || !looksLikeScriptPath(candidate)
-      ? undefined
-      : normalizePath(candidate);
+  const vitest = jsonObject(manifest.vitest);
+  const include = vitest?.include ?? jsonObject(vitest?.test)?.include;
+  if (include !== undefined) {
+    return Array.isArray(include) && include.every((entry) => typeof entry === "string")
+      ? include
+      : [];
   }
-  return looksLikeScriptPath(executable) ? normalizePath(executable) : undefined;
+  return undefined;
 }
 
-function recordScripts(value: string | undefined): Record<string, string> {
-  if (value === undefined) return {};
-  try {
-    const decoded: unknown = JSON.parse(value);
-    if (typeof decoded !== "object" || decoded === null || !("scripts" in decoded)) return {};
-    const scripts = decoded.scripts;
-    if (typeof scripts !== "object" || scripts === null) return {};
-    return Object.fromEntries(
-      Object.entries(scripts).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      ),
+function discoveryPatternAllowsPath(pattern: string, path: string): boolean {
+  const normalized = pattern.toLowerCase().replaceAll("\\", "/");
+  const lowerPath = path.toLowerCase();
+  const suffix = /\.(test|spec)\./u.exec(lowerPath)?.[1];
+  if (suffix !== undefined) {
+    return (
+      normalized.includes(`.${suffix}.`) ||
+      normalized.includes(`{test,spec}`) ||
+      normalized.includes(`{spec,test}`)
     );
-  } catch {
-    return {};
   }
+  if (lowerPath.includes("/__tests__/")) return normalized.includes("__tests__");
+  if (/(?:^|\/)test_[^/]+\.py$/u.test(lowerPath)) return normalized.includes("test_");
+  if (/(?:^|\/)[^/]+_test\./u.test(lowerPath)) return normalized.includes("_test");
+  return false;
 }
 
-function referencedScripts(command: string): readonly string[] {
-  const result = new Set<string>();
-  const pattern = /\b(?:npm|pnpm|yarn|bun)\s+(?:run(?:-script)?\s+)?([A-Za-z0-9:_-]+)/giu;
-  for (const match of command.matchAll(pattern)) {
-    const name = match[1];
-    if (name !== undefined && name !== "run") result.add(name);
-  }
-  return [...result];
-}
-
-function scriptClosure(
-  rootScript: string,
-  baseline: Readonly<Record<string, string>>,
-  candidate: Readonly<Record<string, string>>,
-): readonly string[] {
-  const result = new Set<string>();
-  const pending = [rootScript, `pre${rootScript}`, `post${rootScript}`];
-  while (pending.length > 0) {
-    const name = pending.pop();
-    if (name === undefined || result.has(name)) continue;
-    result.add(name);
-    for (const command of [baseline[name], candidate[name]]) {
-      if (command === undefined) continue;
-      for (const reference of referencedScripts(command)) {
-        pending.push(reference, `pre${reference}`, `post${reference}`);
+function configuredDiscoveryAllowsRename(
+  packageDetails: ReadonlyMap<string, PackageGraphDetail>,
+  nextPath: string,
+): boolean {
+  for (const detail of packageDetails.values()) {
+    for (const manifest of [detail.baseline, detail.candidate]) {
+      const patterns = manifestTestDiscoveryPatterns(manifest);
+      if (
+        patterns !== undefined &&
+        !patterns.some((pattern) => discoveryPatternAllowsPath(pattern, nextPath))
+      ) {
+        return false;
       }
     }
   }
-  return [...result].sort((left, right) => left.localeCompare(right));
+  return true;
 }
 
 function allNoOpSegments(command: string): boolean {
@@ -525,53 +490,26 @@ export async function inspectValidationIntegrity(
     MAX_REPORTED_CHANGES,
     Math.max(1, input.maxReportedChanges ?? DEFAULT_MAX_REPORTED_CHANGES),
   );
-  const scriptTargets = input.commands.flatMap((argv) => {
-    const target = packageScriptTarget(argv);
-    return target === undefined ? [] : [target];
-  });
-  const directTargets = new Set(
-    input.commands.flatMap((argv) => {
-      const path = directEntrypoint(argv);
-      return path === undefined ? [] : [path];
-    }),
+  const graph = await buildCommandDependencyGraph(
+    input.snapshot,
+    input.commands,
+    input.changes.added,
   );
-  const packageByPath = new Map<string, Set<string>>();
-  for (const target of scriptTargets) {
-    const scripts = packageByPath.get(target.manifestPath) ?? new Set<string>();
-    scripts.add(target.script);
-    packageByPath.set(target.manifestPath, scripts);
-  }
-
+  const directTargets = graph.entrypoints;
   const packageCommands: string[] = [];
-  const packageDetails = new Map<
-    string,
-    { baseline: string | undefined; candidate: string | undefined; scripts: readonly string[] }
-  >();
-  for (const [path, roots] of packageByPath) {
-    const baseline = await textIfPresent(input.snapshot.sourceRoot, path);
-    const candidate = await textIfPresent(input.snapshot.workerRoot, path);
-    const baselineScripts = recordScripts(baseline);
-    const candidateScripts = recordScripts(candidate);
-    const scripts = new Set<string>();
-    for (const root of roots) {
-      for (const script of scriptClosure(root, baselineScripts, candidateScripts))
-        scripts.add(script);
-    }
-    for (const name of scripts) {
+  for (const detail of graph.packageDetails.values()) {
+    const baselineScripts = recordScripts(detail.baseline);
+    const candidateScripts = recordScripts(detail.candidate);
+    for (const name of detail.scripts) {
       if (baselineScripts[name] !== undefined) packageCommands.push(baselineScripts[name]);
       if (candidateScripts[name] !== undefined) packageCommands.push(candidateScripts[name]);
     }
-    packageDetails.set(path, {
-      baseline,
-      candidate,
-      scripts: [...scripts].sort((left, right) => left.localeCompare(right)),
-    });
   }
   const evidence = commandEvidence(input.commands, packageCommands);
   const classified: ClassifiedChange[] = [];
 
-  for (const [path, detail] of packageDetails) {
-    const changedScripts = detail.scripts.filter(
+  for (const [path, detail] of graph.packageDetails) {
+    const changedScripts = [...detail.scripts].filter(
       (name) => recordScripts(detail.baseline)[name] !== recordScripts(detail.candidate)[name],
     );
     if (changedScripts.length === 0) continue;
@@ -623,14 +561,40 @@ export async function inspectValidationIntegrity(
     const baselineDigest = digest(baseline);
     const renamedTo =
       baselineDigest === undefined ? undefined : addedTestDigests.get(baselineDigest);
-    if (renamedTo !== undefined && !consumedAddedTests.has(renamedTo)) {
+    if (
+      renamedTo !== undefined &&
+      isSafeTestRename(path, renamedTo) &&
+      configuredDiscoveryAllowsRename(graph.packageDetails, renamedTo) &&
+      !consumedAddedTests.has(renamedTo)
+    ) {
       renamedTests.set(path, renamedTo);
       consumedAddedTests.add(renamedTo);
     }
   }
 
   for (const path of input.changes.all) {
-    if (packageDetails.has(path)) continue;
+    const packageDetail = graph.packageDetails.get(path);
+    if (packageDetail !== undefined && PACKAGE_MANIFEST_PATTERN.test(path)) {
+      const dependencyReasons = dependencyReplacementReasons(
+        packageDetail.baseline,
+        packageDetail.candidate,
+      );
+      const control = manifestControlChanges(packageDetail.baseline, packageDetail.candidate);
+      const reasons = boundedReasons([...dependencyReasons, ...control.reasons]);
+      if (reasons.length > 0) {
+        classified.push({
+          path,
+          change: changeType(path, input.changes),
+          category: "validation-runtime",
+          risk: dependencyReasons.length > 0 ? "dangerous" : "suspicious",
+          controlPlane: true,
+          reasons,
+        });
+      }
+      continue;
+    } else if (packageDetail !== undefined) {
+      continue;
+    }
     const configuredDirect = directTargets.has(path);
     const category = configuredDirect ? "entrypoint" : categoryForPath(path);
     if (category === undefined) continue;
@@ -657,8 +621,8 @@ export async function inspectValidationIntegrity(
       const reasons: string[] = [];
       if (afterSkips > beforeSkips)
         reasons.push("The number of explicit skipped or focused-only tests increased");
-      if (change === "deleted" && addedTestPaths.length === 0) {
-        reasons.push("A test file was deleted without an added replacement test");
+      if (change === "deleted") {
+        reasons.push("A test file was deleted without an identical-content rename");
       }
       classified.push({
         path,
@@ -671,13 +635,14 @@ export async function inspectValidationIntegrity(
       continue;
     }
     if (category === "validation-runtime") {
+      const reasons = lockReplacementReasons(baseline, candidate);
       classified.push({
         path,
         change,
         category,
-        risk: "informational",
-        controlPlane: false,
-        reasons: ["The dependency lock used by validation changed"],
+        risk: reasons.length > 0 ? "dangerous" : "informational",
+        controlPlane: reasons.length > 0,
+        reasons: reasons.length > 0 ? reasons : ["The dependency lock used by validation changed"],
       });
       continue;
     }
@@ -706,6 +671,37 @@ export async function inspectValidationIntegrity(
             : ["A validation-related configuration changed"],
       ),
     });
+  }
+
+  if (!graph.reliable && input.changes.all.length > 0) {
+    const path = input.changes.all[0];
+    if (path !== undefined) {
+      const existing = classified.findIndex(
+        (change) => change.path === path && change.category === "entrypoint",
+      );
+      const reason =
+        "A configured validation command could not be resolved conservatively; strict mode fails closed";
+      if (existing === -1) {
+        classified.push({
+          path,
+          change: changeType(path, input.changes),
+          category: "entrypoint",
+          risk: "dangerous",
+          controlPlane: true,
+          reasons: [reason],
+        });
+      } else {
+        const previous = classified[existing];
+        if (previous !== undefined) {
+          classified[existing] = {
+            ...previous,
+            risk: "dangerous",
+            controlPlane: true,
+            reasons: boundedReasons([...previous.reasons, reason]),
+          };
+        }
+      }
+    }
   }
 
   classified.sort((left, right) =>
@@ -795,11 +791,12 @@ async function restoreRegularFile(
   await chmod(target, (await stat(source)).mode & 0o777);
 }
 
-async function restorePackageScripts(
+async function restorePackageValidationControls(
   sourceRoot: string,
   replayRoot: string,
   path: string,
   scriptNames: readonly string[],
+  controlKeys: readonly string[],
 ): Promise<void> {
   const baselineText = await textIfPresent(sourceRoot, path);
   const candidateText = await textIfPresent(replayRoot, path);
@@ -824,7 +821,12 @@ async function restorePackageScripts(
     if (value === undefined) Reflect.deleteProperty(candidateScripts, name);
     else candidateScripts[name] = value;
   }
-  const merged = { ...candidateValue, scripts: candidateScripts };
+  const merged: Record<string, unknown> = { ...candidateValue };
+  if (scriptNames.length > 0) merged.scripts = candidateScripts;
+  for (const key of controlKeys) {
+    if (Object.hasOwn(baselineValue, key)) merged[key] = baselineValue[key];
+    else Reflect.deleteProperty(merged, key);
+  }
   await writeFile(safePath(replayRoot, path), `${JSON.stringify(merged, null, 2)}\n`, "utf8");
 }
 
@@ -842,41 +844,26 @@ async function prepareBaselineReplayWorkspace(
       errorOnExist: true,
       filter: (source) => includeInReplayCopy(snapshot.workerRoot, source),
     });
-    const scriptTargets = commands.flatMap((argv) => {
-      const target = packageScriptTarget(argv);
-      return target === undefined ? [] : [target];
-    });
-    const scriptsByManifest = new Map<string, Set<string>>();
-    for (const target of scriptTargets) {
-      const scripts = scriptsByManifest.get(target.manifestPath) ?? new Set<string>();
-      scripts.add(target.script);
-      scriptsByManifest.set(target.manifestPath, scripts);
-    }
-    for (const [manifestPath, roots] of scriptsByManifest) {
-      const baselineText = await textIfPresent(snapshot.sourceRoot, manifestPath);
-      const candidateText = await textIfPresent(snapshot.workerRoot, manifestPath);
-      const baselineScripts = recordScripts(baselineText);
-      const candidateScripts = recordScripts(candidateText);
-      const closure = new Set<string>();
-      for (const script of roots) {
-        for (const name of scriptClosure(script, baselineScripts, candidateScripts))
-          closure.add(name);
-      }
-      await restorePackageScripts(
+    const replayChanges = await inspectWorkspaceChanges(snapshot);
+    const graph = await buildCommandDependencyGraph(snapshot, commands, replayChanges.added);
+    for (const [manifestPath, detail] of graph.packageDetails) {
+      await restorePackageValidationControls(
         snapshot.sourceRoot,
         root,
         manifestPath,
-        [...closure].sort((left, right) => left.localeCompare(right)),
+        [...detail.scripts].sort((left, right) => left.localeCompare(right)),
+        manifestControlChanges(detail.baseline, detail.candidate).keys,
       );
     }
     for (const change of audit.changes) {
       if (!change.controlPlane || change.category === "entrypoint") continue;
+      if (PACKAGE_MANIFEST_PATTERN.test(change.path) && graph.packageDetails.has(change.path)) {
+        continue;
+      }
       if (change.change === "added") await rm(safePath(root, change.path), { force: true });
       else await restoreRegularFile(snapshot.sourceRoot, root, change.path);
     }
-    for (const argv of commands) {
-      const path = directEntrypoint(argv);
-      if (path === undefined) continue;
+    for (const path of graph.entrypoints) {
       const baseline = await textIfPresent(snapshot.sourceRoot, path);
       if (baseline === undefined) await rm(safePath(root, path), { force: true });
       else await restoreRegularFile(snapshot.sourceRoot, root, path);
@@ -905,12 +892,13 @@ export async function enforceValidationIntegrity(
   }
   const replay = await prepareBaselineReplayWorkspace(input.snapshot, input.audit, input.commands);
   try {
-    const runner = input.baselineReplay.runner ?? runValidationCommandsInDocker;
+    const runner = input.baselineReplay.runner ?? defaultValidationIntegrityRunner;
     const results = await runner(
       replay.root,
       input.commands,
       input.baselineReplay.containerImage,
       input.baselineReplay.timeoutMs,
+      input.baselineReplay.signal,
     );
     const failure = failedResult(results);
     const replaySummary: ValidationBaselineReplaySummary = {
