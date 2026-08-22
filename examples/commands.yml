@@ -37,5 +37,6 @@ jobs:
           allow-write: "true"
           run-tests: "true"
           validation-integrity: strict
+          # Replace these validation commands with the commands for your repository.
           test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
           container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059

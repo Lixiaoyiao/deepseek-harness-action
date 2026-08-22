@@ -6,23 +6,30 @@
 
 [中文](README.zh-CN.md)
 
-Run DeepSeek Harness directly from GitHub pull requests, issues, and failed CI jobs.
+Run DeepSeek Harness directly from GitHub pull requests, issues, failed CI jobs, and maintainer-authored automations.
 
 ```text
 GitHub PR / Issue / CI  →  DeepSeek Harness  →  Review / Diagnose / Fix / Issue → PR
 ```
 
-It belongs to the same category of GitHub integration as [Claude Code Action](https://github.com/anthropics/claude-code-action): GitHub events start a coding agent, and the action writes reviews, diagnoses, or code changes back to the repository. This project uses DeepSeek Harness.
+The Action starts a credential-isolated DSH worker, validates its structured result, and lets a trusted Controller publish comments or validated changes. This is a community project, not an official DeepSeek or GitHub product. It is maintained by [@Lixiaoyiao](https://github.com/Lixiaoyiao).
 
-Pull requests can receive automatic inline reviews. Failed CI runs can receive a diagnosis. Once you explicitly enable write access, `@dsh` can also fix code or turn an issue into a pull request.
+## Core capabilities
 
-This is a community project. It is not an official DeepSeek or GitHub product.
+| Capability              | What it does                                                                                                                           |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Pull request review     | Reviews new commits, publishes one summary, and adds high-confidence inline findings                                                   |
+| General tasks           | Answers repository questions or performs an explicitly authorized coding task                                                          |
+| CI diagnosis and repair | Reads failed checks and logs; trusted workflows may validate and publish a fix                                                         |
+| Issue implementation    | Turns an authorized Issue request into a validated branch and pull request                                                             |
+| Controlled tools        | Offers `strict`, `standard`, and exact `custom` profiles for Bash, Web Search, Subagent, fixed commands, MCP, Bundle, and Plugin tools |
+| Structured results      | Reports stable scalar outputs plus a schema-v1 `result-json` envelope on success and failure                                           |
 
-Maintained by [@Lixiaoyiao](https://github.com/Lixiaoyiao).
+v0.5.1 uses exact, audited DeepSeek Harness `0.1.1-rc.2` package pins. Action inputs, outputs, GitHub permissions, and all write decisions remain Controller-owned.
 
 ## Live runs
 
-These are public runs from this repository. You can inspect the comments and Actions logs directly.
+These public runs show the comments and Actions logs produced by this repository.
 
 | Scenario                                                | Run                                                                                                                                                                   |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -31,11 +38,9 @@ These are public runs from this repository. You can inspect the comments and Act
 | Fix and validation in trusted write mode                | [Actions run](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/31761793492)                                                                         |
 | Issue implementation followed by a pull request         | [Issue #4](https://github.com/Lixiaoyiao/deepseek-harness-action/issues/4) → [PR #5](https://github.com/Lixiaoyiao/deepseek-harness-action/pull/5)                    |
 
-## Quick start
+## Quick Start
 
-Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions** in your repository.
-
-Then create `.github/workflows/dsh-review.yml`:
+Add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions**, then create `.github/workflows/dsh-review.yml`:
 
 ```yaml
 name: DSH review
@@ -65,336 +70,47 @@ jobs:
           dsh-version: 0.1.1-rc.2
 ```
 
-Open a non-draft pull request. The action reads the diff and repository context, then posts a review summary. When it finds a concrete problem, it also comments on the relevant line.
+Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-See [`examples/fork-review.yml`](examples/fork-review.yml) for the complete template. This workflow uses `pull_request_target`, checks out only the trusted base SHA, and never runs code from the fork.
+For production, replace `v0.5.1` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
-> This Quick start tracks the v0.5.1 release tag so new users start on the current version. For production, replace the tag with the full immutable commit SHA published for v0.5.1. Historical v0.3/v0.4/v0.5.0 behavior remains documented in [`CHANGELOG.md`](CHANGELOG.md).
+## Common `@dsh` commands
 
-## What it does
+Put the command on the first line of an Issue or pull request comment.
 
-| Entry point                                                | Result                                                               |
-| ---------------------------------------------------------- | -------------------------------------------------------------------- |
-| PR `opened` / `synchronize` / `ready_for_review`           | Automatic review with a summary and inline comments                  |
-| `@dsh task --read <question or task>`                      | General Q&A, code reading, and repository analysis                   |
-| `@dsh task --write <coding task>`                          | Change, validate, and deliver code after every write gate passes     |
-| An explicit non-empty `prompt` in a dispatch/schedule flow | Run a general automation task                                        |
-| `@dsh review`                                              | Review the current pull request again                                |
-| `@dsh diagnose`                                            | Read failed checks and logs, then identify the cause                 |
-| `@dsh fix`                                                 | Change code and run validation in trusted write mode                 |
-| `@dsh implement` on an issue                               | Understand the issue, change code, validate, and open a pull request |
+| Command                       | Purpose                                                            |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `@dsh task --read <question>` | Explain code, inspect the repository, or answer a general question |
+| `@dsh task --write <task>`    | Request a coding task; every write gate must still pass            |
+| `@dsh review`                 | Review the current pull request again                              |
+| `@dsh diagnose`               | Diagnose failed checks and logs                                    |
+| `@dsh fix`                    | Repair a same-repository pull request in trusted write mode        |
+| `@dsh implement`              | Implement an Issue and open a pull request                         |
 
-The command must be on the first line of the comment. Ready-to-copy workflows are included:
-
-- [`examples/commands.yml`](examples/commands.yml) for `@dsh` commands, fixes, and Issue → PR
-- [`examples/ci-diagnose.yml`](examples/ci-diagnose.yml) for failed CI diagnosis
-- [`examples/ci-auto-fix.yml`](examples/ci-auto-fix.yml) for trusted CI auto-fix
-- [`examples/task-automation.yml`](examples/task-automation.yml) for v0.5.1 profile-based explicit-prompt automation
-- [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) for v0.5.1 custom MCP and DSH Bundle/Profile configuration
-
-Writing `@dsh fix` or `@dsh implement` does not grant write access by itself. The workflow must also set `allow-write: "true"`, keep `run-tests: "true"`, and provide at least one `test-commands` argv array. See [`action.yml`](action.yml) for all inputs.
-
-## General tasks and explicit automation
-
-`task` is not limited to the review, diagnose, fix, or implement templates. It can answer natural-language questions, inspect a repository, or carry out a coding task:
-
-```text
-@dsh task --read Explain why this pull request needs a two-phase commit
-@dsh task --write Add empty-input coverage to the parser and run validation
-```
-
-The command must start on the first line of the comment; later lines may continue the instructions. `--read` is the default for `task`. `--write` requests a capability but does not authorize it. The workflow still needs `allow-write: "true"`, `run-tests: "true"`, a non-empty validation command list, a same-repository context that is not `pull_request_target`, write/maintain/admin permission for every originating actor, and `workspace.edit` in the effective tool allowlist. A fork pull request can never be upgraded to write mode this way.
-
-On `workflow_dispatch`, `repository_dispatch`, or `schedule` automation events, `command: auto` plus a non-empty `prompt` routes to a general `task`. You may instead set `command: task`, in which case `prompt` is required. `task-access` defaults to `read`:
-
-```yaml
-with:
-  command: auto
-  prompt: "Check the dependency boundary, add tests if needed, and explain the result"
-  task-access: read
-```
-
-`prompt` is trusted control-plane configuration. Populate it only from a maintainer-authored workflow or a trusted dispatch input; do not silently promote issue bodies, pull-request content, logs, or other untrusted data into `prompt`. The same provenance rule applies to capability inputs, especially `permission-profile`, `allowed-tools`, `disallowed-tools`, `container-image`, `base-url`, `web-search-base-url`, `isolation`, and `dsh-executable`: they select authority, worker code, credential routing, or the process boundary. See [`examples/task-automation.yml`](examples/task-automation.yml) for the current profile-based read/write dispatch template.
-
-A read-only automation task without an issue or pull-request entity returns its answer through the step summary and outputs. A write task with no entity, or one targeting an issue, creates a dedicated `dsh/task-*` branch and pull request; the controller never pushes general automation changes directly to the default branch. An authorized task on a same-repository pull request can affect only the target branch that the controller bound and revalidated.
-
-## Multi-turn edit, validation, and repair loop
-
-The controller loop introduced in v0.3 remains the execution model in v0.5.1. It belongs to the Action controller, not to a shell inside DSH. Every iteration is a fresh DSH turn constrained by the same task anchor and capability policy:
-
-```text
-DSH turn
-  ├─ needs_tool → controller runs one allowed tool → bounded/redacted untrusted result → next turn
-  ├─ final → controller validation fails → stdout/stderr as untrusted feedback → next edit turn
-  ├─ final → validation passes → controller publishes, commits, or opens a pull request
-  └─ blocked → neutral only when no unresolved Controller validation failure is pending
-```
-
-The default `strict` Agent toolset has no shell. A trusted maintainer may select `standard` or an exact `custom` policy that exposes DSH's audited native Bash tool inside the credential-free Docker worker. No profile gives DSH GitHub credentials, the real DeepSeek key, permission to approve or expand its own tools, or commit/push/PR/release authority. An explicitly allowed third-party extension is trusted worker code and can have the process-level side effects described below. The controller owns validation, actual-change inspection, and every final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. A repair turn cannot erase the pending validation failure by reporting `blocked`, exhausting its turns, or emitting malformed structured output: the original failure and any Validation Integrity audit remain authoritative until a later finalization passes. Independent cancellation, credential-leak, isolation, and runtime failures keep their own classifications. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
-
-## Permission profiles
-
-Most workflows need only one preset. Permission profiles control the Agent inside its sandbox; they do not grant GitHub authority.
-
-| Profile    | Intended use                              | Preset tools                                                                                         |
-| ---------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `strict`   | Reviews and the v0.4-compatible default   | `workspace.read`, `workspace.search`, and policy-eligible `workspace.edit`                           |
-| `standard` | Trusted maintainer coding tasks           | The strict preset plus `native.bash`, Controller-mediated `native.web-search`, and `native.subagent` |
-| `custom`   | Exact tools, MCP, Bundle, or Plugin setup | No preset tools; list every required canonical ID explicitly                                         |
-
-`allowed-tools` adds exact IDs after preset expansion. `disallowed-tools` uses the same exact ID syntax and always wins. Valid families are `workspace.*`, `native.*`, `command.<name>`, `mcp.<server>.<tool>`, and `plugin.<extension>.<tool>`. A v0.4 workflow that used a smaller exact allowlist should select `custom`, or add matching deny entries, because an allowlist no longer replaces a `strict`/`standard` preset. The result is still intersected with actor, event, trust, workspace, network, extension, and Controller policy; a requested tool that crosses any boundary is denied fail-closed. `custom` is not a wildcard: it starts empty, and unknown, unavailable, omitted, or policy-ineligible IDs fail closed. The outputs and step summary report the resolved `permission-profile`, `effective-tools`, `network-access`, `workspace-write`, and `trusted-extensions`.
-
-`native.web-search` is mediated by the Controller through the configured DeepSeek web-search endpoint. It does not expose the real key to DSH or imply general bridge egress. `native.bash` requires trusted-write Docker and cannot share a worker with a bridge-networked extension. MCP, Bundle, and Plugin configuration is an advanced `custom` profile path because approved startup code is trusted worker code. The Agent cannot change its profile, allow/deny lists, extension configuration, or installation gate.
-
-## Maintainer-defined safe command tools
-
-`command.*` tools cannot accept or assemble model-provided argv. A maintainer defines the complete fixed argv for each command in a versioned `tool-config` manifest, then exposes its ID separately through `allowed-tools`:
-
-```yaml
-with:
-  permission-profile: custom
-  allowed-tools: '["workspace.read","workspace.search","workspace.edit","command.bundle-syntax"]'
-  tool-config: |
-    {
-      "schemaVersion": 1,
-      "commands": [{
-        "name": "bundle-syntax",
-        "description": "Check the bundled JavaScript syntax without installing dependencies",
-        "argv": ["node", "--check", "dist/index.js"],
-        "timeoutMinutes": 10,
-        "maxOutputBytes": 131072,
-        "maxCalls": 2,
-        "network": "none",
-        "workspaceAccess": "read"
-      }]
-    }
-```
-
-Replace the sample argv with a deterministic command for your repository. A command tool accepts no model arguments. Common direct shell executables are rejected as an additional guard; undefined tools, calls beyond `maxCalls`, and network/workspace access that exceeds the current policy also fail. The primary boundary is maintainer-fixed complete argv, no model-added arguments, and a credential-isolated container pinned by full digest. Controller credentials are rejected if a workflow interpolates them into command-tool or validation argv. stdout/stderr is bounded and redacted, then returned only as untrusted feedback. A manifest entry alone grants nothing: its ID must also appear in `allowed-tools`, and the current security policy must allow the required execute/write/network capability. The separate `native.bash` tool is available only through an explicit `standard`/`custom` profile after trusted-write Docker policy checks; it runs bounded foreground commands, inherits the sandbox and credential isolation, and never receives approval to escalate.
-
-## Official MCP, Bundle, and Profile integration
-
-v0.5.1 upgrades the complete audited DSH dependency set from `0.1.0-rc.8` to exact `0.1.1-rc.2` pins, including `@deepseek-ai/dsh`, app-boot, the official MCP client, Profile/Bundle support, native tools, and their directly used packages. The rc.2 review covered app-boot, Profile/Bundle/Plugin loading, MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, and Docker/path/timeout behavior; it found no need to change existing Action inputs, outputs, or permission semantics. The controller still generates the controlled `github-action` Profile and Cordis patch and starts it through `@deepseek-ai/dsh-app-boot@0.1.1-rc.2`, without a parallel MCP client or plugin loader. This path skips workspace and `$DSH_HOME` `.env` discovery and the general CLI's dynamic user-patch watch/hot-reload path. All shipped DSH dependencies are exact lockfile pins; `latest`, semver ranges, floating Git refs, and legacy MCP SSE are rejected.
-
-The controlled root Profile places the Action's machine-output protocol after rc.2 tool-specific system guidance and binds the JSON `operation` field to the exact Controller-selected operation; the Agent cannot reinterpret a `task` as `implement` merely because it edits files. In particular, Web Search citations may use Markdown only inside JSON string fields; the root Agent must still return one complete schema-v1 JSON object, and operation changes, fences, prefaces, suffixes, or a separate citation list are rejected. This root-only section is empty for `native.subagent`, whose ordinary response is returned to the parent Agent instead of the Action output boundary.
-
-The official MCP client supports the transports exposed here:
-
-- `stdio`: the command must be a bare executable name or absolute container path outside `/workspace`. Shells, interpreters, downloaders, package managers, Git, and dynamic runners such as `npx` are rejected. `cwd` is repository-relative. Starting the approved executable grants full trusted worker-code execution inside the container; it is not merely a tool schema.
-- `streamable-http`: the URL must use HTTP(S), cannot contain embedded credentials or a fragment, and the server and each exposed tool must explicitly request `network`. Structured audit output and its public profile digest expose only the URL origin; pathname, query, and headers are withheld. A separate Controller-only digest binds the complete validated configuration for runtime reuse.
-
-`mcp-config` is a versioned, strict server-and-tool allowlist. Defining a server is not enough: every exposed tool must also appear in `allowed-tools` as `mcp.<server-id>.<tool-id>`. The controller derives the official DSH model-facing `mcp__...` name itself, so a prompt cannot add servers, rename tools, or expand their permissions. For example:
-
-```yaml
-with:
-  permission-profile: custom
-  allowed-tools: '["workspace.read","workspace.search","mcp.repo-index.lookup"]'
-  mcp-config: |
-    {
-      "schemaVersion": 1,
-      "servers": [{
-        "id": "repo-index",
-        "transport": "stdio",
-        "command": "/opt/dsh-extensions/bin/repository-index-mcp",
-        "args": ["--stdio"],
-        "cwd": ".",
-        "network": false,
-        "maxCalls": 8,
-        "tools": [{
-          "id": "lookup",
-          "name": "lookup",
-          "description": "Search the prebuilt repository index",
-          "permissions": ["read"],
-          "timeoutMs": 15000,
-          "maxOutputBytes": 65536,
-          "maxCalls": 4
-        }]
-      }]
-    }
-```
-
-The sample executable is intentionally image-provided: build and audit it into the digest-pinned `container-image`; do not download a server from the model turn. Any effective MCP, Bundle, or plugin tool requires `isolation: docker`; the local `dsh-executable` compatibility path cannot load extensions. [`examples/controlled-extensions.yml`](examples/controlled-extensions.yml) also shows the `streamable-http` shape and the controlled Profile/Bundle path.
-
-`plugin-config` uses the official Bundle/Profile mechanism. Each Bundle or plugin needs an explicit package name, an exact semver or `git+https://github.com/...git#<40-character-commit>` source, declared tools, and declared network behavior. Package tools use the action ID `plugin.<extension-id>.<tool-id>` and a namespaced DSH runtime name beginning with `plugin__<extension-id>__`. Third-party package installation is disabled until a trusted workflow sets `allow-plugin-install: "true"`.
-
-> A third-party Bundle or plugin executes full trusted worker code during DSH startup. NPM lifecycle scripts are disabled during acquisition, but tool-call allowlists do not sandbox package initialization, background work, or direct process I/O. Review the package and its transitive dependency graph, pin it immutably, use a dedicated runner or image when appropriate, and grant network/workspace access as if you were authorizing code execution on that worker. `allow-plugin-install` is never inferred from a prompt, PR, Issue, repository file, or model output.
-
-Before installing an effective third-party package, the Controller snapshots the complete top-level runtime package inventory. It verifies the inventory again after installation and aborts if any pre-existing package was removed or its version changed, then separately verifies the configured extension's package identity and exact version or commit.
-
-All tool families are compiled from the same controller policy and fail closed:
-
-| Limit             | Enforcement                                                                                                          |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `read`            | Requires repository-read capability; unavailable to the untrusted fork profile                                       |
-| `workspace-write` | Requires trusted-write, `allow-write: "true"`, same-repository origin, actor checks, and final controller validation |
-| `network`         | Must be declared by the owner and each tool and allowed by the effective controller policy                           |
-| `timeoutMs`       | Bounds one invocation; same-process plugin cancellation is cooperative, while the overall deadline hard-stops DSH    |
-| `maxOutputBytes`  | Bounds serialized tool output before it is returned as untrusted model feedback                                      |
-| `maxCalls`        | Bounds a tool and its owning server/package across the controller's multi-turn loop                                  |
-
-The Action-owned policy adapter applies this positive runtime allowlist to model-routed DSH native, official MCP, and plugin tool invocations. The existing controller `ToolRouter` continues to execute fixed-argv `command.*` tools. Both planes use the same controller-resolved capabilities, limits, audit identity, and bounded receipts. This controls what the model can route; it cannot contain an actively malicious already-approved stdio server, Bundle, or plugin that performs startup, background, or direct process I/O. The Agent itself gets no unrestricted shell, `GITHUB_TOKEN`, real DeepSeek key, or commit/push/PR authority.
-
-Before restriction, every visible runtime tool must belong to the Controller-audited inventory and every selected tool must be present; a configured but unselected tool is not required to register. After restriction, the model-visible inventory must equal the selected allowlist exactly. Unknown tools, missing selected tools, and agent-scoped tools that survive outside the allowlist all fail closed, while the monotonic ToolRuntime guard independently denies every call without an effective Controller rule.
-
-Network and workspace mounts apply to the whole DSH process, not one tool. Every extension tool must therefore declare `read`, because its process shares the Agent's repository view. All effective MCP servers/packages in a turn must declare the same network and workspace-write mode. A trusted-read worker accepts only read-only owners; every owner co-hosted in a trusted-write worker must explicitly declare `workspace-write`. Mixed modes are rejected instead of being presented as per-tool isolation. `network: false` means the internal Docker network blocks ordinary external egress, not that the worker has no network path: DSH still reaches the controller-side LLM proxy by mapping `host.docker.internal` to the network's inspected IPv4 gateway. That is why the effective permission output reports `host-gateway` instead of `none`. The host-gateway path is not a port allowlist, runner firewall policy governs access to other host services, and package acquisition separately uses bridge networking.
-
-See [`docs/extension-contracts.md`](docs/extension-contracts.md) for the exact Profile composition, identifier mapping, process-level compatibility rules, receipt shape, and deferred session boundary.
-
-### Compatibility
-
-The default `strict` profile preserves the v0.4/v0.5.0 review, diagnose, fix, implement, auto, task, multi-turn, sticky-comment, and Controller-owned GitHub-write paths. Existing input names, scalar outputs, and the schema-v1 `result-json` envelope remain compatible. v0.5.1 is a runtime-compatibility, architecture, and stability release; it does not add Session/Resume, Label/Assignee triggers, custom trigger phrases, branch templates, Agent Teams, a GitHub App/installer, or unrelated product expansion.
-
-## Progress and structured outputs
-
-When an authorized read-only operation resolves to a pull request or issue, the controller updates one sticky comment while it prepares bounded context, runs DSH, and publishes the result. A write request deliberately publishes no lifecycle or status comment before every final Controller validation command succeeds; after the validated mutation, its final result may reuse the same controller-owned v1 marker. Progress therefore does not create a second status comment:
-
-| Operation           | Reused sticky marker |
-| ------------------- | -------------------- |
-| `task`              | `task`               |
-| `review`            | `summary`            |
-| `diagnose`          | `diagnosis`          |
-| `fix` / `implement` | `write`              |
-
-On success, the detailed review, diagnosis, or validated write result replaces that same comment. A read-only failure can update it with a stable error code, phase, redacted bounded message, and next step. If an authorized `@dsh task --write` finishes with no repository changes, the Controller makes no commit, ref, pull-request, or release mutation but still publishes the final answer to the resolved Issue/PR and records the no-change result in outputs and the step summary. A blocked request or a write that fails before/during final validation still emits only outputs and a step summary. Only markers authored by the expected numeric bot ID are updated; user-forged markers are ignored. Eligible lifecycle comment updates are best effort, so a temporary GitHub comments API failure does not hide the real agent, validation, or write outcome.
-
-On `SIGTERM` or `SIGINT`, v0.5.1 aborts the active worker and immediately starts a bounded, best-effort terminal lifecycle update while run-scoped cleanup proceeds. A later authoritative non-cancellation failure can correct a provisional cancellation state, and terminal-state guards prevent queued “In progress” work from overwriting the result. A forced `SIGKILL`, runner/host loss, process crash, or a network/GitHub API outage can prevent all finalization code from running, so a sticky comment can still remain at “In progress.” Workflow concurrency remains important, and operators should diagnose the authoritative Actions conclusion rather than treating a stale comment as proof that work is still running.
-
-`progress-comment` defaults to `true`. Disable intermediate lifecycle updates with:
-
-```yaml
-with:
-  progress-comment: "false"
-```
-
-This disables lifecycle updates only. It does not disable normal inline review comments, review summaries, CI diagnoses, or final fix status publication.
-
-Keep the job-level `timeout-minutes` a few minutes above the action input of the same name. This gives the internal DSH watchdog time to stop the worker and finalize failure outputs, the step summary, and any eligible read-only sticky comment. Runtime creation and installation, extension installation, each Agent turn, and validation each receive the smaller of their own cap and the remaining overall execution deadline, so setup cannot silently consume the complete task budget. Cleanup and cancellation-comment finalization instead receive separate, fixed short best-effort grace periods after the outcome or deadline; they cannot hang indefinitely, but they can extend wall-clock time slightly beyond the configured execution deadline.
-
-The action sets `result-json` on success, neutral, and failure paths. This is a `schemaVersion: 1` JSON envelope containing the applicable `status`, operation, summary, timing, policy/capabilities, permission audit, effective extension audit, bounded tool receipts, actual isolation report, publication statistics, controller validation and validation-integrity audit, write result, sticky comment ID, and error. `status` is one of `success`, `neutral`, `failed`, `timed_out`, `validation_failed`, or `denied`. `validation_failed` covers both invalid DSH structured output and controller validation failure; `error.code` distinguishes them. A failure object carries stable `code`, `phase`, `title`, `message`, `guidance`, and `retryable` fields.
-
-All scalar outputs are:
-
-| Output                     | Meaning                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------- |
-| `conclusion`               | `success`, `neutral`, or `failure`                                                    |
-| `operation`                | `task`, `review`, `diagnose`, `fix`, `implement`, or `none`                           |
-| `summary`                  | Validated summary for any operation, or a safe failure summary                        |
-| `review-summary`           | Backward-compatible alias of `summary`                                                |
-| `findings-count`           | Selected review findings, or validated agent findings for other operations            |
-| `branch-name`              | Created DSH branch, empty when not applicable                                         |
-| `pull-request-url`         | Created pull request URL, empty when not applicable                                   |
-| `commit-sha`               | Commit created by a successful fix, empty when not applicable                         |
-| `trust`                    | `untrusted`, `trusted-read`, `trusted-write`, or `none` before policy resolution      |
-| `permission-profile`       | Resolved `strict`, `standard`, `custom`, or `none` Agent permission preset            |
-| `effective-tools`          | JSON array of exact tools left after preset, deny, trust, and policy checks           |
-| `network-access`           | Effective worker path: `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` |
-| `workspace-write`          | Whether effective Agent tools can modify the disposable workspace                     |
-| `trusted-extensions`       | JSON array of Controller-approved MCP, Bundle, and Plugin owners                      |
-| `duration-ms`              | Total controller duration in milliseconds                                             |
-| `comment-id`               | Sticky progress/result comment ID when available                                      |
-| `error-code`               | Stable failure code; empty on success or neutral completion                           |
-| `error-message`            | Redacted and bounded failure message                                                  |
-| `extension-profile-digest` | SHA-256 digest of the redacted effective Profile audit; empty when unavailable        |
-| `tool-receipts`            | JSON object with bounded `controller`/`dsh` arrays plus truncation metadata           |
-| `result-json`              | The versioned JSON envelope described above                                           |
-
-The v0.1.0 outputs `conclusion`, `operation`, `review-summary`, `findings-count`, `branch-name`, and `pull-request-url` remain available, so existing workflows do not need to be rewritten. Model-reported `verification` and controller-executed validation are different data; `result-json` exposes the latter separately under `validation`.
-
-A failed action step still writes its outputs first. Use `always()` in a later step and pass the value through an environment variable instead of interpolating model-derived text into a script:
-
-```yaml
-# First give the DeepSeek Harness step id: dsh
-- name: Inspect DSH result
-  if: ${{ always() && steps.dsh.outputs['result-json'] != '' }}
-  env:
-    DSH_RESULT_JSON: ${{ steps.dsh.outputs['result-json'] }}
-  run: printf '%s\n' "$DSH_RESULT_JSON" | jq .
-```
-
-Summaries, paths, and other model-derived strings inside `result-json` remain untrusted data. The envelope, invocation-count state, and receipts are telemetry only, not authorization or tamper-proof security logs. Approved extension code shares the worker process/filesystem and can influence that telemetry, so do not splice output strings directly into shell commands or treat them as independent proof.
-
-## Write mode
-
-`allow-write` defaults to `false`. Every code, Git ref, pull-request, and write-task comment mutation requires `run-tests: "true"`, at least one `test-commands` argv array, and successful completion of every validation command. `run-tests: "false"` denies the mutation; it is not a waiver. This is an intentional v0.4 security hardening from earlier behavior. Until that gate succeeds—or actual-change inspection confirms a no-change task—there is no GitHub comment, commit, ref update, or pull request. A no-change task may publish only its final answer. Repository mutations remain limited to trusted actors working in the same repository, and fork pull requests are always review-only. Validation commands are argv arrays and are not expanded by a shell:
-
-```yaml
-with:
-  allow-write: "true"
-  permission-profile: standard
-  run-tests: "true"
-  validation-integrity: strict
-  test-commands: '[["npm","ci","--ignore-scripts"],["npm","test"],["npm","run","typecheck"]]'
-  container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
-```
-
-Write mode and any effective extension require a complete Docker image digest. Every image value, including tag-compatible read-only paths, is validated as one Docker/OCI reference and cannot begin with an option or contain argument-breaking whitespace. The image itself is trusted worker code. Docker must be available on the runner.
-
-### Validation-definition integrity
-
-The Controller separately detects changes that can redefine what “validation passed” means: package scripts, test sources/configuration, lint, typecheck, build configuration, and other validation entrypoints. This does not prohibit changing tests alongside code.
-
-- `off` records and reports validation-definition changes without blocking them.
-- `warn` is the default; it reports the changed categories and suspicious weakening signals.
-- `strict` blocks high-confidence weakening (including truncated audits) and, when a control-plane definition changed without an obvious weakening signal, replays the configured validation against the candidate code while restoring the baseline validation definitions.
-
-The mode is trusted workflow configuration. Repository content and the model cannot lower it. The audit and disposition are written to `result-json` and the step summary before the Controller considers any GitHub mutation.
+`--write`, `fix`, and `implement` request capabilities; they do not grant them. The workflow must explicitly enable write mode and provide Controller-run validation. See [Usage](docs/usage.md) for commands and automation, and [Configuration](docs/configuration.md) for the gates.
 
 ## Security
 
-The security model has four separate layers so that a trusted actor is never confused with trusted repository content:
+- The Agent receives neither the real `GITHUB_TOKEN` nor the real DeepSeek key. Only the Controller can call GitHub mutation APIs.
+- Repository content, diffs, issues, pull requests, comments, logs, model output, and tool output remain untrusted data.
+- Fork review uses a `.git`-less, credential-free worker and must check out only the trusted base SHA with `persist-credentials: false`.
+- Writes require a trusted same-repository context, authorized actors, Docker, `allow-write: "true"`, non-empty fixed validation commands, and successful validation. Protected-path and Validation Integrity checks still apply.
+- An approved Bundle, Plugin, or stdio MCP server is trusted worker code. ToolRuntime limits model-routed calls; it does not sandbox extension startup, background work, or direct process I/O.
 
-1. **Actor / control plane:** interactive `@dsh` commands require every originating actor to pass the write/maintain/admin check. Writes additionally require explicit `allow-write: "true"` and mandatory successful validation. Capability-bearing inputs such as `permission-profile`, exact allow/deny lists, `validation-integrity`, `container-image`, credential-routing URLs, `isolation`, and `dsh-executable` must come only from trusted workflow configuration. Workflow token scopes only determine which GitHub APIs the controller may call; they cannot bypass actor or policy gates.
-2. **Input data:** repository files, diffs, CI logs, README/AGENTS/CLAUDE files, issues, pull requests, and comments always remain untrusted. Model output receives no authority directly and must pass strict schema, path, size, and marker validation.
-3. **Worker:** `untrusted`, `trusted-read`, and `trusted-write` are trust profiles; `strict`, `standard`, and `custom` are a separate Agent-permission dimension. Forks receive no repository tools. Trusted standard/custom workers may expose audited native tools inside the credential-free Docker boundary, but never direct GitHub access.
-4. **Controller / commit authority:** only the controller holds the GitHub client and real credentials. It rebinds SHA and issue/PR identity, runs credential-free validation, checks actual file changes, and finally comments, commits, pushes, or opens a pull request.
+Read the complete [Security policy](SECURITY.md) before enabling write mode, host execution, network access, or third-party extensions.
 
-Workflow permissions used by the supplied templates are:
+## Documentation
 
-| Scenario                                 | Workflow token permissions                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Automatic or fork PR review              | `contents: read`, `pull-requests: write`                                                    |
-| Read-only general task                   | `contents: read`; add the matching write scope only when an Issue/PR sticky comment is used |
-| Automation task that creates a branch/PR | `contents: write`, `pull-requests: write`                                                   |
-| CI diagnosis                             | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
-| Commands that support fix / implement    | `contents: write`, `actions: read`, `checks: read`, `issues: write`, `pull-requests: write` |
-| CI auto-fix                              | Same as the preceding row                                                                   |
-
-Progress comments reuse the same permissions as final result comments and require no new scope. `GITHUB_TOKEN` remains in the controller, while the controller-side proxy injects the DeepSeek key; neither credential enters the DSH prompt, workspace, MCP/Plugin configuration, worker argv/environment, or validation commands. Input and pre-launch checks reject accidental interpolation without echoing the credential. See [`SECURITY.md`](SECURITY.md) for the full trust model, known limitations, and vulnerability reporting. v0.5.1 accepts only the audited `@deepseek-ai/dsh@0.1.1-rc.2` family and committed exact lock; another version requires a matching policy/profile review.
-
-## Architecture
-
-```text
-GitHub event
-    ↓
-Action controller: route → authorize → compile permission profile + exact allow/deny
-    ↓
-Controller-owned sticky progress for read-only operations → bounded workspace / context
-    ↓
-Fresh DSH turn in Docker
-    ├─ DSH native / official MCP / Plugin tool → positive Action policy → receipt
-    ├─ needs_tool → controller fixed-argv tool ──────────────────────────┐
-    └─ final → validation + validation-integrity failure ────────────────┤ bounded untrusted feedback
-                                                                         └→ next DSH turn (max-turns/deadline)
-    ↓
-Action controller: final schema + gates → answer / commit / branch + PR
-                                      (write-task comments begin only here)
-    ↓
-Action outputs: legacy scalars + versioned result-json
-```
-
-The DSH worker does not hold a GitHub client. Model output must pass schema validation before the controller maps it to diff lines or invokes an authorized tool. Read-only tracking comments remain Controller-owned; write-task comments and every trusted write additionally wait for successful final repository validation. The controlled Profile is generated only from trusted workflow inputs after Controller validation; repository content and model output cannot modify the MCP/Bundle/Plugin set.
-
-v0.5.1 keeps that external flow while separating runtime installation and inventory audit, process launch, Docker/network policy, Profile setup, receipt reconciliation, timeout, and cleanup into run-scoped responsibilities. Validation integrity likewise builds a normalized command graph before planning any baseline replay. Receipt collection advances from the prior byte offset and uses set-based reconciliation, avoiding repeated whole-file scans without changing the public output format.
-
-## Core release E2E
-
-The permanent [Core E2E workflow](.github/workflows/e2e.yml) must first be reviewed and merged to the default branch as trusted harness code. A maintainer then dispatches that default-branch workflow with the full candidate SHA and its open, non-draft, same-repository PR number after setting `DSH_E2E_CANDIDATE_SHA` to the same SHA. The gate has no secret access: it requires a write-capable actor, binds the PR head and default base, and verifies that the dispatch/workflow SHA equals the live default-branch SHA. The read-only, write, and cancellation jobs all use the protected `core-e2e` environment; configure that environment to allow only the default branch before adding `DEEPSEEK_API_KEY`.
-
-Harness files and fixtures are checked out at the immutable default-branch SHA emitted by the gate, while candidate Action code is checked out only at the separately bound candidate SHA and every checkout uses `persist-credentials: false`. No-mutation paths compare default-branch state, the complete candidate identity/comments, every `dsh/task-*` ref with its object type/SHA, and Controller task-PR state/draft/head/base/body data. The cancellation path creates a run/attempt/candidate-marked temporary Issue, locks the single bot comment ID through its in-progress-to-cancelled transition, then strictly deletes that comment and closes the Issue; it never reuses or overwrites the candidate PR sticky comment.
-
-## Release canary
-
-The lightweight [release canary](.github/workflows/release-canary.yml) runs weekly or manually with `contents: read`, one `strict` read-only task, and no matrix or mutation scope. Its secretless gate requires the workflow ref to be `refs/heads/main` and the run/workflow SHA to equal the live default-branch SHA; the secret-bearing smoke job uses the same protected, main-only `core-e2e` environment as Core E2E. Release maintainers set repository variable `DSH_RELEASE_CANARY_SHA` to the lowercase, full 40-character commit SHA referenced by the formal v0.5.1 tag and GitHub Release, and provide `DEEPSEEK_API_KEY`. The workflow verifies that the tag, non-draft/non-prerelease Release, and variable resolve to the same immutable commit before checkout and local Action execution.
+| Guide                                                       | Contents                                                                             |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [Setup](docs/setup.md) · [中文](docs/setup.zh-CN.md)        | Secret, first workflow, permissions, safe checkout, and templates                    |
+| [Usage](docs/usage.md) · [中文](docs/usage.zh-CN.md)        | `@dsh` commands, tasks, review, diagnose, fix, implement, and automation             |
+| [Configuration](docs/configuration.md)                      | Inputs, permission profiles, tools, validation, extensions, and outputs              |
+| [Troubleshooting](docs/troubleshooting.md)                  | Denials, Docker, timeouts, cancellation, validation, and extension failures          |
+| [Security policy](SECURITY.md)                              | Trust model, credential boundaries, network behavior, and known limitations          |
+| [Extension contracts](docs/extension-contracts.md)          | Deep technical contracts for MCP, Profile, Bundle, Plugin, ToolRuntime, and receipts |
+| [Maintainer release guide](docs/maintainer-release.md)      | Local checks, Core E2E, release canary, version updates, and publishing              |
+| [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) | Development workflow and release history                                             |
 
 ## Development
 
@@ -405,14 +121,10 @@ npm ci
 npm run check
 ```
 
-The `dist/` bundle used by GitHub Marketplace is committed with each release. See [`BUNDLED_DEPENDENCIES.md`](BUNDLED_DEPENDENCIES.md) for dependency and bundling details.
+See [CONTRIBUTING.md](CONTRIBUTING.md). The Marketplace `dist/` bundle is committed for releases and must not be edited by hand.
 
 ## License
 
-[MIT](LICENSE). Third-party licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [BUNDLED_DEPENDENCIES.md](BUNDLED_DEPENDENCIES.md).
 
-## Acknowledgements
-
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) provides the headless runtime, MCP client, Bundle/Profile loading, and Cordis configuration used by this project.
-- The GitHub event routing, permission checks, and tracking model are adapted from the MIT-licensed [Claude Code Action](https://github.com/anthropics/claude-code-action). The exact upstream commit and license text are recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-- The structured-output and execution/publication permission separation also draw on the design of [Codex GitHub Action](https://learn.chatgpt.com/docs/github-action); this project retains its own controller/worker trust boundary and result protocol.
+DeepSeek Harness supplies the headless runtime and official extension mechanisms. The GitHub integration also draws on the MIT-licensed [Claude Code Action](https://github.com/anthropics/claude-code-action) patterns and the execution/publication separation described by [Codex GitHub Action](https://learn.chatgpt.com/docs/github-action); exact attributions are recorded in the third-party notices.
