@@ -32,7 +32,7 @@ describe("trusted core E2E workflow", () => {
     for (const contract of [
       '.error.code == "VALIDATION_INTEGRITY"',
       '.error.category == "domain"',
-      '.error.phase == "agent"',
+      '.error.phase == "validation"',
       ".error.retryable == false",
       '.validation.integrity.mode == "strict"',
       '.validation.integrity.status == "blocked"',

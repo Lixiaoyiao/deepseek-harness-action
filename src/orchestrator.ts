@@ -433,7 +433,6 @@ async function runActionInternal(
           );
         },
         onValidationRetry: async (turn) => {
-          state.phase = "agent";
           await state.progress?.update(
             "agent",
             `Configured validation failed after turn ${String(turn)}. The bounded error output is being returned to a fresh DSH turn for repair.`,
