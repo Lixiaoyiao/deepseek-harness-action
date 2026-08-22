@@ -93,6 +93,10 @@ controller instructions.
   prefixes, suffixes or a separate citation list. This section is empty for
   delegated subagents, whose ordinary response is consumed by the root Agent
   rather than the controller.
+- A repair turn cannot turn an unresolved Controller validation or Validation
+  Integrity failure into a neutral result by returning `blocked`. The original
+  failure and integrity audit remain authoritative, and no GitHub mutation is
+  attempted.
 - CI evidence is selected by repository and immutable head SHA, bounded,
   redacted and explicitly labelled as untrusted before it reaches DSH.
 - Comment bodies are stripped of reserved markers and sanitized before

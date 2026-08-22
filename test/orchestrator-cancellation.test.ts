@@ -233,6 +233,10 @@ describe("orchestrator cancellation finalization", () => {
     expect(outcome).toMatchObject({
       conclusion: "failure",
       error: { code: "VALIDATION_INTEGRITY", phase: "validation" },
+      validation: {
+        status: "failed",
+        integrity: { mode: "strict", status: "blocked", dangerousChangeCount: 1 },
+      },
     });
     expect(mocks.progressFail).toHaveBeenCalledTimes(2);
     expect(mocks.progressFail).toHaveBeenLastCalledWith(

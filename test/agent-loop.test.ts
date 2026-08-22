@@ -12,6 +12,7 @@ import { DshProcessError } from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
 import type { DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
+import { ValidationIntegrityError } from "../src/write/validation-integrity.js";
 import { ValidationFailureError } from "../src/write/validate.js";
 import { inputs } from "./helpers.js";
 
@@ -124,6 +125,20 @@ function validationFailure(stderr: string): ValidationFailureError {
       timedOut: false,
       outputTruncated: false,
     },
+  });
+}
+
+function validationIntegrityFailure(): ValidationIntegrityError {
+  return new ValidationIntegrityError({
+    schemaVersion: 1,
+    mode: "strict",
+    status: "blocked",
+    changeCount: 1,
+    dangerousChangeCount: 1,
+    controlPlaneChangeCount: 1,
+    testChangeCount: 0,
+    changes: [],
+    truncated: false,
   });
 }
 
@@ -425,6 +440,75 @@ describe("controller-owned agent loop", () => {
     expect(result.finalization).toBe("blocked");
     expect(blocked).toHaveBeenCalledOnce();
     expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("does not let a blocked repair turn erase a pending validation-integrity failure", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const blocked = vi.fn(() => Promise.resolve("blocked"));
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        { deadlineMs: Date.now() + 60_000, blocked, finalize },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final"), output("blocked")], requests),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(blocked).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pending validation-integrity failure when a repair tool request exhausts turns", async () => {
+    const requests: AgentTurnRequest[] = [];
+    const integrity = validationIntegrityFailure();
+    const provider: ToolProvider = {
+      id: "command",
+      manifest: () => [],
+      invoke: (call) =>
+        Promise.resolve({
+          callId: call.callId,
+          id: call.id,
+          ok: true,
+          output: { repaired: false },
+        }),
+    };
+    const finalize = vi.fn(() => Promise.reject(integrity));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: provider,
+          blocked: () => Promise.resolve("blocked"),
+          finalize,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () =>
+            engine(
+              [
+                output("final"),
+                output("needs_tool", { toolRequest: { id: "command.test", input: {} } }),
+              ],
+              requests,
+            ),
+          workspaceFingerprint: () => Promise.resolve("weakened-validation-entrypoint"),
+        },
+      ),
+    ).rejects.toBe(integrity);
+    expect(requests).toHaveLength(2);
+    expect(finalize).toHaveBeenCalledOnce();
   });
 
   it("rechecks the deadline after progress hooks and disposes runtime if engine creation fails", async () => {

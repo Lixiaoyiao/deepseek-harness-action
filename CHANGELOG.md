@@ -55,6 +55,10 @@ versioning for published action releases.
   removed validation keys even when unrelated keys are added. Each reproduced
   bypass has regression coverage and still blocks all GitHub mutation in strict
   mode.
+- A repair turn that returns `blocked` can no longer downgrade an unresolved
+  Controller validation or Validation Integrity failure to a neutral result.
+  The original failure and integrity audit remain authoritative until a later
+  finalization actually passes; GitHub mutation remains blocked throughout.
 - The controlled root Profile now places its single-JSON output protocol after
   rc.2 tool guidance and binds the final `operation` field to the exact
   Controller-selected operation. Web Search Markdown citations must remain

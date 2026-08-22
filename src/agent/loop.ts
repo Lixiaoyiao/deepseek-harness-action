@@ -305,6 +305,7 @@ export async function runAgentLoop<TFinal>(
   let toolCalls = 0;
   let validationRetries = 0;
   let lastValidationFingerprint: string | undefined;
+  let pendingValidationFailure: ValidationFailureError | undefined;
   const stats = (turns: number): AgentLoopStats => ({
     turns,
     toolCalls,
@@ -431,6 +432,7 @@ export async function runAgentLoop<TFinal>(
 
       if (result.output.state === "blocked") {
         throwIfCancelled(hooks.signal);
+        if (pendingValidationFailure !== undefined) throw pendingValidationFailure;
         const remainingBeforeBlocked = hooks.deadlineMs - now();
         if (remainingBeforeBlocked <= 0) throw new AgentDeadlineError();
         const finalization = await hooks.blocked(aggregate, remainingBeforeBlocked);
@@ -453,6 +455,7 @@ export async function runAgentLoop<TFinal>(
         };
       } catch (error: unknown) {
         if (!(error instanceof ValidationFailureError)) throw error;
+        pendingValidationFailure = error;
         validationRetries += 1;
         await hooks.onState?.(aggregate, stats(turn));
         const onValidationRetry = hooks.onValidationRetry;
@@ -479,7 +482,7 @@ export async function runAgentLoop<TFinal>(
         if (turn === inputs.maxTurns) throw error;
       }
     }
-    throw new AgentLoopLimitError(inputs.maxTurns);
+    throw pendingValidationFailure ?? new AgentLoopLimitError(inputs.maxTurns);
   } finally {
     const cleanupDeadlineMs = Date.now() + PHASE_TIMEOUTS.cleanupMs;
     const cleanup = async (

@@ -127,10 +127,10 @@ DSH turn
   ├─ needs_tool → controller runs one allowed tool → bounded/redacted untrusted result → next turn
   ├─ final → controller validation fails → stdout/stderr as untrusted feedback → next edit turn
   ├─ final → validation passes → controller publishes, commits, or opens a pull request
-  └─ blocked → stop safely with a neutral result
+  └─ blocked → neutral only when no unresolved Controller validation failure is pending
 ```
 
-The default `strict` Agent toolset has no shell. A trusted maintainer may select `standard` or an exact `custom` policy that exposes DSH's audited native Bash tool inside the credential-free Docker worker. No profile gives DSH GitHub credentials, the real DeepSeek key, permission to approve or expand its own tools, or commit/push/PR/release authority. An explicitly allowed third-party extension is trusted worker code and can have the process-level side effects described below. The controller owns validation, actual-change inspection, and every final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
+The default `strict` Agent toolset has no shell. A trusted maintainer may select `standard` or an exact `custom` policy that exposes DSH's audited native Bash tool inside the credential-free Docker worker. No profile gives DSH GitHub credentials, the real DeepSeek key, permission to approve or expand its own tools, or commit/push/PR/release authority. An explicitly allowed third-party extension is trusted worker code and can have the process-level side effects described below. The controller owns validation, actual-change inspection, and every final GitHub mutation. `max-turns` (default 3) bounds all DSH turns consumed by tool requests and validation repairs; `timeout-minutes` is the deadline for the complete controller loop. If the same workspace revision produces the same validation failure twice, no-progress detection stops the loop. If a repair turn instead reports `blocked`, it cannot erase the pending validation failure: the original failure and any Validation Integrity audit remain the authoritative result. Turn/tool/validation-retry counts and bounded tool receipts are recorded under `result-json.loop`.
 
 ## Permission profiles
 

@@ -763,6 +763,7 @@ async function runActionInternal(
       ...write,
     };
   } catch (error: unknown) {
+    if (error instanceof ValidationIntegrityError) state.validationIntegrity = error.audit;
     // Begin terminal publication before temporary-directory cleanup. For
     // signal-driven Agent cancellation an even earlier abort listener starts
     // the same idempotent attempt while nested runtime cleanup is still active.
