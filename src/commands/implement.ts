@@ -63,6 +63,8 @@ export async function finishImplementation(
     issueContentFingerprint: input.issueIdentity.contentFingerprint,
     baseSha: input.boundHeadSha,
     runIdentity: input.operationKey,
+    branchPrefix: input.inputs.branchPrefix,
+    branchNameTemplate: input.inputs.branchNameTemplate,
   });
 
   // A completed prior attempt is success, not another write. It may have caused

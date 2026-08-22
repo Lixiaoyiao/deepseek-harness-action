@@ -8,6 +8,8 @@ import {
 } from "../src/orchestrator.js";
 import type { EntitySnapshot } from "../src/github/fetch.js";
 import type { GitHubContext } from "../src/github/context.js";
+import { taskIdentity } from "../src/orchestration/context.js";
+import { inputs } from "./helpers.js";
 
 describe("orchestrator bounds and failure reporting", () => {
   it("defers every write-task progress publication until final validation", () => {
@@ -21,6 +23,24 @@ describe("orchestrator bounds and failure reporting", () => {
     expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(64);
     expect(bounded.endsWith("[truncated by dsh-action]")).toBe(true);
     expect(bounded).not.toContain("�");
+  });
+
+  it("binds base and branch naming configuration into deterministic task identity", () => {
+    const command = {
+      operation: "task" as const,
+      source: "explicit-prompt" as const,
+      instructions: "update dependencies",
+      requestedAccess: "write" as const,
+    };
+    const baseline = taskIdentity(command, inputs(), "extensions", "permissions");
+    expect(taskIdentity(command, inputs(), "extensions", "permissions")).toBe(baseline);
+    for (const configured of [
+      inputs({ baseBranch: "release/next" }),
+      inputs({ branchPrefix: "automation/" }),
+      inputs({ branchNameTemplate: "{{prefix}}{{operation}}-{{key}}" }),
+    ]) {
+      expect(taskIdentity(command, configured, "extensions", "permissions")).not.toBe(baseline);
+    }
   });
 
   it("redacts controller secrets and caps reported failures", () => {
@@ -134,6 +154,20 @@ describe("orchestrator bounds and failure reporting", () => {
         { kind: "pull_request", headRef: "feature" } as EntitySnapshot,
       ),
     ).not.toThrow();
+
+    expect(() =>
+      assertOperationContext(
+        {
+          operation: "task",
+          source: "mention",
+          instructions: "change the code",
+          requestedAccess: "write",
+        },
+        context,
+        { kind: "pull_request", headRef: "release/next" } as EntitySnapshot,
+        "release/next",
+      ),
+    ).toThrow("configured base branch");
   });
 
   it("fails closed before every trusted write when the default branch is absent", () => {
@@ -158,7 +192,7 @@ describe("orchestrator bounds and failure reporting", () => {
         automation,
         undefined,
       ),
-    ).toThrow("default branch identity");
+    ).toThrow("base branch identity");
 
     const issueContext = {
       ...automation,
@@ -179,6 +213,20 @@ describe("orchestrator bounds and failure reporting", () => {
         issueContext,
         { kind: "issue" } as EntitySnapshot,
       ),
-    ).toThrow("default branch identity");
+    ).toThrow("base branch identity");
+
+    expect(() =>
+      assertOperationContext(
+        {
+          operation: "implement",
+          source: "mention",
+          instructions: "implement it",
+          requestedAccess: "write",
+        },
+        issueContext,
+        { kind: "issue" } as EntitySnapshot,
+        "release/next",
+      ),
+    ).not.toThrow();
   });
 });

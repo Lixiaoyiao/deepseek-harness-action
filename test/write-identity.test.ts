@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { GitHubClient } from "../src/github/client.js";
 import { issueContentFingerprint } from "../src/github/issue-identity.js";
-import { buildDshBranch } from "../src/write/branch.js";
+import {
+  buildControllerBranchName,
+  buildDshBranch,
+  MAX_BRANCH_NAME_BYTES,
+  validateBranchNameTemplate,
+} from "../src/write/branch.js";
 import {
   buildImplementationOperation,
   findReconciledImplementationCommit,
@@ -43,7 +48,7 @@ describe("write identity and reconciliation", () => {
     const first = implementation();
     const second = implementation();
     expect(second).toEqual(first);
-    expect(first.branch).toMatch(/^dsh\/7-implement-/u);
+    expect(first.branch).toBe(`dsh/7-implement-${first.key}`);
     expect(first.commitMessage).toContain("DSH-Operation-Key:");
     expect(first.pullRequestMarker).toContain("dsh-action:implement:v1");
     expect(buildDshBranch(1, "🔐", "run 1")).toBe("dsh/1-task-run-1");
@@ -59,6 +64,49 @@ describe("write identity and reconciliation", () => {
         runIdentity: "",
       }),
     ).toThrow("run identity");
+  });
+
+  it("renders only deterministic safe branch template variables", () => {
+    const custom = buildImplementationOperation({
+      owner: "octo",
+      repo: "repo",
+      issueNumber: 7,
+      issueState: "open",
+      issueContentFingerprint: "f".repeat(64),
+      baseSha: "a".repeat(40),
+      runIdentity: "12345",
+      branchPrefix: "automation/",
+      branchNameTemplate: "{{prefix}}{{entityType}}/{{operation}}-{{entityNumber}}-{{key}}",
+    });
+    expect(custom.branch).toBe(`automation/issue/implement-7-${custom.key}`);
+    expect(Buffer.byteLength(custom.branch, "utf8")).toBeLessThanOrEqual(MAX_BRANCH_NAME_BYTES);
+
+    expect(
+      buildControllerBranchName({
+        branchPrefix: "dsh/",
+        branchNameTemplate: "{{prefix}}../unsafe value/{{operation}}-{{key}}",
+        key: "a".repeat(24),
+        operation: "task",
+        entityType: "task",
+        entityNumber: "task",
+        legacySuffix: "unused",
+      }),
+    ).toBe(`dsh/branch/unsafe-value/task-${"a".repeat(24)}`);
+    expect(() => validateBranchNameTemplate("{{prefix}}{{key}}-{{timestamp}}")).toThrow(
+      "unknown variable",
+    );
+    expect(() => validateBranchNameTemplate("{{prefix}}{{operation}}")).toThrow("must include");
+    expect(() =>
+      buildControllerBranchName({
+        branchPrefix: "dsh/",
+        branchNameTemplate: `{{prefix}}${"x".repeat(220)}-{{key}}`,
+        key: "b".repeat(24),
+        operation: "task",
+        entityType: "task",
+        entityNumber: "task",
+        legacySuffix: "unused",
+      }),
+    ).toThrow("exceeds");
   });
 
   it("allows sticky-comment timestamp drift but rejects issue content or state drift", async () => {
@@ -173,7 +221,7 @@ describe("write identity and reconciliation", () => {
     };
     const first = buildAutomationTaskOperation(input);
     expect(buildAutomationTaskOperation(input)).toEqual(first);
-    expect(first.branch).toMatch(/^dsh\/task-[a-f0-9]{24}$/u);
+    expect(first.branch).toBe(`dsh/task-${first.key}`);
     expect(first.commitMessage).toContain(`DSH-Task-Key: ${first.key}`);
     expect(first.pullRequestMarker).toContain("dsh-action:task:v1");
     expect(() => buildAutomationTaskOperation({ ...input, runIdentity: "" })).toThrow(
@@ -182,6 +230,14 @@ describe("write identity and reconciliation", () => {
     expect(() => buildAutomationTaskOperation({ ...input, runIdentity: "bad\0run" })).toThrow(
       "run identity",
     );
+
+    const custom = buildAutomationTaskOperation({
+      ...input,
+      entityNumber: 9,
+      branchPrefix: "bot-",
+      branchNameTemplate: "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}",
+    });
+    expect(custom.branch).toBe(`bot-issue-9-task-${custom.key}`);
   });
 
   it("reconciles only a task branch with the exact base and operation commit", async () => {

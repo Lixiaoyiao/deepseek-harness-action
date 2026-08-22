@@ -66,6 +66,8 @@ export interface FinishAutomationTaskInput {
   readonly runTests: boolean;
   readonly testCommands: readonly (readonly string[])[];
   readonly containerImage: string;
+  readonly branchPrefix?: string;
+  readonly branchNameTemplate?: string;
   readonly validationDeadlineMs?: number;
   readonly signal?: AbortSignal;
   readonly relatedIssue?: {
@@ -92,6 +94,11 @@ export async function finishAutomationTask(input: FinishAutomationTaskInput): Pr
     baseSha,
     runIdentity: input.runIdentity,
     taskIdentity: input.taskIdentity,
+    ...(input.branchPrefix === undefined ? {} : { branchPrefix: input.branchPrefix }),
+    ...(input.branchNameTemplate === undefined
+      ? {}
+      : { branchNameTemplate: input.branchNameTemplate }),
+    ...(input.relatedIssue === undefined ? {} : { entityNumber: input.relatedIssue.number }),
   });
 
   const completed = await withinValidationDeadline(

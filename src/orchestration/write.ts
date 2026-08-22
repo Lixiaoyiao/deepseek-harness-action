@@ -9,7 +9,7 @@ import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import type { WorkspaceSnapshot } from "../write/workspace.js";
-import { issueTaskIdentity, runUrl } from "./context.js";
+import { issueTaskIdentity, resolveBaseBranch, runUrl } from "./context.js";
 
 export interface WriteOutcome {
   readonly writeStatus: "success" | "partial-success";
@@ -37,6 +37,13 @@ export async function executeWrite(
   signal?: AbortSignal,
 ): Promise<WriteOutcome> {
   throwIfCancelled(signal);
+  const baseBranch = resolveBaseBranch(context, inputs.baseBranch);
+  const requireBaseBranch = (): string => {
+    if (baseBranch === undefined) {
+      throw new Error("A repository base branch is required for pull-request creation");
+    }
+    return baseBranch;
+  };
   if (
     command.operation === "implement" &&
     snapshot?.kind === "issue" &&
@@ -53,7 +60,7 @@ export async function executeWrite(
         updatedAt: snapshot.updatedAt,
         contentFingerprint: snapshot.contentFingerprint,
       },
-      baseBranch: context.repository.defaultBranch ?? "main",
+      baseBranch: requireBaseBranch(),
       snapshot: workspaceCopy,
       boundHeadSha: boundWriteSha,
       operationKey: context.runId,
@@ -79,7 +86,7 @@ export async function executeWrite(
       client,
       owner: context.repository.owner,
       repo: context.repository.repo,
-      baseBranch: context.repository.defaultBranch ?? "main",
+      baseBranch: requireBaseBranch(),
       boundHeadSha: boundWriteSha,
       runIdentity: context.runId,
       taskIdentity: issueTaskIdentity(taskIdentity, snapshot),
@@ -89,6 +96,8 @@ export async function executeWrite(
       runTests: inputs.runTests,
       testCommands: inputs.testCommands,
       containerImage: inputs.containerImage,
+      branchPrefix: inputs.branchPrefix,
+      branchNameTemplate: inputs.branchNameTemplate,
       validationDeadlineMs,
       ...(signal === undefined ? {} : { signal }),
       relatedIssue: {
@@ -157,7 +166,7 @@ export async function executeWrite(
       client,
       owner: context.repository.owner,
       repo: context.repository.repo,
-      baseBranch: context.repository.defaultBranch ?? "main",
+      baseBranch: requireBaseBranch(),
       boundHeadSha: boundWriteSha,
       runIdentity: context.runId,
       taskIdentity,
@@ -167,6 +176,8 @@ export async function executeWrite(
       runTests: inputs.runTests,
       testCommands: inputs.testCommands,
       containerImage: inputs.containerImage,
+      branchPrefix: inputs.branchPrefix,
+      branchNameTemplate: inputs.branchNameTemplate,
       validationDeadlineMs,
       ...(signal === undefined ? {} : { signal }),
       onPhase,

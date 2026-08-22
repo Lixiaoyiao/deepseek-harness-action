@@ -25,6 +25,9 @@ describe("loadInputs", () => {
     expect(result.allowedBots).toEqual([]);
     expect(result.includeCommentsByActor).toEqual([]);
     expect(result.excludeCommentsByActor).toEqual([]);
+    expect(result.baseBranch).toBe("");
+    expect(result.branchPrefix).toBe("dsh/");
+    expect(result.branchNameTemplate).toBe("");
     expect(result.taskAccess).toBe("read");
     expect(result.maxTurns).toBe(3);
     expect(result.permissionProfile).toBe("strict");
@@ -41,6 +44,23 @@ describe("loadInputs", () => {
       ["node", "script with spaces.js"],
     ]);
     expect(result.taskOutputSchema).toBeUndefined();
+  });
+
+  it("validates base branch and deterministic branch naming configuration", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "base-branch": " release/next ",
+        "branch-prefix": "automation/",
+        "branch-name-template": "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}",
+      }),
+    );
+    expect(result).toMatchObject({
+      baseBranch: "release/next",
+      branchPrefix: "automation/",
+      branchNameTemplate: "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}",
+    });
   });
 
   it("parses bounded maintainer-owned routing and actor filters", () => {
@@ -99,6 +119,10 @@ describe("loadInputs", () => {
     ["allowed-bots", "alice/../../admin"],
     ["task-output-schema", '{"type":"object","$ref":"https://example.test/schema"}'],
     ["task-output-schema", '{"type":"object","oneOf":[{"type":"object"}]}'],
+    ["base-branch", "refs/heads/main"],
+    ["branch-prefix", "-unsafe/"],
+    ["branch-name-template", "{{prefix}}{{operation}}"],
+    ["branch-name-template", "{{prefix}}{{key}}-{{timestamp}}"],
   ])("rejects invalid %s", (name, value) => {
     expect(() =>
       loadInputs(
@@ -289,5 +313,28 @@ describe("loadInputs", () => {
         }),
       ),
     ).toThrow(/supported only for command task or auto/u);
+  });
+
+  it("rejects controller credentials embedded in public branch configuration", () => {
+    const deepseekKey = "sk-deepseek-secret-value";
+    const githubToken = "ghs_controller-secret-value";
+    for (const values of [
+      { "base-branch": githubToken },
+      { "branch-prefix": `${deepseekKey}/` },
+      {
+        "branch-name-template": `{{prefix}}{{operation}}-${githubToken}-{{key}}`,
+      },
+      { "branch-name-template": `{{prefix}}{{key}}-{{${githubToken}}}` },
+    ]) {
+      expect(() =>
+        loadInputs(
+          reader({
+            "deepseek-api-key": deepseekKey,
+            "github-token": githubToken,
+            ...values,
+          }),
+        ),
+      ).toThrow(/credentials must not appear/u);
+    }
   });
 });

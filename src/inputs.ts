@@ -19,6 +19,8 @@ import {
 } from "./tools/schema.js";
 import { DSH_VERSION } from "./release.js";
 import { parseTaskOutputSchema } from "./dsh/task-output.js";
+import { validateRefName } from "./security/refs.js";
+import { validateBranchNameTemplate, validateBranchPrefix } from "./write/branch.js";
 
 const booleanInput = z.enum(["true", "false"]).transform((value) => value === "true");
 
@@ -113,6 +115,46 @@ function actorListInput(name: string) {
   });
 }
 
+const baseBranchInput = z.string().transform((value, context): string => {
+  const branch = value.trim();
+  if (branch === "") return "";
+  if (Buffer.byteLength(branch, "utf8") > 240) {
+    context.addIssue({ code: "custom", message: "base-branch must not exceed 240 UTF-8 bytes" });
+    return z.NEVER;
+  }
+  if (branch.startsWith("refs/")) {
+    context.addIssue({ code: "custom", message: "base-branch must be an unqualified branch name" });
+    return z.NEVER;
+  }
+  try {
+    return validateRefName(branch);
+  } catch (error: unknown) {
+    context.addIssue({
+      code: "custom",
+      message:
+        error instanceof Error ? `invalid base-branch: ${error.message}` : "invalid base-branch",
+    });
+    return z.NEVER;
+  }
+});
+
+function validatedBranchInput(
+  name: "branch-prefix" | "branch-name-template",
+  validate: (value: string) => string,
+) {
+  return z.string().transform((value, context): string => {
+    try {
+      return validate(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : `invalid ${name}`,
+      });
+      return z.NEVER;
+    }
+  });
+}
+
 const actionInputsSchema = z.object({
   deepseekApiKey: z.string().min(8, "deepseek-api-key must be at least 8 characters"),
   githubToken: z.string().min(8, "github-token must be at least 8 characters"),
@@ -139,6 +181,9 @@ const actionInputsSchema = z.object({
   allowedBots: actorListInput("allowed-bots"),
   includeCommentsByActor: actorListInput("include-comments-by-actor"),
   excludeCommentsByActor: actorListInput("exclude-comments-by-actor"),
+  baseBranch: baseBranchInput,
+  branchPrefix: validatedBranchInput("branch-prefix", validateBranchPrefix),
+  branchNameTemplate: validatedBranchInput("branch-name-template", validateBranchNameTemplate),
   maxTurns: integerInput(1, 10),
   permissionProfile: permissionProfileSchema,
   validationIntegrity: z.enum(["off", "warn", "strict"]),
@@ -243,6 +288,9 @@ const defaults = {
   allowedBots: "",
   includeCommentsByActor: "",
   excludeCommentsByActor: "",
+  baseBranch: "",
+  branchPrefix: "dsh/",
+  branchNameTemplate: "",
   maxTurns: "3",
   permissionProfile: "strict",
   validationIntegrity: "warn",
@@ -273,28 +321,57 @@ function containsSecret(value: unknown, secret: string): boolean {
 
 function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): void {
   const secrets = [inputs.deepseekApiKey, inputs.githubToken];
+  const publicRefConfiguration = [
+    inputs.baseBranch,
+    inputs.branchPrefix,
+    inputs.branchNameTemplate,
+  ];
   const configuredArgv = [
     ...inputs.testCommands,
     ...inputs.toolConfig.commands.map(({ argv }) => argv),
   ];
   if (
-    secrets.some((secret) => inputs.prompt.includes(secret)) ||
+    secrets.some(
+      (secret) =>
+        inputs.prompt.includes(secret) ||
+        publicRefConfiguration.some((value) => value.includes(secret)),
+    ) ||
     secrets.some((secret) => containsSecret(inputs.taskOutputSchema, secret)) ||
     configuredArgv.some((argv) =>
       argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
     )
   ) {
     throw new ActionConfigurationError(
-      "Invalid action inputs: controller credentials must not appear in the task prompt, task-output-schema, test-commands, or tool-config argv",
+      "Invalid action inputs: controller credentials must not appear in the task prompt, branch configuration, task-output-schema, test-commands, or tool-config argv",
     );
   }
 }
 
 /** Parse and validate all action inputs before any external side effect occurs. */
 export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
+  const deepseekApiKey = reader("deepseek-api-key", { required: true });
+  const githubToken = reader("github-token", { required: true });
+  const baseBranch = optionalInput(reader, "base-branch", defaults.baseBranch);
+  const branchPrefix = optionalInput(reader, "branch-prefix", defaults.branchPrefix);
+  const branchNameTemplate = optionalInput(
+    reader,
+    "branch-name-template",
+    defaults.branchNameTemplate,
+  );
+  if (
+    [deepseekApiKey, githubToken].some(
+      (secret) =>
+        secret !== "" &&
+        [baseBranch, branchPrefix, branchNameTemplate].some((value) => value.includes(secret)),
+    )
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: controller credentials must not appear in branch configuration",
+    );
+  }
   const parsed = actionInputsSchema.safeParse({
-    deepseekApiKey: reader("deepseek-api-key", { required: true }),
-    githubToken: reader("github-token", { required: true }),
+    deepseekApiKey,
+    githubToken,
     allowWrite: optionalInput(reader, "allow-write", defaults.allowWrite),
     command: optionalInput(reader, "command", defaults.command),
     taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
@@ -326,6 +403,9 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       "exclude-comments-by-actor",
       defaults.excludeCommentsByActor,
     ),
+    baseBranch,
+    branchPrefix,
+    branchNameTemplate,
     maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
     permissionProfile: optionalInput(reader, "permission-profile", defaults.permissionProfile),
     validationIntegrity: optionalInput(

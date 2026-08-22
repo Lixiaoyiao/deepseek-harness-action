@@ -279,6 +279,7 @@ describe("orchestrator task no-change publication", () => {
   it("copies the immutable GitHub tree through the explicit materialized-tree source contract", async () => {
     await runAction();
 
+    expect(mocks.getBranchHead).toHaveBeenCalledWith(client, "octo", "repo", "main");
     expect(mocks.materializeRepositoryAtSha).toHaveBeenCalledOnce();
     const materializationCalls = mocks.materializeRepositoryAtSha.mock
       .calls as unknown as readonly (readonly unknown[])[];
@@ -286,6 +287,30 @@ describe("orchestrator task no-change publication", () => {
     expect(immutableSource).toEqual(expect.any(String));
     expect(mocks.createWorkspaceSnapshot).toHaveBeenCalledWith(
       { kind: "materialized-tree", root: immutableSource },
+      expect.any(String),
+    );
+  });
+
+  it("resolves a configured base branch to one immutable Controller-bound head", async () => {
+    mocks.loadInputs.mockReturnValue(
+      inputs({
+        command: "task",
+        prompt: "Check the configured release branch",
+        taskAccess: "write",
+        allowWrite: true,
+        isolation: "docker",
+        baseBranch: "release/next",
+      }),
+    );
+
+    await runAction();
+
+    expect(mocks.getBranchHead).toHaveBeenCalledWith(client, "octo", "repo", "release/next");
+    expect(mocks.materializeRepositoryAtSha).toHaveBeenCalledWith(
+      client,
+      "octo",
+      "repo",
+      headSha,
       expect.any(String),
     );
   });

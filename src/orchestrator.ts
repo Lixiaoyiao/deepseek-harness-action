@@ -57,6 +57,7 @@ import {
   buildContextPacket,
   deferProgressUntilWriteValidation,
   requireWorkspace,
+  resolveBaseBranch,
   resolvePullRequest,
   runUrl,
   taskIdentity,
@@ -215,6 +216,7 @@ async function runActionInternal(
   state.phase = "routing";
   const payload = await readEventPayload(process.env.GITHUB_EVENT_PATH);
   const context = parseGitHubContext(process.env, payload);
+  const baseBranch = resolveBaseBranch(context, inputs.baseBranch);
   const currentRunUrl = runUrl(context);
   state.runUrl = currentRunUrl;
   let command = routeCommand(context, inputs);
@@ -268,7 +270,7 @@ async function runActionInternal(
       commentActorFilter,
     );
   }
-  assertOperationContext(command, context, snapshot);
+  assertOperationContext(command, context, snapshot, baseBranch);
 
   state.phase = "authorization";
   const policy = evaluatePolicy({
@@ -323,17 +325,16 @@ async function runActionInternal(
     ) {
       tempRoot = await mkdtemp(join(tmpdir(), "dsh-action-workspace-"));
       const immutableSource = join(tempRoot, "source");
-      const baseSha =
-        snapshot?.kind === "pull_request"
-          ? snapshot.headSha
-          : await import("./write/github.js").then(({ getBranchHead }) =>
-              getBranchHead(
-                client,
-                context.repository.owner,
-                context.repository.repo,
-                context.repository.defaultBranch ?? "main",
-              ),
-            );
+      const baseSha = await (async (): Promise<string> => {
+        // Pull-request review/fix always stays bound to the immutable PR head.
+        if (snapshot?.kind === "pull_request") return snapshot.headSha;
+        if (baseBranch === undefined) {
+          throw new PolicyDeniedError("Cannot bind repository content without a base branch");
+        }
+        return await import("./write/github.js").then(({ getBranchHead }) =>
+          getBranchHead(client, context.repository.owner, context.repository.repo, baseBranch),
+        );
+      })();
       boundWriteSha = baseSha;
       await materializeRepositoryAtSha(
         client,
