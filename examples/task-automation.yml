@@ -55,6 +55,7 @@ jobs:
           max-turns: "5"
           run-tests: "true"
           validation-integrity: strict
+          # Replace these validation commands with the commands for your repository.
           test-commands: >-
             [
               ["npm","ci","--ignore-scripts"],

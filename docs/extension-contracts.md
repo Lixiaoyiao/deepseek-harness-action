@@ -1,5 +1,7 @@
 # Extension contracts
 
+[README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
+
 ## Status in v0.5.1
 
 The extension model introduced in v0.4 remains active in v0.5.1 through DeepSeek Harness's
