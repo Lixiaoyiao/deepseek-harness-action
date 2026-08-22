@@ -71,7 +71,7 @@ afterEach(async () => {
   );
 });
 
-describe("official rc.8 Profile package extension boot", () => {
+describe("official rc.2 Profile package extension boot", () => {
   it.each([
     { kind: "bundle", label: "Bundle", planKey: "bundles", groupId: "bundle.fixture" },
     {

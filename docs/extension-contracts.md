@@ -1,12 +1,12 @@
 # Extension contracts
 
-## Status in v0.4
+## Status in v0.5.1
 
-v0.4 activates MCP, Bundle, and plugin tools through DeepSeek Harness's
+The extension model introduced in v0.4 remains active in v0.5.1 through DeepSeek Harness's
 official extension mechanisms. The Action does not define a second plugin
 system:
 
-- `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8` owns MCP connection, discovery,
+- `@deepseek-ai/dsh-mcp-client@0.1.1-rc.2` owns MCP connection, discovery,
   registration, reconnect, and dispatch.
 - DSH Profile and Bundle manifests own Bundle composition. Cordis owns plugin
   loading and configuration.
@@ -19,9 +19,10 @@ system:
 Session resume remains deferred. Every outer-loop iteration starts a fresh DSH
 headless process over the same run-scoped `.git`-less workspace and persistent
 invocation-count files. The Action boots its controlled Profile through the
-official `@deepseek-ai/dsh-app-boot@0.1.0-rc.8` public API rather than the
-general-purpose CLI path. v0.4 adds no resume input, reusable session token,
-label/assignee trigger, branch template, or Agent Teams behavior.
+official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
+general-purpose CLI path. v0.5.1 adds no Session/Resume input, reusable session
+token, Label/Assignee trigger, custom trigger phrase, branch template, Agent
+Teams, GitHub App/installer, or other product expansion.
 
 ## Versioned configuration
 
@@ -29,11 +30,38 @@ label/assignee trigger, branch template, or Agent Teams behavior.
 `schemaVersion: 1`. Agent turns and structured DSH output independently use
 protocol version 1. Unknown fields and unsupported schema versions fail closed.
 
-The Controller accepts only `@deepseek-ai/dsh@0.1.0-rc.8` and the matching
-official MCP client. Shipped DSH packages are installed from the committed
-lockfile, and the runtime verifies that every installed `@deepseek-ai/dsh*`
-entry has the audited rc.8 version. A new DSH version requires a reviewed
-Profile, native tool inventory, compatibility tests, and a new accepted pin.
+The Controller accepts only `@deepseek-ai/dsh@0.1.1-rc.2` and the matching
+official package family. Every directly used DSH package is an exact top-level
+pin, shipped packages are installed from the committed lockfile, and the
+runtime verifies that every installed `@deepseek-ai/dsh*` entry has the audited
+rc.2 version. A new DSH version requires a reviewed Profile, native tool
+inventory, compatibility tests, and a new accepted pin.
+
+The rc.8-to-rc.2 audit covered app-boot, Profile/Bundle/Plugin composition,
+MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, and Docker/path/timeout
+behavior. rc.2's relevant runtime contracts remain compatible with the
+Action's existing inputs, outputs, and permission semantics; the updated DSH
+sandbox also adds its upstream process-namespace hardening. This compatibility
+statement applies only to `0.1.1-rc.2` and is not an approval for later release
+candidates.
+
+## Run-scoped lifecycle and bounded phases
+
+The runtime controller is separated into process launch, exact package
+installation and inventory audit, network selection, Docker policy, Profile
+assembly, and receipt reconciliation responsibilities. Their temporary
+directories, DSH home, npm cache, sessions, counters, and tool state are bound
+to one Action run. Runtime reuse requires the complete audited identity to
+match; setup or extension-install failure rolls back partially created state.
+
+Runtime creation and installation, extension installation, each Agent turn,
+Controller validation, cleanup, and cancellation finalization each have an
+independent cap. A phase always receives the smaller of that cap and the
+remaining overall Action deadline, so setup cannot consume the entire task
+budget and no local phase budget can extend the total deadline. `SIGTERM` and
+`SIGINT` trigger a bounded best-effort abort, worker cleanup, and eligible
+sticky-comment finalization. `SIGKILL`, host/runner loss, a process crash, or a
+network/GitHub API outage can prevent finalization entirely.
 
 `container-image`, `base-url`, `isolation`, and `dsh-executable` are trusted
 capability inputs. They select executable worker code, the destination that
@@ -118,16 +146,17 @@ package identity and version or Git commit. For a Bundle it also resolves
 `dsh.bundle.patch` and rejects a patch path whose real path escapes the
 installed package.
 
-These checks do not sandbox approved package code. A Bundle patch and direct
-plugin execute full trusted worker code in the DSH process during startup,
-before any model tool call. The package may continue background work or perform
-direct process I/O outside the ToolRuntime call hook. Treat enabling it as
+These checks and ToolRuntime do not sandbox approved package code. A Bundle
+patch and direct plugin execute full trusted worker code in the DSH process
+during startup, before any model tool call. The package may continue background
+work or perform direct process I/O outside the ToolRuntime call hook. The same
+boundary applies to launching an approved stdio MCP executable. Treat enabling it as
 trusted worker-code execution and review its source, transitive dependencies,
 configuration, filesystem access, and network requirements.
 
 ## Official MCP contract
 
-`mcp-config` exposes only transports supported by the official rc.8 client:
+`mcp-config` exposes only transports supported by the official rc.2 client:
 
 - `stdio`, with a bare executable name or absolute container path; or
 - `streamable-http`, with an HTTP(S) URL and explicit headers.
@@ -231,7 +260,11 @@ DSH durably records two-phase admission (`started`) and completion (`completed`)
 events without arguments or tool output. The Controller reconciles those events
 with the persistent tool and owner counters into one final receipt per call; a
 worker crash after admission becomes `completed:false`. It aggregates those
-final receipts across every fresh DSH turn before Action finalization.
+final receipts across every fresh DSH turn before Action finalization. Receipt
+collection reads only the newly appended byte range after the previous offset
+and uses set membership when reconciling receipt order. This keeps repeated
+multi-turn collection proportional to new records instead of rescanning the
+whole file, without changing the receipt schema or security meaning.
 `result-json.loop` separates Controller `toolReceipts` from DSH
 `dshToolReceipts`; the bounded `tool-receipts` scalar output always serializes
 `{"controller": [...], "dsh": [...], "truncated": false, "droppedCount": 0}`.
@@ -247,9 +280,17 @@ worker-side state and receipts.
 Every code, Git ref and pull-request mutation requires `run-tests=true`, at
 least one configured `test-commands` argv array, and successful completion of
 every Controller validation command. `run-tests=false` denies the mutation and
-is not a waiver. This v0.4 hardening is intentionally stricter than the earlier
+is not a waiver. This hardening is intentionally stricter than the earlier
 compatibility path; no model output, ToolRuntime receipt, or extension result
 can replace the final validation gate.
+
+v0.5.1 builds the validation-integrity audit from a normalized command graph,
+including package-script entrypoints and Node wrapper options such as preload
+modules. Strict mode treats replacement/removal of bound toolchain manifests or
+locks, removed validation keys hidden by unrelated additions, and equivalent
+wrapper indirection as control-plane changes. The graph and replay planning are
+separate from execution, and a detected weakening still prevents every GitHub
+mutation.
 
 Controller-owned read-only lifecycle/status comments are publication telemetry
 and may follow authorization before repository validation. A write request does
@@ -268,7 +309,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.4 does not instantiate a store or expose a resume token.
+interfaces only. v0.5.1 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

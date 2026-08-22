@@ -16,7 +16,7 @@ import { mcpPublicToolName } from "../src/extensions/plan.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
 
-describe("official @deepseek-ai/dsh-mcp-client rc.8", () => {
+describe("official @deepseek-ai/dsh-mcp-client rc.2", () => {
   let context: Context;
 
   beforeAll(async () => {
@@ -54,7 +54,7 @@ describe("official @deepseek-ai/dsh-mcp-client rc.8", () => {
     });
   });
 
-  it("locks the Action mapping to rc.8 public-name normalization", () => {
+  it("locks the Action mapping to rc.2 public-name normalization", () => {
     const expected = mcpPublicToolName("fixture", "admin.reset");
     expect(expected).toMatch(/^mcp__fixture__admin_reset_[0-9a-f]{12}$/u);
     expect(context.tools.schemas().map(({ name }) => name)).toContain(expected);
@@ -92,7 +92,7 @@ describe("official @deepseek-ai/dsh-mcp-client rc.8", () => {
   });
 });
 
-// Adapted from the official rc.8 dsh-mcp-client stateless HTTP fixture.
+// Adapted from the official rc.2 dsh-mcp-client stateless HTTP fixture.
 describe("official streamable-http transport", () => {
   let context: Context;
   let server: Server;

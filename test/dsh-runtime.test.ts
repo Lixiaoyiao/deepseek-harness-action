@@ -12,12 +12,13 @@ import {
   type DshRuntime,
   type DshRuntimeBinding,
 } from "../src/dsh/runtime.js";
+import { DSH_VERSION } from "../src/release.js";
 
 const EXTENSION_DIGEST = "a".repeat(64);
 
 function binding(overrides: Partial<DshRuntimeBinding> = {}): DshRuntimeBinding {
   return {
-    dshVersion: "0.1.0-rc.8",
+    dshVersion: DSH_VERSION,
     containerImage: `docker.io/library/node@sha256:${"1".repeat(64)}`,
     isolation: "docker",
     workspacePath: join(tmpdir(), "dsh-runtime-workspace"),

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DshRunResult } from "../src/dsh/runner.js";
+import { DshAbortedError } from "../src/dsh/errors.js";
 import type { GitHubClient } from "../src/github/client.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
 
@@ -36,7 +37,8 @@ vi.mock("../src/write/task.js", () => ({
   findReconciledTaskCommit: mocks.findReconciledCommit,
 }));
 vi.mock("../src/write/issue.js", () => ({ revalidateIssueIdentity: mocks.revalidateIssue }));
-vi.mock("../src/write/validate.js", () => ({
+vi.mock("../src/write/validate.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("../src/write/validate.js")),
   assertValidationSucceeded: mocks.assertValidation,
   assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
     if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
@@ -98,7 +100,7 @@ const taskInput = () => ({
   runTests: true,
   testCommands: [["npm", "test"]] as const,
   containerImage: `node@sha256:${"f".repeat(64)}`,
-  validationTimeoutMs: 30_000,
+  validationDeadlineMs: Date.now() + 30_000,
   relatedIssue: {
     number: 7,
     identity: {
@@ -122,7 +124,27 @@ beforeEach(() => {
   mocks.upsertComment.mockResolvedValue(73);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("generic automation task finalizer", () => {
+  it("passes only the remaining shared deadline to task validation", async () => {
+    let clock = 3_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    mocks.findPullRequest.mockImplementationOnce(() => {
+      clock += 9 * 60_000;
+      return Promise.resolve(null);
+    });
+
+    await finishAutomationTask({
+      ...taskInput(),
+      validationDeadlineMs: 3_000 + 10 * 60_000,
+    });
+
+    expect(mocks.runValidation.mock.calls[0]?.[3]).toBe(60_000);
+  });
+
   it("publishes a bounded generic task answer under the task marker", async () => {
     const commentId = await publishTaskAnswer(
       {} as GitHubClient,
@@ -246,6 +268,24 @@ describe("generic automation task finalizer", () => {
 
     expect(mocks.runValidation).toHaveBeenCalledOnce();
     expect(mocks.assertValidation).toHaveBeenCalledOnce();
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.createRemoteBranch).not.toHaveBeenCalled();
+    expect(mocks.createPullRequest).not.toHaveBeenCalled();
+    expect(mocks.upsertComment).not.toHaveBeenCalled();
+  });
+
+  it("performs no GitHub mutation when cancellation lands as validation returns", async () => {
+    const controller = new AbortController();
+    const cancellation = new DshAbortedError();
+    mocks.runValidation.mockImplementationOnce(() => {
+      controller.abort(cancellation);
+      return Promise.resolve([]);
+    });
+
+    await expect(finishAutomationTask({ ...taskInput(), signal: controller.signal })).rejects.toBe(
+      cancellation,
+    );
+
     expect(mocks.createCommit).not.toHaveBeenCalled();
     expect(mocks.createRemoteBranch).not.toHaveBeenCalled();
     expect(mocks.createPullRequest).not.toHaveBeenCalled();

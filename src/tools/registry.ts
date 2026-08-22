@@ -236,6 +236,7 @@ export class CommandToolProvider implements ToolProvider {
       workspacePath: this.options.workspacePath,
       containerImage: this.options.containerImage,
       timeoutMs: context.timeoutMs,
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
     });
     if (typeof result.output !== "object" || result.output === null) {
       throw new Error(`Command tool ${id} returned an invalid result envelope`);

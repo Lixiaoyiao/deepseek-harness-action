@@ -16,6 +16,8 @@ import {
 import { DshError, type DshFailureTelemetry } from "../dsh/errors.js";
 import { parseDshOutput, type DshOutput } from "../dsh/schema.js";
 import type { ActionInputs } from "../inputs.js";
+import { throwIfCancelled } from "../lifecycle/cancellation.js";
+import { PHASE_TIMEOUTS, phaseTimeoutMs, settleWithin } from "../lifecycle/deadline.js";
 import { DshAgentEngine, type AgentTask, type DshTurnMetadata } from "../review/run.js";
 import { ValidationFailureError } from "../write/validate.js";
 import { fingerprintWorkspace } from "../write/workspace.js";
@@ -32,8 +34,8 @@ export class AgentLoopLimitError extends Error {
 export class AgentDeadlineError extends Error {
   public readonly code = "AGENT_TIMEOUT";
 
-  public constructor() {
-    super("The controller-owned agent loop exceeded its overall timeout");
+  public constructor(message = "The controller-owned agent loop exceeded its overall timeout") {
+    super(message);
     this.name = "AgentDeadlineError";
   }
 }
@@ -77,6 +79,7 @@ export interface AgentLoopResult<TFinal = undefined> {
 
 export interface AgentLoopHooks<TFinal> {
   readonly deadlineMs: number;
+  readonly signal?: AbortSignal;
   readonly toolProvider?: ToolProvider;
   readonly blocked: (result: DshRunResult, remainingMs: number) => Promise<TFinal>;
   readonly finalize: (result: DshRunResult, remainingMs: number) => Promise<TFinal>;
@@ -210,6 +213,43 @@ interface TaskContextAnchor {
   readonly jsonPrefix: string;
 }
 
+async function createRuntimeWithinDeadline(
+  createRuntime: () => Promise<DshRuntime>,
+  disposeRuntime: (runtime: DshRuntime) => Promise<void>,
+  hooks: Pick<AgentLoopHooks<unknown>, "deadlineMs" | "signal">,
+  now: () => number,
+): Promise<DshRuntime> {
+  throwIfCancelled(hooks.signal);
+  const timeoutMs = phaseTimeoutMs(hooks.deadlineMs, PHASE_TIMEOUTS.runtimeCreateMs, now);
+  if (timeoutMs <= 0) throw new AgentDeadlineError();
+  const creation = createRuntime();
+  let result: { readonly settled: true; readonly value: DshRuntime } | { readonly settled: false };
+  try {
+    result = await settleWithin(creation, timeoutMs, hooks.signal);
+  } catch (error: unknown) {
+    void creation.then(disposeRuntime).catch(() => undefined);
+    throw error;
+  }
+  if (result.settled) return result.value;
+  void creation.then(disposeRuntime).catch(() => undefined);
+  throw new AgentDeadlineError("Agent runtime initialization exceeded its phase timeout");
+}
+
+async function runLifecycleHookWithinDeadline(
+  label: "turn progress" | "validation retry progress",
+  hook: () => void | Promise<void>,
+  hooks: Pick<AgentLoopHooks<unknown>, "deadlineMs" | "signal">,
+  now: () => number,
+): Promise<void> {
+  throwIfCancelled(hooks.signal);
+  const timeoutMs = phaseTimeoutMs(hooks.deadlineMs, PHASE_TIMEOUTS.setupMs, now);
+  if (timeoutMs <= 0) throw new AgentDeadlineError();
+  const result = await settleWithin(Promise.resolve().then(hook), timeoutMs, hooks.signal);
+  if (!result.settled) {
+    throw new AgentDeadlineError(`Agent ${label} hook exceeded its phase timeout`);
+  }
+}
+
 function turnContext(
   context: unknown,
   anchor: TaskContextAnchor,
@@ -243,7 +283,7 @@ export async function runAgentLoop<TFinal>(
   const disposeRuntime = dependencies.disposeRuntime ?? disposeDshRuntime;
   const workspaceFingerprint = dependencies.workspaceFingerprint ?? fingerprintWorkspace;
   const redact = hooks.redact ?? ((value: string) => value);
-  const runtime = await createRuntime();
+  const runtime = await createRuntimeWithinDeadline(createRuntime, disposeRuntime, hooks, now);
   let engine: AgentEngine<DshOutput, DshTurnMetadata> | undefined;
   const feedback: LoopFeedback[] = [];
   const toolReceipts: AgentToolReceipt[] = [];
@@ -276,9 +316,18 @@ export async function runAgentLoop<TFinal>(
       (await dependencies.createEngine?.(runtime)) ??
       new DshAgentEngine(inputs, task.policy, runtime, task.tools.extensions);
     for (let turn = 1; turn <= inputs.maxTurns; turn += 1) {
+      throwIfCancelled(hooks.signal);
       if (hooks.deadlineMs - now() <= 0) throw new AgentDeadlineError();
-      await hooks.onTurn?.(turn, inputs.maxTurns);
-      const remainingBeforeTurn = hooks.deadlineMs - now();
+      const onTurn = hooks.onTurn;
+      if (onTurn !== undefined) {
+        await runLifecycleHookWithinDeadline(
+          "turn progress",
+          async () => onTurn(turn, inputs.maxTurns),
+          hooks,
+          now,
+        );
+      }
+      const remainingBeforeTurn = phaseTimeoutMs(hooks.deadlineMs, PHASE_TIMEOUTS.agentTurnMs, now);
       if (remainingBeforeTurn <= 0) throw new AgentDeadlineError();
       let response;
       try {
@@ -290,7 +339,9 @@ export async function runAgentLoop<TFinal>(
           context: turnContext(task.contextPacket, taskContextAnchor, turn, feedback),
           tools: task.tools.manifests,
           workspacePath: task.workspacePath,
+          deadlineMs: hooks.deadlineMs,
           timeoutMs: remainingBeforeTurn,
+          ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),
         });
       } catch (error: unknown) {
         if (error instanceof DshError && error.telemetry !== undefined) {
@@ -325,6 +376,7 @@ export async function runAgentLoop<TFinal>(
       await hooks.onState?.(aggregate, stats(turn));
       const request = result.output.toolRequest;
       if (request !== undefined) {
+        throwIfCancelled(hooks.signal);
         if (hooks.toolProvider === undefined) {
           throw new Error(`Agent requested unavailable tool: ${request.id}`);
         }
@@ -342,7 +394,11 @@ export async function runAgentLoop<TFinal>(
         try {
           toolResult = await hooks.toolProvider.invoke(
             { callId, id: request.id, input },
-            { workspacePath: task.workspacePath, timeoutMs: remainingBeforeTool },
+            {
+              workspacePath: task.workspacePath,
+              timeoutMs: remainingBeforeTool,
+              ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),
+            },
           );
         } catch (error: unknown) {
           toolCalls += 1;
@@ -374,6 +430,7 @@ export async function runAgentLoop<TFinal>(
       }
 
       if (result.output.state === "blocked") {
+        throwIfCancelled(hooks.signal);
         const remainingBeforeBlocked = hooks.deadlineMs - now();
         if (remainingBeforeBlocked <= 0) throw new AgentDeadlineError();
         const finalization = await hooks.blocked(aggregate, remainingBeforeBlocked);
@@ -386,6 +443,7 @@ export async function runAgentLoop<TFinal>(
 
       const remainingBeforeFinalize = hooks.deadlineMs - now();
       if (remainingBeforeFinalize <= 0) throw new AgentDeadlineError();
+      throwIfCancelled(hooks.signal);
       try {
         const finalization = await hooks.finalize(aggregate, remainingBeforeFinalize);
         return {
@@ -397,7 +455,15 @@ export async function runAgentLoop<TFinal>(
         if (!(error instanceof ValidationFailureError)) throw error;
         validationRetries += 1;
         await hooks.onState?.(aggregate, stats(turn));
-        await hooks.onValidationRetry?.(turn, error);
+        const onValidationRetry = hooks.onValidationRetry;
+        if (onValidationRetry !== undefined) {
+          await runLifecycleHookWithinDeadline(
+            "validation retry progress",
+            async () => onValidationRetry(turn, error),
+            hooks,
+            now,
+          );
+        }
         const data = validationFeedback(error, redact);
         const fingerprint = feedbackFingerprint({
           argv: error.argv,
@@ -415,13 +481,18 @@ export async function runAgentLoop<TFinal>(
     }
     throw new AgentLoopLimitError(inputs.maxTurns);
   } finally {
+    const cleanupDeadlineMs = Date.now() + PHASE_TIMEOUTS.cleanupMs;
     const cleanup = async (
       component: "tool-provider" | "engine" | "runtime",
       dispose: (() => Promise<void>) | undefined,
     ): Promise<void> => {
       if (dispose === undefined) return;
       try {
-        await dispose();
+        const cleanupTimeoutMs = Math.max(0, cleanupDeadlineMs - Date.now());
+        const result = await settleWithin(Promise.resolve().then(dispose), cleanupTimeoutMs);
+        if (!result.settled) {
+          throw new Error(`Agent ${component} cleanup exceeded its phase timeout`);
+        }
       } catch (error: unknown) {
         try {
           await hooks.onCleanupError?.(component, error);

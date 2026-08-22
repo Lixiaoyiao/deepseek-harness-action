@@ -3,6 +3,88 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.5.1] - 2026-08-22
+
+### Changed
+
+- Upgraded the audited DeepSeek Harness runtime from `0.1.0-rc.8` to exact
+  `0.1.1-rc.2` pins. Every directly used `@deepseek-ai/dsh*` package, including
+  app-boot, MCP, native-tool, Profile/Bundle, and supporting runtime packages,
+  is a top-level exact pin backed by the committed lockfile. Floating versions,
+  `latest`, semver ranges, and floating Git references remain rejected.
+- Re-audited rc.2 app-boot, Profile/Bundle/Plugin composition, MCP,
+  ToolRuntime, Bash, Web Search, Subagent, receipt, Docker/path/timeout, and
+  bundled `dist` behavior. Existing Action inputs, outputs, permission
+  semantics, and schema-v1 `result-json` remain compatible.
+- Split DSH runner responsibilities into run-scoped process launch, exact
+  installation/inventory audit, network and Docker policy, Profile assembly,
+  receipt reconciliation, timeout, and cleanup boundaries. Validation
+  integrity now separates normalized command-graph discovery and replay
+  planning from execution.
+- Added independent bounded budgets for runtime creation/install, extension
+  install, each Agent turn, and Controller validation. Each execution phase is
+  also bounded by the remaining overall deadline, so setup cannot consume or
+  extend the complete task budget. Cleanup and cancellation finalization use
+  separate fixed short best-effort grace periods after the outcome/deadline.
+- Generalized the release canary to `DSH_RELEASE_CANARY_SHA`. The canary binds
+  its full candidate SHA to the formal v0.5.1 tag and non-draft,
+  non-prerelease GitHub Release before using the immutable local checkout. A
+  secretless gate also binds execution to the live `main` default-branch SHA;
+  the secret-bearing smoke job uses the protected, main-only `core-e2e`
+  environment.
+
+### Fixed
+
+- `SIGTERM` and `SIGINT` now abort the active Agent/worker and trigger bounded,
+  best-effort resource cleanup and terminal sticky-comment publication. The
+  comment attempt begins immediately and may run concurrently with cleanup;
+  terminal-state guards reject late progress, while a later authoritative
+  failure can correct provisional cancellation. A forced `SIGKILL`, runner/host
+  loss, process crash, or network/GitHub API outage still cannot guarantee that
+  finalization code runs.
+- Runtime setup now rolls back partially created state, and secondary proxy or
+  cleanup failures no longer replace the primary task result. Docker command
+  cancellation is propagated through the active worker and validation paths.
+- Controller credentials are now rejected from the trusted task prompt as well
+  as configured validation/tool argv. The final worker prompt, argv, and
+  environment are checked again immediately before launch, and worker output or
+  receipts containing a withheld credential fail closed without echoing it.
+- Validation integrity now follows package-script lifecycle chains and
+  interpreter, environment, shell, and package-executor wrappers; treats bound
+  toolchain manifest/lock replacement as a control-plane change; and detects
+  removed validation keys even when unrelated keys are added. Each reproduced
+  bypass has regression coverage and still blocks all GitHub mutation in strict
+  mode.
+
+### Performance and verification
+
+- DSH receipt collection uses ranged reads from the previous byte offset and
+  set-based order reconciliation. Repeated multi-turn collection processes new
+  receipt records without rescanning the complete file; the public receipt
+  schema and security meaning are unchanged. No synthetic percentage claim is
+  made for workload-dependent performance.
+- Unit and integration coverage is organized around policy/schema/parsing and
+  error classification, plus DSH/Profile/MCP/runtime/validation composition.
+  Release qualification keeps real E2E focused on the strict, Bash, Web Search,
+  native Subagent, MCP allow/deny, Profile/Bundle, validation-integrity,
+  validation-failure, trusted-write, no-change, cancellation, and
+  credential-free checkout golden paths.
+
+### Security and scope
+
+- The Agent still receives neither the real `GITHUB_TOKEN` nor the real
+  DeepSeek key. GitHub mutation remains Controller-only after actor, fork,
+  origin, SHA, protected-path, validation, and validation-integrity gates;
+  read-only and `.git`-less Docker boundaries are unchanged.
+- ToolRuntime limits model-routed calls; it does not sandbox an approved stdio
+  MCP executable, Bundle, or Plugin during launch, initialization, background
+  work, or direct process I/O. Such extensions remain trusted worker code
+  behind exact manifests, inventory audits, Docker isolation, and explicit
+  installation/network/workspace gates.
+- Session/Resume, Label/Assignee triggers, custom trigger phrases, branch
+  templates, Agent Teams, a GitHub App/installer, and other product expansion
+  remain out of scope for this maintenance release.
+
 ## [0.5.0] - 2026-08-22
 
 ### Added
@@ -379,6 +461,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.5.1]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.2.0...v0.3.0

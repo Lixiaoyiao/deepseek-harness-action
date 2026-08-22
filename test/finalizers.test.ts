@@ -113,6 +113,7 @@ describe("operation finalizers", () => {
 
   it("passes only typed controller fields into the DSH runner", async () => {
     mocks.runDsh.mockResolvedValue(result);
+    const startedAt = Date.now();
     const policy: SecurityPolicy = {
       trust: "untrusted",
       allowed: true,
@@ -162,9 +163,16 @@ describe("operation finalizers", () => {
         trust: "untrusted",
         timeoutMs: 120_000,
         dshExecutable: "C:/dsh/lib/bin.js",
+        controllerCredentials: ["token"],
       }),
       {},
     );
+    const lastRunDshCall = (
+      mocks.runDsh.mock.calls as unknown as readonly (readonly unknown[])[]
+    ).at(-1);
+    const dshRequest = lastRunDshCall?.[0] as { readonly deadlineMs?: number } | undefined;
+    expect(dshRequest?.deadlineMs).toBeGreaterThanOrEqual(startedAt + 120_000);
+    expect(dshRequest?.deadlineMs).toBeLessThanOrEqual(Date.now() + 120_000);
   });
 
   it("sanitizes status comments and removes model-owned markers", async () => {

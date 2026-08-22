@@ -26,7 +26,7 @@ async function main() {
     throw new Error("DSH_HOME must identify the Controller-owned runtime home");
   }
 
-  // loadProfile and boot are the official rc.8 Profile/Bundle and Cordis
+  // loadProfile and boot are the official rc.2 Profile/Bundle and Cordis
   // entrypoints. The Action deliberately omits the product CLI's layered .env,
   // home patch, and live user-patch watchers because workflow inputs — not the
   // checked-out repository or model output — are the authorization boundary.

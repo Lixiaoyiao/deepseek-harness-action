@@ -13,6 +13,8 @@ __webpack_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js + 18 modules
 var core = __webpack_require__(6257);
+// EXTERNAL MODULE: ./src/lifecycle/cancellation.ts
+var cancellation = __webpack_require__(3257);
 // EXTERNAL MODULE: ./src/review/tracking.ts
 var tracking = __webpack_require__(4843);
 // EXTERNAL MODULE: ./src/github/comments.ts
@@ -43,7 +45,11 @@ var github = __webpack_require__(252);
 var validate = __webpack_require__(6713);
 // EXTERNAL MODULE: ./src/write/workspace.ts + 1 modules
 var workspace = __webpack_require__(1670);
+// EXTERNAL MODULE: ./src/write/validation-deadline.ts
+var validation_deadline = __webpack_require__(4301);
 ;// CONCATENATED MODULE: ./src/commands/fix.ts
+
+
 
 
 
@@ -53,17 +59,25 @@ var workspace = __webpack_require__(1670);
 async function finishFix(input) {
     const task = input.result.output.operation === "task";
     const label = task ? "task" : "fix";
+    const validation = {
+        deadlineMs: input.validationDeadlineMs ?? Date.now() + 10 * 60_000,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+    };
     input.onPhase?.("validation");
-    await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
-    const changes = await (0,workspace/* inspectWorkspaceChanges */.$Z)(input.snapshot);
+    await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity), validation);
+    const changes = await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,workspace/* inspectWorkspaceChanges */.$Z)(input.snapshot), validation);
     if (changes.all.length === 0) {
         throw new Error(`DSH reported a ${label} but produced no file changes`);
     }
     (0,validate/* assertWriteValidationConfigured */.BM)(input.inputs.runTests, input.inputs.testCommands);
-    const tests = await (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, input.validationTimeoutMs);
+    const tests = await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, (0,validation_deadline/* remainingValidationMs */.qK)(validation), undefined, input.signal), validation);
     (0,validate/* assertValidationSucceeded */.Ph)(tests);
+    (0,cancellation/* throwIfCancelled */.d)(input.signal);
     input.onPhase?.("write");
-    await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
+    await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity), validation);
+    (0,cancellation/* throwIfCancelled */.d)(input.signal);
+    // Crossing this boundary may create Git objects. Complete the existing
+    // reconcile/update sequence even if cancellation arrives afterwards.
     const created = await (0,github.createGitHubCommitFromWorkspace)(input.client, {
         owner: input.target.owner,
         repo: input.target.repo,

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DshRunResult } from "../src/dsh/runner.js";
+import { DshAbortedError } from "../src/dsh/errors.js";
 import type { GitHubClient } from "../src/github/client.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
 import { inputs } from "./helpers.js";
@@ -46,7 +47,8 @@ vi.mock("../src/write/github.js", () => ({
   createGitHubCommitFromWorkspace: mocks.createCommit,
   updateRemoteBranch: mocks.updateRemoteBranch,
 }));
-vi.mock("../src/write/validate.js", () => ({
+vi.mock("../src/write/validate.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("../src/write/validate.js")),
   assertValidationSucceeded: mocks.assertValidation,
   assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
     if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
@@ -100,7 +102,76 @@ beforeEach(() => {
   mocks.updateRemoteBranch.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("finishFix recovery", () => {
+  it("uses one absolute deadline across identity checks and Docker validation", async () => {
+    let clock = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    mocks.revalidateIdentity.mockImplementationOnce(() => {
+      clock += 9 * 60_000;
+      return Promise.resolve();
+    });
+
+    await finishFix({
+      client: {} as GitHubClient,
+      target: { owner: "octo", repo: "repo", issueNumber: 7 },
+      expectedAuthorId: 1,
+      snapshot,
+      boundHeadSha: "a".repeat(40),
+      headBranch: "feature",
+      identity: {
+        headSha: "a".repeat(40),
+        headRef: "feature",
+        headRepositoryId: 1,
+        baseRepositoryId: 1,
+      },
+      result,
+      inputs: inputs({ testCommands: [["npm", "test"]] }),
+      runUrl: "https://github.com/octo/repo/actions/runs/1",
+      validationDeadlineMs: 1_000 + 10 * 60_000,
+    });
+
+    expect(mocks.runValidation.mock.calls[0]?.[3]).toBe(60_000);
+  });
+
+  it("does not start later validation work or mutate after the shared deadline expires", async () => {
+    let clock = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    mocks.revalidateIdentity.mockImplementationOnce(() => {
+      clock += 10 * 60_000 + 1;
+      return Promise.resolve();
+    });
+
+    await expect(
+      finishFix({
+        client: {} as GitHubClient,
+        target: { owner: "octo", repo: "repo", issueNumber: 7 },
+        expectedAuthorId: 1,
+        snapshot,
+        boundHeadSha: "a".repeat(40),
+        headBranch: "feature",
+        identity: {
+          headSha: "a".repeat(40),
+          headRef: "feature",
+          headRepositoryId: 1,
+          baseRepositoryId: 1,
+        },
+        result,
+        inputs: inputs({ testCommands: [["npm", "test"]] }),
+        runUrl: "https://github.com/octo/repo/actions/runs/1",
+        validationDeadlineMs: 1_000 + 10 * 60_000,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_TIMEOUT" });
+
+    expect(mocks.inspectChanges).not.toHaveBeenCalled();
+    expect(mocks.runValidation).not.toHaveBeenCalled();
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.updateRemoteBranch).not.toHaveBeenCalled();
+  });
+
   it("fails closed before commit or branch mutation when default validation has no commands", async () => {
     const onPhase = vi.fn();
     await expect(
@@ -221,5 +292,39 @@ describe("finishFix recovery", () => {
     expect(mocks.runValidation).not.toHaveBeenCalled();
     expect(mocks.createCommit).not.toHaveBeenCalled();
     expect(mocks.updateRemoteBranch).not.toHaveBeenCalled();
+  });
+
+  it("performs no GitHub mutation when cancellation lands as validation returns", async () => {
+    const controller = new AbortController();
+    const cancellation = new DshAbortedError();
+    mocks.runValidation.mockImplementationOnce(() => {
+      controller.abort(cancellation);
+      return Promise.resolve([]);
+    });
+
+    await expect(
+      finishFix({
+        client: {} as GitHubClient,
+        target: { owner: "octo", repo: "repo", issueNumber: 7 },
+        expectedAuthorId: 1,
+        snapshot,
+        boundHeadSha: "a".repeat(40),
+        headBranch: "feature",
+        identity: {
+          headSha: "a".repeat(40),
+          headRef: "feature",
+          headRepositoryId: 1,
+          baseRepositoryId: 1,
+        },
+        result,
+        inputs: inputs({ testCommands: [["npm", "test"]] }),
+        runUrl: "https://github.com/octo/repo/actions/runs/1",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancellation);
+
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.updateRemoteBranch).not.toHaveBeenCalled();
+    expect(mocks.publishStatus).not.toHaveBeenCalled();
   });
 });

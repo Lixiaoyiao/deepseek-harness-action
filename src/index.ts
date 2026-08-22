@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 
 import { runAction } from "./orchestrator.js";
+import { installCancellationHandlers } from "./lifecycle/cancellation.js";
 import {
   buildActionOutputs,
   describeActionFailure,
@@ -22,9 +23,10 @@ async function writeStepSummary(result: RunOutcome): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const cancellation = installCancellationHandlers();
   let result: RunOutcome;
   try {
-    result = await runAction();
+    result = await runAction({ signal: cancellation.signal });
   } catch (error: unknown) {
     const failure = describeActionFailure(error, "configuration");
     result = {
@@ -35,6 +37,8 @@ async function main(): Promise<void> {
       durationMs: 0,
       error: failure,
     };
+  } finally {
+    cancellation.dispose();
   }
 
   for (const [name, value] of Object.entries(buildActionOutputs(result))) {

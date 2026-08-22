@@ -2,7 +2,15 @@ import { readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-const RELEASE_REFERENCE = "v0.5.0";
+import {
+  ACTION_TAG,
+  ACTION_VERSION,
+  DIRECT_DSH_PACKAGES,
+  DSH_VERSION,
+  RELEASE_CANARY_VARIABLE,
+} from "../src/release.js";
+
+const RELEASE_REFERENCE = ACTION_TAG;
 
 describe("Marketplace action metadata", () => {
   it("uses the supported Node 24 runtime and ships the declared bundle", async () => {
@@ -31,7 +39,7 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/plugin-config:[\s\S]*?schemaVersion/u);
     expect(metadata).toMatch(/allow-plugin-install:[\s\S]*?default: "false"/u);
     expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
-    expect(metadata).toContain('default: "0.1.0-rc.8"');
+    expect(metadata).toContain(`default: "${DSH_VERSION}"`);
     expect(metadata).toMatch(/extensions and writes require a full name@sha256 digest/iu);
     expect(metadata).toMatch(/mcp-config:[\s\S]*?stdio startup executes trusted worker code/iu);
     expect(metadata).toMatch(/plugin-config:[\s\S]*?startup executes trusted worker code/iu);
@@ -43,10 +51,12 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
   });
 
-  it("pins the official DSH rc.8 runtime and its lockfile exactly", async () => {
+  it("pins the official DSH rc.2 runtime and its lockfile exactly", async () => {
     const manifest = JSON.parse(
       await readFile(new URL("../package.json", import.meta.url), "utf8"),
     ) as {
+      version: string;
+      scripts: Record<string, string>;
       dependencies: Record<string, string>;
       devDependencies: Record<string, string>;
     };
@@ -55,27 +65,23 @@ describe("Marketplace action metadata", () => {
     ) as {
       packages: Record<string, { version?: string }>;
     };
-    const expectedVersion = "0.1.0-rc.8";
-    const runtimePackages = [
-      "@deepseek-ai/dsh",
-      "@deepseek-ai/dsh-app-boot",
-      "@deepseek-ai/dsh-base",
-      "@deepseek-ai/dsh-cmdline",
-      "@deepseek-ai/dsh-headless",
-      "@deepseek-ai/dsh-launch-environment",
-      "@deepseek-ai/dsh-mcp-client",
-    ];
+    const directDependencies = { ...manifest.dependencies, ...manifest.devDependencies };
 
-    for (const packageName of runtimePackages) {
-      expect(manifest.dependencies[packageName]).toBe(expectedVersion);
-      expect(lock.packages[`node_modules/${packageName}`]?.version).toBe(expectedVersion);
+    expect(manifest.version).toBe(ACTION_VERSION);
+    expect(manifest.scripts["test:release-contract"]).toBe(
+      "node scripts/verify-release-contract.mjs",
+    );
+    expect(manifest.scripts.check).toContain("npm run test:release-contract");
+    for (const packageName of DIRECT_DSH_PACKAGES) {
+      expect(directDependencies[packageName]).toBe(DSH_VERSION);
+      expect(lock.packages[`node_modules/${packageName}`]?.version).toBe(DSH_VERSION);
     }
     for (const [packageName, version] of Object.entries({
       ...manifest.dependencies,
       ...manifest.devDependencies,
     })) {
       if (packageName === "@deepseek-ai/dsh" || packageName.startsWith("@deepseek-ai/dsh-")) {
-        expect(version).toBe(expectedVersion);
+        expect(version).toBe(DSH_VERSION);
       }
     }
 
@@ -85,7 +91,7 @@ describe("Marketplace action metadata", () => {
       )
       .map(([, entry]) => entry.version);
     expect(lockedDshVersions.length).toBeGreaterThan(0);
-    expect(new Set(lockedDshVersions)).toEqual(new Set([expectedVersion]));
+    expect(new Set(lockedDshVersions)).toEqual(new Set([DSH_VERSION]));
   });
 
   it("keeps active CI on the locked app-boot and MCP runtime smoke", async () => {
@@ -101,7 +107,8 @@ describe("Marketplace action metadata", () => {
     const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     expect(ci).toContain("cp package.json package-lock.json");
     expect(ci).toContain("npm ci --no-audit --no-fund --omit=dev --ignore-scripts");
-    expect(ci).toContain('const expectedVersion = "0.1.0-rc.8"');
+    expect(ci).toContain(`const expectedVersion = "${DSH_VERSION}"`);
+    expect(ci).toContain("Object.keys(manifest.dependencies ?? {})");
     expect(ci).toContain('await import("@deepseek-ai/dsh-app-boot")');
     expect(ci).toContain('await import("@deepseek-ai/dsh-mcp-client")');
     expect(ci).toContain("action-launcher.mjs");
@@ -111,10 +118,10 @@ describe("Marketplace action metadata", () => {
     expect(ci).not.toContain("policy.patch.yml");
   });
 
-  it("ships the rc.8 extension contract in dist without rc.6 drift", async () => {
+  it("ships the rc.2 extension contract in dist without older release-candidate drift", async () => {
     const bundle = await readFile(new URL("../dist/index.js", import.meta.url), "utf8");
-    expect(bundle).toContain("0.1.0-rc.8");
-    expect(bundle).not.toContain("0.1.0-rc.6");
+    expect(bundle).toContain(DSH_VERSION);
+    expect(bundle).not.toContain("0.1.0-rc.8");
     for (const token of [
       "mcp-config",
       "plugin-config",
@@ -126,6 +133,30 @@ describe("Marketplace action metadata", () => {
     ]) {
       expect(bundle).toContain(token);
     }
+  });
+
+  it("binds the canary to the formal v0.5.1 release and its immutable tag commit", async () => {
+    const canary = await readFile(
+      new URL("../.github/workflows/release-canary.yml", import.meta.url),
+      "utf8",
+    );
+    const gate = canary.slice(0, canary.indexOf("  smoke:"));
+    expect(canary).toContain(`name: ${ACTION_TAG} release canary`);
+    expect(gate).toContain('[[ "$WORKFLOW_REF" == "refs/heads/main" ]]');
+    expect(gate).toContain('[[ "$RUN_SHA" == "$WORKFLOW_SHA" ]]');
+    expect(gate).toContain('[[ "$RUN_SHA" == "$live_sha" ]]');
+    expect(gate).not.toContain("secrets.");
+    expect(canary).toContain("needs: gate");
+    expect(canary.match(/environment: core-e2e/gu)).toHaveLength(1);
+    expect(canary).toContain("DEEPSEEK_SECRET_PRESENT: ${{ secrets.DEEPSEEK_API_KEY != '' }}");
+    expect(canary).toContain(`RELEASE_TAG: ${ACTION_TAG}`);
+    expect(canary).toContain(`vars.${RELEASE_CANARY_VARIABLE}`);
+    expect(canary).toContain("releases/tags/$RELEASE_TAG");
+    expect(canary).toContain("git/ref/tags/$RELEASE_TAG");
+    expect(canary).toContain(".draft == false and .prerelease == false");
+    expect(canary).toContain('"$object_sha" != "$RELEASE_SHA"');
+    expect(canary).toContain('git -C release-action rev-parse HEAD)" = "$RELEASE_SHA"');
+    expect(canary).toContain("persist-credentials: false");
   });
 
   it("generates static bundle notices from NCC source maps only", async () => {
@@ -201,7 +232,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.5.0 task example with the standard coding profile", async () => {
+  it("ships the v0.5.1 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
@@ -248,5 +279,33 @@ describe("Marketplace action metadata", () => {
     expect(diagnose.indexOf("ref: ${{ github.workflow_sha }}")).toBeLessThan(
       diagnose.indexOf("deepseek-api-key:"),
     );
+  });
+
+  it("runs Core E2E only from the protected default-branch dispatch harness", async () => {
+    const workflow = await readFile(
+      new URL("../.github/workflows/e2e.yml", import.meta.url),
+      "utf8",
+    );
+    const gate = workflow.slice(0, workflow.indexOf("  read_only:"));
+
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).not.toMatch(/^ {2}pull_request:\s*$/mu);
+    expect(gate).toContain("WORKFLOW_REF: ${{ github.ref }}");
+    expect(gate).toContain("DISPATCH_SHA: ${{ github.sha }}");
+    expect(gate).toContain("APPROVED_PR_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}");
+    expect(gate).toContain('"$DISPATCH_SHA" == "$default_sha"');
+    expect(gate).not.toContain("secrets.");
+    expect(workflow.match(/environment: core-e2e/gu)).toHaveLength(3);
+    expect(workflow.match(/ref: \$\{\{ needs\.gate\.outputs\.harness_sha \}\}/gu)).toHaveLength(3);
+    expect(workflow).not.toContain("run-candidate.mjs");
+    expect(workflow).toContain("dsh-e2e:cancellation:v1");
+    expect(workflow).toContain("GITHUB_EVENT_NAME=issues");
+    expect(workflow).toContain(
+      'gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id"',
+    );
+    expect(workflow).toContain('gh api --method PATCH "repos/$REPOSITORY/issues/$ISSUE_NUMBER"');
+    expect(workflow).toContain("[.ref,.object.type,.object.sha]");
+    expect(workflow).toContain("bodyMarker:");
+    expect(workflow).toContain("if: always() && needs.gate.result == 'success'");
   });
 });

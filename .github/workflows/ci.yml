@@ -22,7 +22,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Linux Docker locked DSH rc.8 runtime smoke
+      - name: Linux Docker locked DSH rc.2 runtime smoke
         shell: bash
         run: |
           set -euo pipefail
@@ -52,16 +52,18 @@ jobs:
           import { spawnSync } from "node:child_process";
           import { readFile } from "node:fs/promises";
 
-          const expectedVersion = "0.1.0-rc.8";
-          const expectedPackages = [
-            "@deepseek-ai/dsh",
-            "@deepseek-ai/dsh-app-boot",
-            "@deepseek-ai/dsh-cmdline",
-            "@deepseek-ai/dsh-launch-environment",
-            "@deepseek-ai/dsh-mcp-client",
-          ];
+          const expectedVersion = "0.1.1-rc.2";
           const manifest = JSON.parse(await readFile("package.json", "utf8"));
           const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
+          const expectedPackages = Object.keys(manifest.dependencies ?? {})
+            .filter(
+              (packageName) =>
+                packageName === "@deepseek-ai/dsh" || packageName.startsWith("@deepseek-ai/dsh-"),
+            )
+            .sort();
+          if (expectedPackages.length === 0) {
+            throw new Error("No direct DSH runtime packages were declared");
+          }
           for (const packageName of expectedPackages) {
             if (manifest.dependencies?.[packageName] !== expectedVersion) {
               throw new Error(`${packageName} is not exactly pinned to ${expectedVersion}`);
@@ -128,5 +130,5 @@ jobs:
               throw new Error(`controlled launcher does not use ${packageName}`);
             }
           }
-          process.stdout.write("locked DSH rc.8 app-boot/MCP runtime ok\n");
+          process.stdout.write("locked DSH rc.2 app-boot/MCP runtime ok\n");
           NODE

@@ -110,7 +110,7 @@ function resolve(
 }
 
 describe("controlled extension configuration", () => {
-  it("accepts only the two rc.8 MCP transports and applies bounded reconnect defaults", () => {
+  it("accepts only the two rc.2 MCP transports and applies bounded reconnect defaults", () => {
     const configuration = parseMcpConfiguration(
       JSON.stringify({
         schemaVersion: 1,

@@ -1,16 +1,15 @@
-import { spawn } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { isIP } from "node:net";
-import { copyFile, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assertSafeArgv } from "../security/argv.js";
+import * as core from "@actions/core";
+
+import { throwIfCancelled } from "../lifecycle/cancellation.js";
+import { settleWithin } from "../lifecycle/deadline.js";
 import {
-  assertNoGitHubCredentials,
   assertNoSecretOutput,
   assertSecretAbsent,
   buildDshWorkerEnvironment,
@@ -18,10 +17,8 @@ import {
   redactKnownSecrets,
 } from "../security/env.js";
 import {
-  DshAbortedError,
   DshConfigurationError,
   DshIsolationUnavailableError,
-  DshOutputLimitError,
   DshProcessError,
   DshSpawnError,
   DshTimeoutError,
@@ -40,53 +37,67 @@ import {
 } from "../extensions/plan.js";
 import type { EffectiveExtensionPlan, ExtensionAudit } from "../extensions/plan.js";
 import {
-  CONTROLLED_PROFILE_NAME,
   nativeRuntimeToolNames,
   prepareControlledProfile,
   resolveInstalledPluginModuleSpecifiers,
   type ControlledProfilePaths,
-  type DshPolicyRule,
 } from "../extensions/profile.js";
-import {
-  assertExtensionPackagesAbsentFromRuntimeLock,
-  auditExtensionRuntimeLock,
-  snapshotRuntimeLock,
-} from "../extensions/runtime-lock.js";
 import type { NativeToolId } from "../tools/schema.js";
+import { DSH_VERSION } from "../release.js";
+import {
+  assertContainerImageReference,
+  assertPinnedContainerImage,
+  CONTAINER_AUDIT,
+  CONTAINER_LAUNCHER,
+  CONTAINER_POLICY_PLUGIN,
+  CONTAINER_PROFILE_ROOT,
+  CONTAINER_STATE,
+  CONTAINER_WORKSPACE,
+  CONTAINER_WORKSPACE_PLUGIN,
+  dockerInstallerSpec,
+  dockerWorkerSpec,
+} from "./docker-policy.js";
+import {
+  assertExtensionInstallBaseline,
+  auditFreshExtensionInstallation,
+  auditReusedExtensionInstallation,
+  captureExtensionInstallBaseline,
+  prepareLockedRuntimeFiles,
+} from "./install.js";
+import {
+  dockerNetworkInspectSpec,
+  dockerNetworkSpec,
+  parseInternalNetworkGateway,
+} from "./network.js";
+import { executeBoundedDshProcess } from "./process.js";
+import type { DshProcessLimits, DshProcessResult, DshProcessSpec } from "./process.js";
+import {
+  emptyInvocationCounts,
+  fileSize,
+  readInvocationCounts,
+  readToolReceipts,
+  reconcileToolAudit,
+} from "./receipts.js";
+import type { DshToolReceipt } from "./receipts.js";
 import { bindDshRuntime, createDshRuntime, disposeDshRuntime, type DshRuntime } from "./runtime.js";
+import { PHASE_TIMEOUTS, phaseTimeoutMs, runBestEffortDshCleanup } from "./timeouts.js";
 
 export { createDshRuntime, disposeDshRuntime } from "./runtime.js";
 export type { DshRuntime } from "./runtime.js";
+export { executeBoundedDshProcess } from "./process.js";
+export type { DshProcessLimits, DshProcessResult, DshProcessSpec } from "./process.js";
+export { assertContainerImageReference, assertPinnedContainerImage } from "./docker-policy.js";
+export {
+  assertExtensionPackagesDoNotShadowRuntime,
+  assertInstalledRuntimeInventoryUnchanged,
+  installedTopLevelPackageInventory,
+} from "./install.js";
+export type { DshToolReceipt } from "./receipts.js";
 
 const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/u;
-export const SUPPORTED_DSH_VERSIONS = ["0.1.0-rc.8"] as const;
-const CONTAINER_IMAGE_REFERENCE_PATTERN =
-  /^(?=.{1,512}$)[A-Za-z0-9][A-Za-z0-9._:/-]*(?:@sha256:[a-f0-9]{64})?$/u;
-const PINNED_CONTAINER_IMAGE_PATTERN =
-  /^(?=.{1,512}$)[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/u;
-const DEFAULT_KILL_GRACE_MS = 2_000;
+export const SUPPORTED_DSH_VERSIONS = [DSH_VERSION] as const;
 const MAX_STDERR_BYTES = 2 * 1024 * 1024;
-const MAX_RECEIPT_LOG_BYTES = 16 * 1024 * 1024;
-const MAX_INVOCATION_STATE_BYTES = 1024 * 1024;
 const CONTROLLED_PROFILE_SCHEMA_VERSION = 1;
-const CONTAINER_WORKSPACE = "/workspace";
-const CONTAINER_DSH_HOME = "/dsh-home";
-const CONTAINER_PACKAGE_ROOT = "/opt/dsh-action/package";
-const CONTAINER_LAUNCHER = `${CONTAINER_PACKAGE_ROOT}/action-launcher.mjs`;
-const CONTAINER_PROFILE_ROOT = `${CONTAINER_DSH_HOME}/profiles/${CONTROLLED_PROFILE_NAME}`;
-const CONTAINER_POLICY_PLUGIN = "/opt/dsh-action/action-policy.mjs";
-const CONTAINER_WORKSPACE_PLUGIN = "/opt/dsh-action/action-workspace.mjs";
-const CONTAINER_ACTION_STATE = `${CONTAINER_DSH_HOME}/action-state`;
-const CONTAINER_SESSIONS = `${CONTAINER_DSH_HOME}/sessions`;
-const CONTAINER_ATTACHMENTS = `${CONTAINER_DSH_HOME}/attachments`;
-const CONTAINER_STATE = `${CONTAINER_DSH_HOME}/action-state/tool-counts.json`;
-const CONTAINER_AUDIT = `${CONTAINER_DSH_HOME}/action-state/tool-receipts.jsonl`;
-
-function hostUserForContainer(): string {
-  return process.platform === "win32"
-    ? "0:0"
-    : `${String(process.getuid?.() ?? 1000)}:${String(process.getgid?.() ?? 1000)}`;
-}
 
 export type DshTrust = "untrusted" | "trusted-read" | "trusted-write";
 export type DshIsolation = "docker" | "none";
@@ -98,10 +109,15 @@ export interface DshRunRequest {
   readonly workspacePath?: string;
   readonly trust: DshTrust;
   readonly isolation: DshIsolation;
+  /** Immutable controller-wide absolute deadline. Direct callers may omit it. */
+  readonly deadlineMs?: number;
+  /** Agent execution cap, applied after setup and still bounded by deadlineMs. */
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   /** Controller-only credential. It is never put in a worker env or argv. */
   readonly apiKey: string;
+  /** Other Controller-only credentials to reject from every worker channel. */
+  readonly controllerCredentials?: readonly string[];
   readonly baseUrl: string;
   readonly webSearchBaseUrl: string;
   readonly dshVersion: string;
@@ -126,26 +142,6 @@ export interface DshIsolationReport {
   readonly limitations: readonly string[];
 }
 
-export interface DshToolReceipt {
-  readonly schemaVersion: 1;
-  readonly callId: string;
-  readonly id: string;
-  readonly runtimeName: string;
-  readonly provider: string;
-  /** Whether the policy charged this invocation against tool and owner limits. */
-  readonly counted: boolean;
-  /** False only when the worker stopped after durable admission but before final observation. */
-  readonly completed: boolean;
-  readonly ok: boolean;
-  readonly durationMs: number;
-  readonly code?: string;
-}
-
-interface DshInvocationCounts {
-  readonly tools: Readonly<Record<string, number>>;
-  readonly groups: Readonly<Record<string, number>>;
-}
-
 export interface DshRunResult {
   readonly output: DshOutput;
   readonly rawStdout?: string;
@@ -153,31 +149,6 @@ export interface DshRunResult {
   readonly isolationReport: DshIsolationReport;
   readonly extensionAudit?: ExtensionAudit;
   readonly toolReceipts?: readonly DshToolReceipt[];
-}
-
-export interface DshProcessSpec {
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly cwd: string;
-  readonly env: NodeJS.ProcessEnv;
-  /** Optional backend cleanup command, e.g. docker kill <random-name>. */
-  readonly termination?: Omit<DshProcessSpec, "termination">;
-}
-
-export interface DshProcessResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-}
-
-export interface DshProcessLimits {
-  readonly timeoutMs: number;
-  readonly maxStdoutBytes: number;
-  readonly maxStderrBytes: number;
-  readonly maxCombinedBytes: number;
-  readonly signal?: AbortSignal;
-  readonly killGraceMs?: number;
 }
 
 export interface DshRunDependencies {
@@ -192,6 +163,7 @@ export interface DshRunDependencies {
   readonly platform?: NodeJS.Platform;
   readonly now?: () => number;
   readonly runtime?: DshRuntime;
+  readonly warning?: (message: string) => void;
 }
 
 /** Bind policy patches to DSH versions whose complete native tool surface was audited. */
@@ -206,193 +178,10 @@ export function assertSupportedDshVersion(version: string): void {
   }
 }
 
-/** Require an immutable OCI/Docker image reference for code-writing processes. */
-export function assertPinnedContainerImage(containerImage: string): void {
-  if (!PINNED_CONTAINER_IMAGE_PATTERN.test(containerImage)) {
-    throw new DshConfigurationError(
-      "Docker extensions and trusted-write require containerImage to be an immutable name@sha256:<64 lowercase hex> reference",
-    );
-  }
-}
-
-/** Prevent an input value from being reinterpreted as a docker run option. */
-export function assertContainerImageReference(containerImage: string): void {
-  if (!CONTAINER_IMAGE_REFERENCE_PATTERN.test(containerImage)) {
-    throw new DshConfigurationError(
-      "containerImage must be a single Docker/OCI image reference and must not begin with an option",
-    );
-  }
-}
-
 function positiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new DshConfigurationError(`${name} must be a positive integer`);
   }
-}
-
-function killPosixTree(child: ChildProcessWithoutNullStreams, graceMs: number): void {
-  const pid = child.pid;
-  try {
-    if (pid === undefined) child.kill("SIGTERM");
-    else process.kill(-pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
-  const forceTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      if (pid === undefined) child.kill("SIGKILL");
-      else process.kill(-pid, "SIGKILL");
-    } catch {
-      child.kill("SIGKILL");
-    }
-  }, graceMs);
-  forceTimer.unref();
-}
-
-function killWindowsTree(child: ChildProcessWithoutNullStreams, graceMs: number): void {
-  if (child.pid === undefined) {
-    child.kill();
-    return;
-  }
-  const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-    shell: false,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  killer.once("error", () => child.kill());
-  killer.unref();
-  const forceTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGKILL");
-  }, graceMs);
-  forceTimer.unref();
-}
-
-function terminateTree(
-  child: ChildProcessWithoutNullStreams,
-  graceMs: number,
-  platform: NodeJS.Platform,
-  termination?: Omit<DshProcessSpec, "termination">,
-): void {
-  if (termination !== undefined) {
-    const cleanup = spawn(termination.command, [...termination.args], {
-      cwd: termination.cwd,
-      env: termination.env,
-      shell: false,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    cleanup.once("error", () => undefined);
-    cleanup.unref();
-  }
-  if (platform === "win32") killWindowsTree(child, graceMs);
-  else killPosixTree(child, graceMs);
-}
-
-/**
- * Spawn one argv-only process with independent stdout/stderr and aggregate
- * caps. Timeout state is controller-owned because DSH exits 0 on SIGTERM.
- */
-export async function executeBoundedDshProcess(
-  spec: DshProcessSpec,
-  limits: DshProcessLimits,
-  platform: NodeJS.Platform = process.platform,
-): Promise<DshProcessResult> {
-  positiveInteger(limits.timeoutMs, "timeoutMs");
-  positiveInteger(limits.maxStdoutBytes, "maxStdoutBytes");
-  positiveInteger(limits.maxStderrBytes, "maxStderrBytes");
-  positiveInteger(limits.maxCombinedBytes, "maxCombinedBytes");
-  assertSafeArgv(spec.command, spec.args);
-
-  if (limits.signal?.aborted === true) throw new DshAbortedError();
-
-  return await new Promise<DshProcessResult>((resolvePromise, rejectPromise) => {
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn(spec.command, [...spec.args], {
-        cwd: spec.cwd,
-        env: spec.env,
-        detached: platform !== "win32",
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      child.stdin.end();
-    } catch (error: unknown) {
-      rejectPromise(new DshSpawnError("Failed to spawn DSH", { cause: error }));
-      return;
-    }
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let settled = false;
-    let terminalError: DshError | undefined;
-    const graceMs = limits.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-
-    const stop = (error: DshError): void => {
-      if (terminalError !== undefined) return;
-      terminalError = error;
-      terminateTree(child, graceMs, platform, spec.termination);
-    };
-
-    const capture = (stream: "stdout" | "stderr", value: unknown): void => {
-      if (terminalError !== undefined) return;
-      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
-      if (stream === "stdout") stdoutBytes += chunk.byteLength;
-      else stderrBytes += chunk.byteLength;
-
-      const streamBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
-      const streamLimit = stream === "stdout" ? limits.maxStdoutBytes : limits.maxStderrBytes;
-      if (streamBytes > streamLimit) {
-        stop(new DshOutputLimitError(stream, streamLimit));
-        return;
-      }
-      if (stdoutBytes + stderrBytes > limits.maxCombinedBytes) {
-        stop(new DshOutputLimitError("combined", limits.maxCombinedBytes));
-        return;
-      }
-      (stream === "stdout" ? stdoutChunks : stderrChunks).push(chunk);
-    };
-
-    child.stdout.on("data", (value: unknown) => capture("stdout", value));
-    child.stderr.on("data", (value: unknown) => capture("stderr", value));
-
-    const timeout = setTimeout(() => stop(new DshTimeoutError(limits.timeoutMs)), limits.timeoutMs);
-    timeout.unref();
-    const abort = (): void => stop(new DshAbortedError());
-    limits.signal?.addEventListener("abort", abort, { once: true });
-
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      limits.signal?.removeEventListener("abort", abort);
-    };
-
-    child.once("error", (error: Error) => {
-      finish();
-      rejectPromise(
-        terminalError ??
-          new DshSpawnError("Failed to spawn or communicate with DSH", { cause: error }),
-      );
-    });
-    child.once("close", (exitCode, signal) => {
-      finish();
-      if (terminalError !== undefined) {
-        rejectPromise(terminalError);
-        return;
-      }
-      resolvePromise({
-        stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks, stderrBytes).toString("utf8"),
-        exitCode,
-        signal,
-      });
-    });
-  });
 }
 
 function defaultAssetsDirectory(): string {
@@ -448,166 +237,6 @@ function effectiveExtensionPlan(request: DshRunRequest): EffectiveExtensionPlan 
   };
 }
 
-async function prepareLockedRuntimeFiles(
-  runtime: DshRuntime,
-  version: string,
-): Promise<Record<string, unknown>> {
-  const actionRoot = defaultActionRoot();
-  const manifestSource = join(actionRoot, "package.json");
-  const lockSource = join(actionRoot, "package-lock.json");
-  const manifest = JSON.parse(await readFile(manifestSource, "utf8")) as Record<string, unknown>;
-  const lock = JSON.parse(await readFile(lockSource, "utf8")) as {
-    readonly packages?: Readonly<Record<string, { readonly version?: string }>>;
-  };
-  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
-    if (!/(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/u.test(path)) continue;
-    if (entry.version !== version) {
-      throw new DshConfigurationError(
-        `DSH lockfile drift at ${path}: expected ${version}, found ${entry.version ?? "unknown"}`,
-      );
-    }
-  }
-  await copyFile(manifestSource, join(runtime.packageRoot, "package.json"));
-  await copyFile(lockSource, join(runtime.packageRoot, "package-lock.json"));
-  return manifest;
-}
-
-function insideDirectory(parent: string, child: string): boolean {
-  const path = relative(parent, child);
-  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
-}
-
-async function verifyInstalledExtensions(
-  packageRoot: string,
-  plan: EffectiveExtensionPlan,
-): Promise<void> {
-  const installed = [
-    ...plan.bundles.map((extension) => ({ extension, bundle: true })),
-    ...plan.plugins.map((extension) => ({ extension, bundle: false })),
-  ];
-  for (const { extension, bundle } of installed) {
-    const packageDirectory = join(
-      packageRoot,
-      "node_modules",
-      ...extension.definition.package.split("/"),
-    );
-    const packageReal = await realpath(packageDirectory);
-    const manifestPath = join(packageReal, "package.json");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-      readonly name?: string;
-      readonly version?: string;
-      readonly gitHead?: string;
-      readonly dsh?: { readonly bundle?: { readonly patch?: string } };
-    };
-    if (manifest.name !== extension.definition.package) {
-      throw new DshConfigurationError(
-        `Installed extension package identity mismatch: ${extension.definition.id}`,
-      );
-    }
-    const source = extension.definition.source;
-    if (/^\d/u.test(source) && manifest.version !== source) {
-      throw new DshConfigurationError(
-        `Installed extension ${extension.definition.package} is ${manifest.version ?? "unknown"}, expected ${source}`,
-      );
-    }
-    // npm does not guarantee that a git install rewrites package.json with
-    // gitHead. The package-lock resolved URL is verified against the approved
-    // 40-character commit immediately after this identity/manifest check.
-    if (
-      source.startsWith("git+") &&
-      manifest.gitHead !== undefined &&
-      manifest.gitHead !== source.slice(source.lastIndexOf("#") + 1)
-    ) {
-      throw new DshConfigurationError(
-        `Installed extension ${extension.definition.package} reports a different git commit`,
-      );
-    }
-    if (bundle) {
-      const patch = manifest.dsh?.bundle?.patch;
-      if (typeof patch !== "string" || patch.trim() === "") {
-        throw new DshConfigurationError(
-          `Bundle ${extension.definition.package} has no dsh.bundle.patch`,
-        );
-      }
-      const patchReal = await realpath(resolve(packageReal, patch));
-      if (!insideDirectory(packageReal, patchReal)) {
-        throw new DshConfigurationError(
-          `Bundle ${extension.definition.package} patch escapes the installed package`,
-        );
-      }
-    }
-  }
-}
-
-/** @internal Supply-chain invariant used by the Docker extension installer. */
-export async function installedTopLevelPackageInventory(
-  packageRoot: string,
-): Promise<Readonly<Record<string, string>>> {
-  const modulesRoot = join(packageRoot, "node_modules");
-  const packagePaths: string[] = [];
-  for (const entry of await readdir(modulesRoot, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    const entryPath = join(modulesRoot, entry.name);
-    if (entry.name.startsWith("@")) {
-      if (!entry.isDirectory()) {
-        throw new DshConfigurationError(`Invalid scoped package directory: ${entry.name}`);
-      }
-      for (const child of await readdir(entryPath, { withFileTypes: true })) {
-        if (child.isDirectory() || child.isSymbolicLink()) {
-          packagePaths.push(join(entryPath, child.name));
-        }
-      }
-      continue;
-    }
-    if (entry.isDirectory() || entry.isSymbolicLink()) packagePaths.push(entryPath);
-  }
-
-  const inventory: Record<string, string> = {};
-  for (const packagePath of packagePaths) {
-    const manifest = JSON.parse(await readFile(join(packagePath, "package.json"), "utf8")) as {
-      readonly name?: unknown;
-      readonly version?: unknown;
-    };
-    if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
-      throw new DshConfigurationError(`Installed package has invalid identity: ${packagePath}`);
-    }
-    if (inventory[manifest.name] !== undefined) {
-      throw new DshConfigurationError(`Duplicate top-level package identity: ${manifest.name}`);
-    }
-    inventory[manifest.name] = manifest.version;
-  }
-  return Object.freeze(inventory);
-}
-
-/** @internal Reject direct extension identities that collide with the locked runtime. */
-export function assertExtensionPackagesDoNotShadowRuntime(
-  plan: Pick<EffectiveExtensionPlan, "packageDependencies">,
-  inventory: Readonly<Record<string, string>>,
-): void {
-  const collision = Object.keys(plan.packageDependencies).find(
-    (packageName) => inventory[packageName] !== undefined,
-  );
-  if (collision !== undefined) {
-    throw new DshConfigurationError(
-      `Extension package ${collision} would shadow a Controller-owned runtime dependency`,
-    );
-  }
-}
-
-/** @internal Verify npm did not replace or remove any pre-existing runtime package. */
-export function assertInstalledRuntimeInventoryUnchanged(
-  before: Readonly<Record<string, string>>,
-  after: Readonly<Record<string, string>>,
-): void {
-  for (const [packageName, version] of Object.entries(before)) {
-    if (after[packageName] !== version) {
-      throw new DshConfigurationError(
-        `Extension installation changed runtime package ${packageName}: expected ${version}, found ${after[packageName] ?? "missing"}`,
-      );
-    }
-  }
-}
-
 async function assertDirectory(path: string, description: string): Promise<void> {
   let details;
   try {
@@ -656,276 +285,6 @@ async function resolveHostDshExecutableIdentity(
   return await realpath(executable);
 }
 
-function dockerControllerEnvironment(
-  source: NodeJS.ProcessEnv,
-  worker: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = { ...worker };
-  for (const name of [
-    "DOCKER_CONFIG",
-    "DOCKER_CONTEXT",
-    "DOCKER_HOST",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
-  ]) {
-    const value = source[name];
-    if (value !== undefined) result[name] = value;
-  }
-  assertNoGitHubCredentials(result);
-  return result;
-}
-
-function containerEnvironment(
-  proxy: DeepSeekProxyHandle,
-  workspaceWrite: boolean,
-): Readonly<Record<string, string>> {
-  return {
-    CI: "true",
-    HOME: CONTAINER_DSH_HOME,
-    npm_config_cache: "/tmp/npm-cache",
-    DSH_HOME: CONTAINER_DSH_HOME,
-    DSH_PERMISSION_MODE: workspaceWrite ? "workspace-write" : "read-only",
-    DSH_TELEMETRY_DISABLED: "1",
-    DSH_TOOLS_MODE: "native",
-    DEEPSEEK_API_KEY: proxy.workerToken,
-    DEEPSEEK_BASE_URL: proxy.workerBaseUrl,
-    ...(proxy.workerWebSearchBaseUrl === undefined
-      ? {}
-      : { DEEPSEEK_SEARCH_BASE_URL: proxy.workerWebSearchBaseUrl }),
-  };
-}
-
-function dockerSpec(
-  request: DshRunRequest,
-  workspace: string,
-  dshHome: string,
-  packageRoot: string,
-  policyPluginPath: string,
-  workspacePluginPath: string,
-  networkName: string,
-  hostGateway: string,
-  prompt: string,
-  environment: NodeJS.ProcessEnv,
-  workerEnvironment: NodeJS.ProcessEnv,
-  proxy: DeepSeekProxyHandle,
-): DshProcessSpec {
-  assertContainerImageReference(request.containerImage);
-  assertSupportedDshVersion(request.dshVersion);
-  if (request.dshExecutable !== undefined && request.dshExecutable !== "") {
-    throw new DshConfigurationError(
-      "dshExecutable is host-only and cannot be used with Docker isolation",
-    );
-  }
-
-  const args = [
-    "run",
-    "--rm",
-    "--init",
-    "--name",
-    `dsh-action-${randomUUID()}`,
-    "--read-only",
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-    "--pids-limit",
-    "256",
-    "--memory",
-    "2g",
-    "--cpus",
-    "2",
-    "--user",
-    hostUserForContainer(),
-    "--network",
-    networkName,
-    "--add-host",
-    `host.docker.internal:${hostGateway}`,
-    "--tmpfs",
-    "/tmp:rw,nosuid,nodev,size=536870912",
-    "--volume",
-    `${workspace}:${CONTAINER_WORKSPACE}:${workerWorkspaceWrite(request) ? "rw" : "ro"}`,
-    "--volume",
-    `${dshHome}:${CONTAINER_DSH_HOME}:ro`,
-    "--volume",
-    `${join(dshHome, "action-state")}:${CONTAINER_ACTION_STATE}:rw`,
-    "--volume",
-    `${join(dshHome, "sessions")}:${CONTAINER_SESSIONS}:rw`,
-    "--volume",
-    `${join(dshHome, "attachments")}:${CONTAINER_ATTACHMENTS}:rw`,
-    "--volume",
-    `${packageRoot}:${CONTAINER_PROFILE_ROOT}:ro`,
-    "--volume",
-    `${policyPluginPath}:${CONTAINER_POLICY_PLUGIN}:ro`,
-    "--volume",
-    `${workspacePluginPath}:${CONTAINER_WORKSPACE_PLUGIN}:ro`,
-    "--volume",
-    `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:ro`,
-    "--workdir",
-    "/tmp",
-  ];
-  for (const [name, value] of Object.entries(
-    containerEnvironment(proxy, workerWorkspaceWrite(request)),
-  )) {
-    args.push("--env", `${name}=${value}`);
-  }
-  args.push(request.containerImage, "node", "--expose-internals", CONTAINER_LAUNCHER, prompt);
-
-  const nameIndex = args.indexOf("--name") + 1;
-  const containerName = args[nameIndex];
-  if (containerName === undefined)
-    throw new DshConfigurationError("Docker container name is missing");
-  const controllerEnv = dockerControllerEnvironment(environment, workerEnvironment);
-
-  return {
-    command: "docker",
-    args,
-    cwd: workspace,
-    env: controllerEnv,
-    termination: {
-      command: "docker",
-      args: ["kill", containerName],
-      cwd: workspace,
-      env: controllerEnv,
-    },
-  };
-}
-
-function dockerInstallSpec(
-  request: DshRunRequest,
-  workspace: string,
-  packageRoot: string,
-  npmCache: string,
-  environment: NodeJS.ProcessEnv,
-): DshProcessSpec {
-  const containerName = `dsh-action-install-${randomUUID()}`;
-  const controllerEnv = dockerControllerEnvironment(environment, {});
-  return {
-    command: "docker",
-    args: [
-      "run",
-      "--rm",
-      "--init",
-      "--name",
-      containerName,
-      "--read-only",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--pids-limit",
-      "256",
-      "--memory",
-      "4g",
-      "--cpus",
-      "2",
-      "--network",
-      "bridge",
-      "--tmpfs",
-      "/tmp:rw,nosuid,nodev,size=536870912",
-      "--user",
-      hostUserForContainer(),
-      "--volume",
-      `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:rw`,
-      "--volume",
-      `${npmCache}:/tmp/npm-cache:rw`,
-      "--workdir",
-      CONTAINER_PACKAGE_ROOT,
-      "--env",
-      "HOME=/tmp",
-      "--env",
-      "npm_config_cache=/tmp/npm-cache",
-      "--env",
-      "NODE_OPTIONS=--max-old-space-size=3072",
-      request.containerImage,
-      "npm",
-      "ci",
-      "--no-audit",
-      "--no-fund",
-      "--omit=dev",
-      "--ignore-scripts",
-      "--loglevel=error",
-    ],
-    cwd: workspace,
-    env: controllerEnv,
-    termination: {
-      command: "docker",
-      args: ["kill", containerName],
-      cwd: workspace,
-      env: controllerEnv,
-    },
-  };
-}
-
-function dockerExtensionInstallSpec(
-  request: DshRunRequest,
-  workspace: string,
-  packageRoot: string,
-  npmCache: string,
-  environment: NodeJS.ProcessEnv,
-): DshProcessSpec {
-  const containerName = `dsh-action-extension-install-${randomUUID()}`;
-  const controllerEnv = dockerControllerEnvironment(environment, {});
-  return {
-    command: "docker",
-    args: [
-      "run",
-      "--rm",
-      "--init",
-      "--name",
-      containerName,
-      "--read-only",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--pids-limit",
-      "256",
-      "--memory",
-      "4g",
-      "--cpus",
-      "2",
-      "--network",
-      "bridge",
-      "--tmpfs",
-      "/tmp:rw,nosuid,nodev,size=536870912",
-      "--user",
-      hostUserForContainer(),
-      "--volume",
-      `${packageRoot}:${CONTAINER_PACKAGE_ROOT}:rw`,
-      "--volume",
-      `${npmCache}:/tmp/npm-cache:rw`,
-      "--workdir",
-      CONTAINER_PACKAGE_ROOT,
-      "--env",
-      "HOME=/tmp",
-      "--env",
-      "npm_config_cache=/tmp/npm-cache",
-      request.containerImage,
-      "npm",
-      "install",
-      "--no-audit",
-      "--no-fund",
-      "--omit=dev",
-      "--ignore-scripts",
-      "--install-strategy=nested",
-      "--package-lock=true",
-      "--package-lock-only=false",
-      "--lockfile-version=3",
-      "--omit-lockfile-registry-resolved=false",
-      "--save=true",
-      "--loglevel=error",
-    ],
-    cwd: workspace,
-    env: controllerEnv,
-    termination: {
-      command: "docker",
-      args: ["kill", containerName],
-      cwd: workspace,
-      env: controllerEnv,
-    },
-  };
-}
-
 function localSpec(
   executable: string | undefined,
   workspace: string,
@@ -953,44 +312,6 @@ function localSpec(
     cwd: workspace,
     env: workerEnvironment,
   };
-}
-
-function dockerNetworkSpec(
-  action: "create" | "remove",
-  name: string,
-  workspace: string,
-  environment: NodeJS.ProcessEnv,
-): DshProcessSpec {
-  const controllerEnv = dockerControllerEnvironment(environment, {});
-  return {
-    command: "docker",
-    args: action === "create" ? ["network", "create", "--internal", name] : ["network", "rm", name],
-    cwd: workspace,
-    env: controllerEnv,
-  };
-}
-
-function dockerNetworkInspectSpec(
-  name: string,
-  workspace: string,
-  environment: NodeJS.ProcessEnv,
-): DshProcessSpec {
-  return {
-    command: "docker",
-    args: ["network", "inspect", "--format", "{{(index .IPAM.Config 0).Gateway}}", name],
-    cwd: workspace,
-    env: dockerControllerEnvironment(environment, {}),
-  };
-}
-
-function parseInternalNetworkGateway(stdout: string): string {
-  const gateway = stdout.trim();
-  if (isIP(gateway) !== 4) {
-    throw new DshIsolationUnavailableError(
-      "Docker did not report a valid IPv4 gateway for the internal worker network",
-    );
-  }
-  return gateway;
 }
 
 function isolationReport(request: DshRunRequest): DshIsolationReport {
@@ -1100,256 +421,58 @@ function controllerSecrets(
           ),
         ];
   return [
-    ...new Set([request.apiKey, ...collectControllerSecrets(environment), ...extensionValues]),
+    ...new Set([
+      request.apiKey,
+      ...(request.controllerCredentials ?? []),
+      ...collectControllerSecrets(environment),
+      ...extensionValues,
+    ]),
   ].filter((secret) => secret.length >= 4);
 }
 
-async function fileSize(path: string): Promise<number> {
-  try {
-    return (await stat(path)).size;
-  } catch {
-    return 0;
-  }
-}
-
-interface RawDshToolReceipt {
-  readonly schemaVersion: 1;
-  readonly phase: "started" | "completed";
-  readonly callId: string;
-  readonly id: string;
-  readonly runtimeName: string;
-  readonly provider: "builtin" | "mcp" | "plugin" | "denied";
-  readonly counted: boolean;
-  readonly ok: boolean;
-  readonly durationMs: number;
-  readonly code?: string;
-}
-
-function parseRawToolReceipt(line: string): RawDshToolReceipt {
-  let value: Partial<RawDshToolReceipt> & Readonly<Record<string, unknown>>;
-  try {
-    value = JSON.parse(line) as Partial<RawDshToolReceipt> & Readonly<Record<string, unknown>>;
-  } catch {
-    throw new DshConfigurationError("DSH emitted a malformed tool receipt");
-  }
-  const allowedKeys = new Set([
-    "schemaVersion",
-    "phase",
-    "callId",
-    "id",
-    "runtimeName",
-    "provider",
-    "counted",
-    "ok",
-    "durationMs",
-    "code",
-  ]);
-  if (
-    Object.keys(value).some((key) => !allowedKeys.has(key)) ||
-    value.schemaVersion !== 1 ||
-    (value.phase !== "started" && value.phase !== "completed") ||
-    typeof value.callId !== "string" ||
-    value.callId.length === 0 ||
-    value.callId.length > 256 ||
-    typeof value.id !== "string" ||
-    value.id.length === 0 ||
-    value.id.length > 256 ||
-    typeof value.runtimeName !== "string" ||
-    !/^[A-Za-z0-9_-]{1,64}$/u.test(value.runtimeName) ||
-    !["builtin", "mcp", "plugin", "denied"].includes(value.provider ?? "") ||
-    typeof value.counted !== "boolean" ||
-    typeof value.ok !== "boolean" ||
-    !Number.isSafeInteger(value.durationMs) ||
-    (value.durationMs ?? -1) < 0 ||
-    (value.code !== undefined &&
-      (typeof value.code !== "string" || value.code.length === 0 || value.code.length > 128))
-  ) {
-    throw new DshConfigurationError("DSH emitted a malformed tool receipt");
-  }
-  if (
-    value.phase === "started" &&
-    (!value.counted ||
-      value.ok ||
-      value.durationMs !== 0 ||
-      value.code !== "ACTION_TOOL_INCOMPLETE")
-  ) {
-    throw new DshConfigurationError("DSH emitted a malformed tool admission receipt");
-  }
-  return value as RawDshToolReceipt;
-}
-
-async function readToolReceipts(path: string, offset: number): Promise<readonly DshToolReceipt[]> {
-  const size = await fileSize(path);
-  if (size > MAX_RECEIPT_LOG_BYTES || size - offset > MAX_RECEIPT_LOG_BYTES) {
-    throw new DshConfigurationError("DSH tool receipt log exceeded the Controller limit");
-  }
-  let buffer: Buffer;
-  try {
-    buffer = await readFile(path);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  if (offset > buffer.byteLength) {
-    throw new DshConfigurationError("DSH tool receipt log was truncated during a turn");
-  }
-  const text = buffer.subarray(offset).toString("utf8").trim();
-  if (text === "") return [];
-  const events = text.split("\n").map((line) => parseRawToolReceipt(line));
-  const started = new Map<string, RawDshToolReceipt>();
-  const completed = new Map<string, RawDshToolReceipt>();
-  const order: string[] = [];
-  for (const event of events) {
-    const target = event.phase === "started" ? started : completed;
-    if (target.has(event.callId)) {
-      throw new DshConfigurationError(`DSH emitted duplicate ${event.phase} tool receipts`);
-    }
-    target.set(event.callId, event);
-    if (!order.includes(event.callId)) order.push(event.callId);
-  }
-  return order.map((callId) => {
-    const admission = started.get(callId);
-    const result = completed.get(callId);
-    if (result !== undefined) {
-      if (result.counted) {
-        if (
-          admission?.id !== result.id ||
-          admission.runtimeName !== result.runtimeName ||
-          admission.provider !== result.provider
-        ) {
-          throw new DshConfigurationError(
-            "DSH emitted a completed counted receipt without a matching admission",
-          );
-        }
-      } else if (admission !== undefined) {
-        throw new DshConfigurationError("DSH changed whether a tool invocation was counted");
-      }
-      return {
-        schemaVersion: 1,
-        callId: result.callId,
-        id: result.id,
-        runtimeName: result.runtimeName,
-        provider: result.provider,
-        counted: result.counted,
-        completed: true,
-        ok: result.ok,
-        durationMs: result.durationMs,
-        ...(result.code === undefined ? {} : { code: result.code }),
-      };
-    }
-    if (admission === undefined) {
-      throw new DshConfigurationError("DSH tool receipt sequence is malformed");
-    }
-    return {
-      schemaVersion: 1,
-      callId: admission.callId,
-      id: admission.id,
-      runtimeName: admission.runtimeName,
-      provider: admission.provider,
-      counted: true,
-      completed: false,
-      ok: false,
-      durationMs: 0,
-      code: "ACTION_TOOL_INCOMPLETE",
-    };
-  });
-}
-
-function emptyInvocationCounts(): DshInvocationCounts {
-  return { tools: {}, groups: {} };
-}
-
-function parseInvocationRecord(
-  value: unknown,
-  allowedKeys: ReadonlySet<string>,
-  label: string,
-): Readonly<Record<string, number>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new DshConfigurationError(`DSH invocation ${label} state is malformed`);
-  }
-  const parsed: Record<string, number> = {};
-  for (const [key, count] of Object.entries(value)) {
-    if (!allowedKeys.has(key) || !Number.isSafeInteger(count) || (count as number) < 0) {
-      throw new DshConfigurationError(`DSH invocation ${label} state is malformed`);
-    }
-    parsed[key] = count as number;
-  }
-  return parsed;
-}
-
-async function readInvocationCounts(
-  path: string,
-  rules: readonly DshPolicyRule[],
-): Promise<DshInvocationCounts> {
-  let text: string;
-  try {
-    const details = await stat(path);
-    if (details.size > MAX_INVOCATION_STATE_BYTES) {
-      throw new DshConfigurationError("DSH invocation state exceeded the Controller limit");
-    }
-    text = await readFile(path, "utf8");
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyInvocationCounts();
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch {
-    throw new DshConfigurationError("DSH invocation state is malformed");
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new DshConfigurationError("DSH invocation state is malformed");
-  }
-  const state = value as Readonly<Record<string, unknown>>;
-  if (
-    state.schemaVersion !== 1 ||
-    Object.keys(state).some((key) => !["schemaVersion", "tools", "groups"].includes(key))
-  ) {
-    throw new DshConfigurationError("DSH invocation state is malformed");
-  }
-  return {
-    tools: parseInvocationRecord(state.tools, new Set(rules.map((rule) => rule.id)), "tool"),
-    groups: parseInvocationRecord(
-      state.groups,
-      new Set(rules.map((rule) => rule.groupId)),
-      "group",
-    ),
-  };
-}
-
-function invocationDelta(
-  before: Readonly<Record<string, number>>,
-  after: Readonly<Record<string, number>>,
-): number {
-  let total = 0;
-  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    const delta = (after[key] ?? 0) - (before[key] ?? 0);
-    if (!Number.isSafeInteger(delta) || delta < 0 || !Number.isSafeInteger(total + delta)) {
-      throw new DshConfigurationError("DSH invocation counters moved backwards or overflowed");
-    }
-    total += delta;
-  }
-  return total;
-}
-
-function reconcileToolAudit(
-  before: DshInvocationCounts,
-  after: DshInvocationCounts,
-  receipts: readonly DshToolReceipt[],
-  requireCompleted: boolean,
+function assertWorkerLaunchHasNoControllerCredentials(
+  spec: DshProcessSpec,
+  secrets: readonly string[],
 ): void {
-  const toolDelta = invocationDelta(before.tools, after.tools);
-  const groupDelta = invocationDelta(before.groups, after.groups);
-  const counted = receipts.filter((receipt) => receipt.counted).length;
-  if (toolDelta !== groupDelta || toolDelta !== counted) {
-    throw new DshConfigurationError(
-      "DSH invocation counters and durable tool receipts do not reconcile",
-    );
+  assertNoSecretOutput("argv", [spec.command, ...spec.args].join("\u0000"), secrets);
+  assertNoSecretOutput(
+    "environment",
+    Object.entries(spec.env)
+      .map(([name, value]) => `${name}=${value ?? ""}`)
+      .join("\u0000"),
+    secrets,
+  );
+}
+
+async function runControllerPhase<T>(options: {
+  readonly run: () => Promise<T>;
+  readonly capMs: number;
+  readonly deadlineMs: number;
+  readonly overallTimeoutMs: number;
+  readonly signal?: AbortSignal;
+  readonly now: () => number;
+  readonly disposeLateValue?: (value: T) => Promise<void>;
+}): Promise<T> {
+  throwIfCancelled(options.signal);
+  const timeoutMs = phaseTimeoutMs(options.deadlineMs, options.capMs, options.now);
+  if (timeoutMs <= 0) throw new DshTimeoutError(options.overallTimeoutMs);
+  const pending = Promise.resolve().then(options.run);
+  const disposeLate = (): void => {
+    if (options.disposeLateValue === undefined) return;
+    void pending.then(options.disposeLateValue).catch(() => undefined);
+  };
+  let result: { readonly settled: true; readonly value: T } | { readonly settled: false };
+  try {
+    result = await settleWithin(pending, timeoutMs, options.signal);
+  } catch (error: unknown) {
+    disposeLate();
+    throw error;
   }
-  if (requireCompleted && receipts.some((receipt) => receipt.counted && !receipt.completed)) {
-    throw new DshConfigurationError("DSH completed with an unfinished tool receipt");
+  if (!result.settled) {
+    disposeLate();
+    throw new DshTimeoutError(timeoutMs);
   }
+  return result.value;
 }
 
 function runtimeExtensionAudit(
@@ -1399,13 +522,47 @@ export async function runDsh(
     assertPinnedContainerImage(request.containerImage);
   }
 
+  throwIfCancelled(request.signal);
   const environment = dependencies.environment ?? process.env;
   const platform = dependencies.platform ?? process.platform;
   const now = dependencies.now ?? Date.now;
   const startedAt = now();
+  const deadlineMs = request.deadlineMs ?? startedAt + request.timeoutMs;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= startedAt) {
+    throw new DshTimeoutError(request.timeoutMs);
+  }
+  const runPhase = <T>(
+    run: () => Promise<T>,
+    capMs: number,
+    disposeLateValue?: (value: T) => Promise<void>,
+  ): Promise<T> =>
+    runControllerPhase({
+      run,
+      capMs,
+      deadlineMs,
+      overallTimeoutMs: request.timeoutMs,
+      now,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      ...(disposeLateValue === undefined ? {} : { disposeLateValue }),
+    });
+  let setupBudgetMs: number = PHASE_TIMEOUTS.setupMs;
+  const runSetup = async <T>(
+    run: () => Promise<T>,
+    disposeLateValue?: (value: T) => Promise<void>,
+  ): Promise<T> => {
+    const phaseStartedAt = now();
+    try {
+      return await runPhase(run, setupBudgetMs, disposeLateValue);
+    } finally {
+      setupBudgetMs = Math.max(0, setupBudgetMs - Math.max(0, now() - phaseStartedAt));
+    }
+  };
+  const secrets = controllerSecrets(request, environment);
   const requestedWorkspace = resolve(request.workspacePath ?? process.cwd());
-  await assertDirectory(requestedWorkspace, "workspacePath");
-  const workspace = await realpath(requestedWorkspace);
+  const workspace = await runSetup(async () => {
+    await assertDirectory(requestedWorkspace, "workspacePath");
+    return await realpath(requestedWorkspace);
+  });
 
   const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory();
   const patchName =
@@ -1415,7 +572,7 @@ export async function runDsh(
         ? "trusted-read.patch.yml"
         : "strict-untrusted.patch.yml";
   const patchPath = join(assets, patchName);
-  await assertFile(patchPath, "DSH patch profile");
+  await runSetup(async () => assertFile(patchPath, "DSH patch profile"));
 
   const prompt = buildDshPrompt({
     operation: request.operation,
@@ -1428,13 +585,25 @@ export async function runDsh(
     nativeTools: effectiveNativeTools(request),
     maxBytes: platform === "win32" ? WINDOWS_MAX_PROMPT_BYTES : DEFAULT_MAX_PROMPT_BYTES,
   });
+  assertNoSecretOutput(
+    "prompt",
+    [request.prompt, request.trustedInstructions ?? "", prompt].join("\u0000"),
+    secrets,
+  );
 
   const effectiveTools = effectiveNativeTools(request);
   const webSearchEnabled = effectiveTools.includes("native.web-search");
-  const dshExecutableIdentity = await resolveHostDshExecutableIdentity(request);
+  const dshExecutableIdentity = await runSetup(async () =>
+    resolveHostDshExecutableIdentity(request),
+  );
   const ownsRuntime = dependencies.runtime === undefined;
   const runtime =
-    dependencies.runtime ?? (await createDshRuntime(dependencies.temporaryDirectory ?? tmpdir()));
+    dependencies.runtime ??
+    (await runPhase(
+      async () => createDshRuntime(dependencies.temporaryDirectory ?? tmpdir()),
+      PHASE_TIMEOUTS.runtimeCreateMs,
+      disposeDshRuntime,
+    ));
   let proxy: DeepSeekProxyHandle | undefined;
   let internalNetwork: string | undefined;
   let internalNetworkGateway: string | undefined;
@@ -1471,7 +640,6 @@ export async function runDsh(
     ) {
       throw new DshConfigurationError("A reused DSH runtime cannot change its extension lock");
     }
-    const secrets = controllerSecrets(request, environment);
     const docker = request.isolation === "docker";
     const localDshHome = runtime.dshHome;
     const packageRoot = runtime.packageRoot;
@@ -1479,14 +647,16 @@ export async function runDsh(
       dependencies.executeProcess ??
       ((processSpec, limits) => executeBoundedDshProcess(processSpec, limits, platform));
     executeForCleanup = execute;
-    const executeSetup = async (spec: DshProcessSpec): Promise<DshProcessResult> => {
-      const elapsed = Math.max(0, now() - startedAt);
-      const remaining = request.timeoutMs - elapsed;
-      if (remaining <= 0) throw new DshTimeoutError(request.timeoutMs);
+    const executeSetup = async (
+      spec: DshProcessSpec,
+      phaseCapMs: number,
+    ): Promise<DshProcessResult> => {
+      const timeoutMs = phaseTimeoutMs(deadlineMs, phaseCapMs, now);
+      if (timeoutMs <= 0) throw new DshTimeoutError(request.timeoutMs);
       let result: DshProcessResult;
       try {
         result = await execute(spec, {
-          timeoutMs: remaining,
+          timeoutMs,
           maxStdoutBytes: request.maxOutputBytes,
           maxStderrBytes: Math.min(request.maxOutputBytes, MAX_STDERR_BYTES),
           maxCombinedBytes: request.maxOutputBytes,
@@ -1510,30 +680,43 @@ export async function runDsh(
 
     let manifestBase: Record<string, unknown> | undefined;
     if (docker && runtime.installedVersion === undefined) {
-      manifestBase = await prepareLockedRuntimeFiles(runtime, request.dshVersion);
+      manifestBase = await runSetup(async () =>
+        prepareLockedRuntimeFiles(runtime, request.dshVersion, defaultActionRoot()),
+      );
       await executeSetup(
-        dockerInstallSpec(request, workspace, packageRoot, runtime.npmCache, environment),
+        dockerInstallerSpec({
+          kind: "runtime",
+          containerImage: request.containerImage,
+          workspace,
+          packageRoot,
+          npmCache: runtime.npmCache,
+          environment,
+        }),
+        PHASE_TIMEOUTS.runtimeInstallMs,
       );
       runtime.installedVersion = request.dshVersion;
-      if (Object.keys(extensions.packageDependencies).length > 0) {
-        runtime.installedPackageInventory = await installedTopLevelPackageInventory(packageRoot);
-        runtime.installedPackageLockBaseline = snapshotRuntimeLock(
-          await readFile(join(packageRoot, "package-lock.json"), "utf8"),
-        );
-      }
+      await runSetup(async () => captureExtensionInstallBaseline(runtime, extensions));
     }
 
     const policyPluginPath = join(assets, "action-policy.mjs");
     const workspacePluginPath = join(assets, "action-workspace.mjs");
     const launcherPath = join(assets, "action-launcher.mjs");
-    await assertFile(policyPluginPath, "DSH Action policy plugin");
-    await assertFile(workspacePluginPath, "DSH Action workspace plugin");
-    await assertFile(launcherPath, "DSH Action launcher");
+    await runSetup(async () => {
+      await Promise.all([
+        assertFile(policyPluginPath, "DSH Action policy plugin"),
+        assertFile(workspacePluginPath, "DSH Action workspace plugin"),
+        assertFile(launcherPath, "DSH Action launcher"),
+      ]);
+    });
     if (docker) {
-      await rm(join(localDshHome, ".env"), { force: true });
-      manifestBase ??= JSON.parse(
-        await readFile(join(packageRoot, "package.json"), "utf8"),
-      ) as Record<string, unknown>;
+      await runSetup(async () => rm(join(localDshHome, ".env"), { force: true }));
+      manifestBase ??= await runSetup(async () => {
+        const parsed = JSON.parse(
+          await readFile(join(packageRoot, "package.json"), "utf8"),
+        ) as Record<string, unknown>;
+        return parsed;
+      });
+      const profileManifest = manifestBase;
       const profileOptions = {
         dshHome: localDshHome,
         plan: extensions,
@@ -1545,12 +728,12 @@ export async function runDsh(
         workspacePluginPath: CONTAINER_WORKSPACE_PLUGIN,
         workerStatePath: CONTAINER_STATE,
         workerAuditPath: CONTAINER_AUDIT,
-        manifestBase,
+        manifestBase: profileManifest,
         ...(runtime.verifiedPluginModuleSpecifiers === undefined
           ? {}
           : { pluginModuleSpecifiers: runtime.verifiedPluginModuleSpecifiers }),
       } as const;
-      controlledProfile = await prepareControlledProfile(profileOptions);
+      controlledProfile = await runSetup(async () => prepareControlledProfile(profileOptions));
       if (resolve(controlledProfile.profileDir) !== resolve(packageRoot)) {
         throw new DshConfigurationError(
           "Controlled Profile and extension installation must share one package root",
@@ -1558,67 +741,35 @@ export async function runDsh(
       }
       if (runtime.installedExtensionDigest === undefined) {
         if (Object.keys(extensions.packageDependencies).length > 0) {
-          const baseline = runtime.installedPackageInventory;
-          const lockBaseline = runtime.installedPackageLockBaseline;
-          if (baseline === undefined || lockBaseline === undefined) {
-            throw new DshConfigurationError(
-              "Extension installation requires a Controller-owned runtime package and lock inventory",
-            );
-          }
-          assertExtensionPackagesDoNotShadowRuntime(extensions, baseline);
-          assertExtensionPackagesAbsentFromRuntimeLock(
-            lockBaseline,
-            extensions.packageDependencies,
-          );
+          assertExtensionInstallBaseline(runtime, extensions);
           await executeSetup(
-            dockerExtensionInstallSpec(
-              request,
+            dockerInstallerSpec({
+              kind: "extension",
+              containerImage: request.containerImage,
               workspace,
               packageRoot,
-              runtime.npmCache,
+              npmCache: runtime.npmCache,
               environment,
-            ),
+            }),
+            PHASE_TIMEOUTS.extensionInstallMs,
           );
-          assertInstalledRuntimeInventoryUnchanged(
-            baseline,
-            await installedTopLevelPackageInventory(packageRoot),
-          );
-          await verifyInstalledExtensions(packageRoot, extensions);
-          runtime.installedExtensionRuntimeLock = auditExtensionRuntimeLock({
-            lockText: await readFile(join(packageRoot, "package-lock.json"), "utf8"),
-            baseline: lockBaseline,
-            extensionDependencies: extensions.packageDependencies,
-            expectedRootName: "dsh-profile-github-action",
-          });
+          await runSetup(async () => auditFreshExtensionInstallation(runtime, extensions));
         }
         runtime.installedExtensionDigest = extensions.configurationDigest;
       } else if (Object.keys(extensions.packageDependencies).length > 0) {
-        const lockBaseline = runtime.installedPackageLockBaseline;
-        const installedLock = runtime.installedExtensionRuntimeLock;
-        if (lockBaseline === undefined || installedLock === undefined) {
-          throw new DshConfigurationError(
-            "Reused extension runtime has no Controller-verified package-lock audit",
-          );
-        }
-        const currentLock = auditExtensionRuntimeLock({
-          lockText: await readFile(join(packageRoot, "package-lock.json"), "utf8"),
-          baseline: lockBaseline,
-          extensionDependencies: extensions.packageDependencies,
-          expectedRootName: "dsh-profile-github-action",
-        });
-        if (currentLock.digest !== installedLock.digest) {
-          throw new DshConfigurationError("Reused extension runtime package-lock digest changed");
-        }
+        await runSetup(async () => auditReusedExtensionInstallation(runtime, extensions));
       }
       if (extensions.plugins.length > 0) {
         let pluginModuleSpecifiers = runtime.verifiedPluginModuleSpecifiers;
         if (pluginModuleSpecifiers === undefined) {
           try {
-            pluginModuleSpecifiers = await resolveInstalledPluginModuleSpecifiers({
-              packageRoot,
-              workerProfilePath: CONTAINER_PROFILE_ROOT,
-              plan: extensions,
-            });
+            pluginModuleSpecifiers = await runSetup(async () =>
+              resolveInstalledPluginModuleSpecifiers({
+                packageRoot,
+                workerProfilePath: CONTAINER_PROFILE_ROOT,
+                plan: extensions,
+              }),
+            );
           } catch (error: unknown) {
             throw new DshConfigurationError(
               "Installed direct Plugin entry failed Controller containment validation",
@@ -1628,37 +779,49 @@ export async function runDsh(
           runtime.verifiedPluginModuleSpecifiers = pluginModuleSpecifiers;
         }
         if (profileOptions.pluginModuleSpecifiers === undefined) {
-          controlledProfile = await prepareControlledProfile({
-            ...profileOptions,
-            pluginModuleSpecifiers,
-          });
+          controlledProfile = await runSetup(async () =>
+            prepareControlledProfile({
+              ...profileOptions,
+              pluginModuleSpecifiers,
+            }),
+          );
         }
       }
       // Keep the launcher inside the populated package root so its bare imports
       // resolve against the locked runtime. A separate child bind mount below
       // the read-only package bind cannot create its mountpoint under Linux runc.
-      await copyFile(launcherPath, join(packageRoot, basename(CONTAINER_LAUNCHER)));
+      await runSetup(async () => {
+        await copyFile(launcherPath, join(packageRoot, basename(CONTAINER_LAUNCHER)));
+      });
       if (!extensions.network) {
         internalNetwork = `dsh-action-internal-${randomUUID()}`;
-        await executeSetup(dockerNetworkSpec("create", internalNetwork, workspace, environment));
+        await executeSetup(
+          dockerNetworkSpec("create", internalNetwork, workspace, environment),
+          PHASE_TIMEOUTS.setupMs,
+        );
         const inspected = await executeSetup(
           dockerNetworkInspectSpec(internalNetwork, workspace, environment),
+          PHASE_TIMEOUTS.setupMs,
         );
         internalNetworkGateway = parseInternalNetworkGateway(inspected.stdout);
       }
     }
 
     const proxyFactory = dependencies.startProxy ?? startDeepSeekProxy;
-    proxy = await proxyFactory({
-      apiKey: request.apiKey,
-      baseUrl: request.baseUrl,
-      ...(webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
-      allowWebSearch: webSearchEnabled,
-      bindHost: docker ? "0.0.0.0" : "127.0.0.1",
-      workerHost: docker ? (internalNetworkGateway ?? "host.docker.internal") : "127.0.0.1",
-      requestTimeoutMs: request.timeoutMs,
-      maxResponseBytes: request.maxOutputBytes,
-    });
+    proxy = await runSetup(
+      async () =>
+        proxyFactory({
+          apiKey: request.apiKey,
+          baseUrl: request.baseUrl,
+          ...(webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
+          allowWebSearch: webSearchEnabled,
+          bindHost: docker ? "0.0.0.0" : "127.0.0.1",
+          workerHost: docker ? (internalNetworkGateway ?? "host.docker.internal") : "127.0.0.1",
+          requestTimeoutMs: request.timeoutMs,
+          maxResponseBytes: request.maxOutputBytes,
+        }),
+      async (lateProxy) => lateProxy.close(),
+    );
     if (webSearchEnabled && proxy.workerWebSearchBaseUrl === undefined) {
       throw new DshConfigurationError(
         "The Controller proxy did not expose the required mediated web-search route",
@@ -1674,29 +837,35 @@ export async function runDsh(
       realDeepSeekApiKey: request.apiKey,
     });
     assertSecretAbsent(workerEnvironment, request.apiKey, "real DeepSeek API key");
-    const toolPolicyPath = docker ? undefined : await writeToolPolicy(runtime, request);
-    const auditOffset =
-      controlledProfile === undefined ? 0 : await fileSize(controlledProfile.auditPath);
-    const invocationCountsBefore =
-      controlledProfile === undefined
-        ? emptyInvocationCounts()
-        : await readInvocationCounts(controlledProfile.statePath, controlledProfile.rules);
+    const toolPolicyPath = docker
+      ? undefined
+      : await runSetup(async () => writeToolPolicy(runtime, request));
+    const { auditOffset, invocationCountsBefore } = await runSetup(async () => ({
+      auditOffset:
+        controlledProfile === undefined ? 0 : await fileSize(controlledProfile.auditPath),
+      invocationCountsBefore:
+        controlledProfile === undefined
+          ? emptyInvocationCounts()
+          : await readInvocationCounts(controlledProfile.statePath, controlledProfile.rules),
+    }));
 
     const spec = docker
-      ? dockerSpec(
-          request,
+      ? dockerWorkerSpec({
+          containerImage: request.containerImage,
+          ...(request.dshExecutable === undefined ? {} : { dshExecutable: request.dshExecutable }),
           workspace,
-          localDshHome,
+          dshHome: localDshHome,
           packageRoot,
           policyPluginPath,
           workspacePluginPath,
-          internalNetwork ?? "bridge",
-          internalNetworkGateway ?? "host-gateway",
+          networkName: internalNetwork ?? "bridge",
+          hostGateway: internalNetworkGateway ?? "host-gateway",
           prompt,
           environment,
           workerEnvironment,
           proxy,
-        )
+          workspaceWrite: workerWorkspaceWrite(request),
+        })
       : localSpec(
           dshExecutableIdentity,
           workspace,
@@ -1705,13 +874,13 @@ export async function runDsh(
           prompt,
           workerEnvironment,
         );
-    assertSecretAbsent(spec.env, request.apiKey, "real DeepSeek API key");
-    if (spec.args.some((argument) => argument.includes(request.apiKey))) {
-      throw new DshConfigurationError("Real DeepSeek API key was found in DSH argv");
-    }
+    assertWorkerLaunchHasNoControllerCredentials(spec, secrets);
 
-    const elapsedBeforeSpawn = Math.max(0, now() - startedAt);
-    const remainingMs = request.timeoutMs - elapsedBeforeSpawn;
+    const remainingMs = phaseTimeoutMs(
+      deadlineMs,
+      Math.min(request.timeoutMs, PHASE_TIMEOUTS.agentTurnMs),
+      now,
+    );
     if (remainingMs <= 0) throw new DshTimeoutError(request.timeoutMs);
 
     let processResult: DshProcessResult | undefined;
@@ -1750,21 +919,28 @@ export async function runDsh(
     }
 
     if (controlledProfile !== undefined) {
+      const profileForAudit = controlledProfile;
       try {
-        turnReceipts = await readToolReceipts(controlledProfile.auditPath, auditOffset);
-        assertNoSecretOutput("tool receipt", JSON.stringify(turnReceipts), workerSecrets);
-        const countsAfter = await readInvocationCounts(
-          controlledProfile.statePath,
-          controlledProfile.rules,
-        );
-        reconcileToolAudit(
-          invocationCountsBefore,
-          countsAfter,
-          turnReceipts,
-          executionFailure === undefined,
-        );
+        turnReceipts = await runSetup(async () => {
+          const receipts = await readToolReceipts(profileForAudit.auditPath, auditOffset);
+          assertNoSecretOutput("tool receipt", JSON.stringify(receipts), workerSecrets);
+          const countsAfter = await readInvocationCounts(
+            profileForAudit.statePath,
+            profileForAudit.rules,
+          );
+          reconcileToolAudit(
+            invocationCountsBefore,
+            countsAfter,
+            receipts,
+            executionFailure === undefined,
+          );
+          return receipts;
+        });
       } catch (error: unknown) {
-        executionFailure = error;
+        // Auditing still runs to collect valid incomplete receipts, but a
+        // malformed state file must not replace an earlier abort, credential
+        // leak, process failure, or output failure.
+        executionFailure ??= error;
       }
     }
 
@@ -1797,24 +973,44 @@ export async function runDsh(
     }
     throw error;
   } finally {
-    try {
-      await proxy?.close();
-    } finally {
-      try {
-        if (internalNetwork !== undefined && executeForCleanup !== undefined) {
-          await executeForCleanup(
-            dockerNetworkSpec("remove", internalNetwork, workspace, environment),
+    const proxyForCleanup = proxy;
+    const networkForCleanup = internalNetwork;
+    const cleanupExecutor = executeForCleanup;
+    const cleanupTasks = [
+      ...(proxyForCleanup === undefined
+        ? []
+        : [{ label: "proxy", run: async (): Promise<void> => proxyForCleanup.close() }]),
+      ...(networkForCleanup === undefined || cleanupExecutor === undefined
+        ? []
+        : [
             {
-              timeoutMs: 10_000,
-              maxStdoutBytes: 64 * 1024,
-              maxStderrBytes: 64 * 1024,
-              maxCombinedBytes: 128 * 1024,
+              label: "Docker network",
+              run: async (): Promise<void> => {
+                await cleanupExecutor(
+                  dockerNetworkSpec("remove", networkForCleanup, workspace, environment),
+                  {
+                    timeoutMs: PHASE_TIMEOUTS.cleanupMs,
+                    maxStdoutBytes: 64 * 1024,
+                    maxStderrBytes: 64 * 1024,
+                    maxCombinedBytes: 128 * 1024,
+                  },
+                );
+              },
             },
-          ).catch(() => undefined);
-        }
-      } finally {
-        if (ownsRuntime) await disposeDshRuntime(runtime);
-      }
-    }
+          ]),
+      ...(ownsRuntime
+        ? [
+            {
+              label: "runtime",
+              run: async (): Promise<void> => disposeDshRuntime(runtime),
+            },
+          ]
+        : []),
+    ];
+    await runBestEffortDshCleanup(
+      cleanupTasks,
+      PHASE_TIMEOUTS.cleanupMs,
+      dependencies.warning ?? core.warning,
+    );
   }
 }

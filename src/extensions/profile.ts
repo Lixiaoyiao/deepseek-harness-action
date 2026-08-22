@@ -157,7 +157,7 @@ function mcpEntry(
   const common = {
     serverName: definition.id,
     transport: definition.transport,
-    // The official rc.8 MCP client exposes one timeout for the whole server.
+    // The official rc.2 MCP client exposes one timeout for the whole server.
     // Use the widest approved tool timeout here; the Action-owned ToolRuntime
     // policy still applies each tool's smaller cooperative deadline.
     toolCallTimeoutMs: Math.max(...server.tools.map((tool) => tool.timeoutMs)),

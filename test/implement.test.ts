@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DshRunResult } from "../src/dsh/runner.js";
+import { DshAbortedError } from "../src/dsh/errors.js";
 import type { GitHubClient } from "../src/github/client.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
 import { inputs } from "./helpers.js";
@@ -36,7 +37,8 @@ vi.mock("../src/write/pr.js", () => ({
   createPullRequest: mocks.createPullRequest,
   findPullRequestByOperationKey: mocks.findPullRequest,
 }));
-vi.mock("../src/write/validate.js", () => ({
+vi.mock("../src/write/validate.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("../src/write/validate.js")),
   assertValidationSucceeded: mocks.assertValidation,
   assertWriteValidationConfigured: (runTests: boolean, commands: readonly unknown[]) => {
     if (!runTests) throw new Error("run-tests=false cannot authorize a repository write");
@@ -101,7 +103,38 @@ beforeEach(() => {
   ]);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("finishImplementation validation gate", () => {
+  it("does not restart the validation budget after reconciliation", async () => {
+    let clock = 2_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    mocks.findPullRequest.mockImplementationOnce(() => {
+      clock += 9 * 60_000;
+      return Promise.resolve(null);
+    });
+
+    await finishImplementation({
+      client: {} as GitHubClient,
+      owner: "octo",
+      repo: "repo",
+      issueNumber: 7,
+      issueTitle: "Add a safe parser",
+      issueIdentity,
+      baseBranch: "main",
+      snapshot,
+      boundHeadSha: "a".repeat(40),
+      operationKey: "10",
+      result,
+      inputs: inputs({ testCommands: [["npm", "test"]] }),
+      validationDeadlineMs: 2_000 + 10 * 60_000,
+    });
+
+    expect(mocks.runValidation.mock.calls[0]?.[3]).toBe(60_000);
+  });
+
   it("fails closed before commit, branch, or PR creation for the default empty command list", async () => {
     await expect(
       finishImplementation({
@@ -169,7 +202,7 @@ describe("finishImplementation validation gate", () => {
       expect.stringContaining("configured commands passed"),
       expect.stringContaining("dsh-action:implement"),
     );
-    expect(onPhase.mock.calls).toEqual([["write"], ["validation"], ["write"]]);
+    expect(onPhase.mock.calls).toEqual([["validation"], ["write"]]);
   });
 
   it("sanitizes untrusted issue and model text before creating the pull request", async () => {
@@ -261,5 +294,36 @@ describe("finishImplementation validation gate", () => {
       }),
     ).rejects.toThrow('Validation command "npm test" exited with code 1');
     expect(mocks.createCommit).not.toHaveBeenCalled();
+  });
+
+  it("performs no GitHub mutation when cancellation lands as validation returns", async () => {
+    const controller = new AbortController();
+    const cancellation = new DshAbortedError();
+    mocks.runValidation.mockImplementationOnce(() => {
+      controller.abort(cancellation);
+      return Promise.resolve([]);
+    });
+
+    await expect(
+      finishImplementation({
+        client: {} as GitHubClient,
+        owner: "octo",
+        repo: "repo",
+        issueNumber: 7,
+        issueTitle: "Add a safe parser",
+        issueIdentity,
+        baseBranch: "main",
+        snapshot,
+        boundHeadSha: "a".repeat(40),
+        operationKey: "10",
+        result,
+        inputs: inputs({ testCommands: [["npm", "test"]] }),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancellation);
+
+    expect(mocks.createCommit).not.toHaveBeenCalled();
+    expect(mocks.createRemoteBranch).not.toHaveBeenCalled();
+    expect(mocks.createPullRequest).not.toHaveBeenCalled();
   });
 });

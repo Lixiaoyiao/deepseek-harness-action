@@ -36,6 +36,24 @@ const failure: ActionFailure = {
   retryable: true,
 };
 
+const abortedFailure: ActionFailure = {
+  code: "DSH_ABORTED",
+  phase: "agent",
+  title: "DeepSeek Harness was cancelled",
+  message: "The controller received SIGTERM",
+  guidance: "Rerun if needed.",
+  retryable: true,
+};
+
+const integrityFailure: ActionFailure = {
+  code: "VALIDATION_INTEGRITY",
+  phase: "validation",
+  title: "Validation integrity failed",
+  message: "A protected validation dependency changed",
+  guidance: "Restore the validation boundary.",
+  retryable: false,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.upsert.mockResolvedValue(42);
@@ -83,6 +101,7 @@ describe("controller-owned sticky progress", () => {
       41898282,
       "summary",
       expect.stringContaining("⏳ In progress"),
+      expect.anything(),
     );
     expect(mocks.upsert).toHaveBeenLastCalledWith(
       expect.anything(),
@@ -90,6 +109,13 @@ describe("controller-owned sticky progress", () => {
       41898282,
       "summary",
       expect.stringContaining("✅ Completed"),
+      expect.anything(),
+    );
+    expect((mocks.upsert.mock.calls[0]?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
+      AbortSignal,
+    );
+    expect((mocks.upsert.mock.calls.at(-1)?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
+      AbortSignal,
     );
     expect(reporter.commentId).toBe(42);
   });
@@ -137,9 +163,128 @@ describe("controller-owned sticky progress", () => {
       41898282,
       "summary",
       expect.stringContaining("**Failure code:** `DSH_TIMEOUT`"),
+      expect.anything(),
+    );
+    expect((mocks.upsert.mock.calls.at(-1)?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
+      AbortSignal,
     );
     expect(reporter.commentId).toBe(42);
   });
+
+  it.each(["context", "agent"] as const)(
+    "aborts a permanently pending %s publication and starts the terminal update independently",
+    async (stage) => {
+      let nonTerminalSignal: AbortSignal | undefined;
+      let terminalSignal: AbortSignal | undefined;
+      mocks.upsert
+        .mockImplementationOnce((...args: unknown[]) => {
+          nonTerminalSignal = (args[5] as { signal: AbortSignal }).signal;
+          return new Promise<number>(() => undefined);
+        })
+        .mockImplementationOnce((...args: unknown[]) => {
+          terminalSignal = (args[5] as { signal: AbortSignal }).signal;
+          return Promise.resolve(42);
+        });
+      const reporter = new StickyProgressReporter({
+        client: {} as GitHubClient,
+        target: { owner: "octo", repo: "repo", issueNumber: 7 },
+        expectedAuthorId: 41898282,
+        operation: "task",
+        policy,
+        runUrl: "https://github.com/octo/repo/actions/runs/10",
+      });
+
+      void reporter.update(stage, "Running");
+      await vi.waitFor(() => expect(mocks.upsert).toHaveBeenCalledOnce());
+      const queued = reporter.update("finalizing", "Queued before cancellation");
+      const failing = reporter.fail(failure);
+      await Promise.all([queued, failing]);
+      await reporter.update("agent", "Late worker update");
+
+      expect(nonTerminalSignal?.aborted).toBe(true);
+      expect(terminalSignal?.aborted).toBe(false);
+      expect(terminalSignal).not.toBe(nonTerminalSignal);
+      expect(mocks.upsert).toHaveBeenCalledTimes(2);
+      expect(String(mocks.upsert.mock.calls[1]?.[4])).toContain("**Failure code:** `DSH_TIMEOUT`");
+      expect(String(mocks.upsert.mock.calls[1]?.[4])).not.toContain("⏳ In progress");
+    },
+  );
+
+  it("replaces an in-flight provisional cancellation with the authoritative primary failure", async () => {
+    let provisionalSignal: AbortSignal | undefined;
+    let correctionSignal: AbortSignal | undefined;
+    mocks.upsert
+      .mockImplementationOnce((...args: unknown[]) => {
+        provisionalSignal = (args[5] as { signal: AbortSignal }).signal;
+        return new Promise<number>(() => undefined);
+      })
+      .mockImplementationOnce((...args: unknown[]) => {
+        correctionSignal = (args[5] as { signal: AbortSignal }).signal;
+        return Promise.resolve(42);
+      });
+    const reporter = new StickyProgressReporter({
+      client: {} as GitHubClient,
+      target: { owner: "octo", repo: "repo", issueNumber: 7 },
+      expectedAuthorId: 41898282,
+      operation: "task",
+      policy,
+      runUrl: "https://github.com/octo/repo/actions/runs/10",
+    });
+
+    void reporter.fail(abortedFailure);
+    await vi.waitFor(() => expect(mocks.upsert).toHaveBeenCalledOnce());
+    await reporter.fail(integrityFailure);
+
+    expect(provisionalSignal?.aborted).toBe(true);
+    expect(correctionSignal?.aborted).toBe(false);
+    expect(correctionSignal).not.toBe(provisionalSignal);
+    expect(mocks.upsert).toHaveBeenCalledTimes(2);
+    const finalBody = String(mocks.upsert.mock.calls.at(-1)?.[4]);
+    expect(finalBody).toContain("**Failure code:** `VALIDATION_INTEGRITY`");
+    expect(finalBody).not.toContain("**Failure code:** `DSH_ABORTED`");
+  });
+
+  it("never downgrades an authoritative failure to a later cancellation", async () => {
+    const reporter = new StickyProgressReporter({
+      client: {} as GitHubClient,
+      target: { owner: "octo", repo: "repo", issueNumber: 7 },
+      expectedAuthorId: 41898282,
+      operation: "task",
+      policy,
+      runUrl: "https://github.com/octo/repo/actions/runs/10",
+    });
+
+    await reporter.fail(integrityFailure);
+    await reporter.fail(abortedFailure);
+
+    expect(mocks.upsert).toHaveBeenCalledOnce();
+    const finalBody = String(mocks.upsert.mock.calls[0]?.[4]);
+    expect(finalBody).toContain("**Failure code:** `VALIDATION_INTEGRITY`");
+    expect(finalBody).not.toContain("**Failure code:** `DSH_ABORTED`");
+  });
+
+  it.each(["complete", "blocked"] as const)(
+    "does not replace a %s terminal state with a later failure",
+    async (terminal) => {
+      const reporter = new StickyProgressReporter({
+        client: {} as GitHubClient,
+        target: { owner: "octo", repo: "repo", issueNumber: 7 },
+        expectedAuthorId: 41898282,
+        operation: "task",
+        policy,
+        runUrl: "https://github.com/octo/repo/actions/runs/10",
+      });
+
+      if (terminal === "complete") await reporter.complete("Finished");
+      else await reporter.blocked("Dependency unavailable");
+      await reporter.fail(integrityFailure);
+
+      expect(mocks.upsert).toHaveBeenCalledOnce();
+      const finalBody = String(mocks.upsert.mock.calls[0]?.[4]);
+      expect(finalBody).not.toContain("**Failure code:**");
+      expect(finalBody).toContain(terminal === "complete" ? "✅ Completed" : "⚠️ Blocked");
+    },
+  );
 
   it("renders blocked as neutral rather than a successful completion", async () => {
     const reporter = new StickyProgressReporter({

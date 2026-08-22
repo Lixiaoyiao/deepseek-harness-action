@@ -108,7 +108,9 @@ export class DshMalformedOutputError extends DshError {
 }
 
 export class DshCredentialLeakError extends DshError {
-  public constructor(channel: "stdout" | "stderr" | "tool receipt") {
+  public constructor(
+    channel: "prompt" | "argv" | "environment" | "stdout" | "stderr" | "tool receipt",
+  ) {
     super("DSH_CREDENTIAL_LEAK", `DSH ${channel} contained a controller credential`);
   }
 }

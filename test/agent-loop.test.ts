@@ -128,6 +128,123 @@ function validationFailure(stderr: string): ValidationFailureError {
 }
 
 describe("controller-owned agent loop", () => {
+  it("caps an Agent turn independently and forwards the run cancellation signal", async () => {
+    const controller = new AbortController();
+    const requests: AgentTurnRequest[] = [];
+    const result = await runAgentLoop(
+      task(),
+      inputs(),
+      {
+        deadlineMs: 2_000_000,
+        signal: controller.signal,
+        blocked: () => Promise.resolve("blocked"),
+        finalize: () => Promise.resolve("done"),
+      },
+      {
+        now: () => 1_000,
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => engine([output("final")], requests),
+      },
+    );
+
+    expect(result.finalization).toBe("done");
+    expect(requests[0]?.deadlineMs).toBe(2_000_000);
+    expect(requests[0]?.timeoutMs).toBe(10 * 60_000);
+    expect(requests[0]?.signal).toBe(controller.signal);
+  });
+
+  it("stops before invoking the Agent when the run was cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort(new DshProcessError(null, "SIGTERM", "cancelled"));
+    const runTurn = vi.fn();
+    const createRuntime = vi.fn(() => Promise.resolve(runtime));
+
+    await expect(
+      runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          signal: controller.signal,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          createRuntime,
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => ({ id: "cancelled", version: "1", runTurn }),
+        },
+      ),
+    ).rejects.toThrow("cancelled");
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it("hard-bounds a hanging turn progress hook by its phase cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const onTurn = vi.fn(() => new Promise<void>(() => undefined));
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: 20 * 60_000,
+          onTurn,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final")], []),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onTurn).toHaveBeenCalledOnce();
+      const outcome = expect(running).rejects.toThrow(/turn progress hook exceeded/u);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hard-bounds a hanging validation retry progress hook", async () => {
+    vi.useFakeTimers();
+    try {
+      const onValidationRetry = vi.fn(() => new Promise<void>(() => undefined));
+      const running = runAgentLoop(
+        task(),
+        inputs({ maxTurns: 2 }),
+        {
+          deadlineMs: 20 * 60_000,
+          onValidationRetry,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.reject(validationFailure("retry")),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => engine([output("final")], []),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onValidationRetry).toHaveBeenCalledOnce();
+      const outcome = expect(running).rejects.toThrow(/validation retry progress hook exceeded/u);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes tool -> validation error -> repair -> pass with newest feedback preserved", async () => {
     const requests: AgentTurnRequest[] = [];
     const disposeRuntime = vi.fn(() => Promise.resolve());
@@ -393,6 +510,52 @@ describe("controller-owned agent loop", () => {
       "engine:engine cleanup failed",
       "runtime:runtime cleanup failed",
     ]);
+  });
+
+  it("shares one cleanup grace period without skipping later disposers", async () => {
+    vi.useFakeTimers();
+    try {
+      const cleanupErrors: string[] = [];
+      const engineDispose = vi.fn(() => Promise.reject(new Error("late engine cleanup failure")));
+      const runtimeDispose = vi.fn(() => Promise.reject(new Error("late runtime cleanup failure")));
+      const provider: ToolProvider = {
+        id: "command",
+        manifest: () => [],
+        invoke: () => Promise.reject(new Error("not called")),
+        dispose: () => new Promise<void>(() => undefined),
+      };
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: provider,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("published"),
+          onCleanupError: (component) => {
+            cleanupErrors.push(component);
+          },
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: runtimeDispose,
+          createEngine: () => ({
+            ...engine([output("final")], []),
+            dispose: engineDispose,
+          }),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(running).resolves.toMatchObject({ finalization: "published" });
+      expect(cleanupErrors).toEqual(["tool-provider", "engine", "runtime"]);
+      expect(engineDispose).toHaveBeenCalledOnce();
+      expect(runtimeDispose).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports an auditable failed receipt before propagating a provider error", async () => {

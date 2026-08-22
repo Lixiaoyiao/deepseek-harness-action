@@ -3,6 +3,7 @@ import * as core from "@actions/core";
 import type { DshRunResult } from "../dsh/runner.js";
 import type { ActionInputs } from "../inputs.js";
 import type { GitHubClient } from "../github/client.js";
+import { throwIfCancelled } from "../lifecycle/cancellation.js";
 import { publishStatusComment } from "../github/status.js";
 import { revalidatePullRequestIdentity, type BoundPullRequestIdentity } from "../write/pr.js";
 import {
@@ -16,6 +17,11 @@ import {
   runValidationCommandsInDocker,
 } from "../write/validate.js";
 import { inspectWorkspaceChanges, type WorkspaceSnapshot } from "../write/workspace.js";
+import {
+  remainingValidationMs,
+  withinValidationDeadline,
+  type ValidationDeadline,
+} from "../write/validation-deadline.js";
 
 export interface FinishFixInput {
   readonly client: GitHubClient;
@@ -28,7 +34,8 @@ export interface FinishFixInput {
   readonly result: DshRunResult;
   readonly inputs: ActionInputs;
   readonly runUrl: string;
-  readonly validationTimeoutMs?: number;
+  readonly validationDeadlineMs?: number;
+  readonly signal?: AbortSignal;
   readonly onPhase?: (phase: "validation" | "write") => void;
 }
 
@@ -39,36 +46,61 @@ export async function finishFix(input: FinishFixInput): Promise<{
 }> {
   const task = input.result.output.operation === "task";
   const label = task ? "task" : "fix";
+  const validation: ValidationDeadline = {
+    deadlineMs: input.validationDeadlineMs ?? Date.now() + 10 * 60_000,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
   input.onPhase?.("validation");
-  await revalidatePullRequestIdentity(
-    input.client,
-    input.target.owner,
-    input.target.repo,
-    input.target.issueNumber,
-    input.identity,
+  await withinValidationDeadline(
+    async () =>
+      revalidatePullRequestIdentity(
+        input.client,
+        input.target.owner,
+        input.target.repo,
+        input.target.issueNumber,
+        input.identity,
+      ),
+    validation,
   );
-  const changes = await inspectWorkspaceChanges(input.snapshot);
+  const changes = await withinValidationDeadline(
+    async () => inspectWorkspaceChanges(input.snapshot),
+    validation,
+  );
   if (changes.all.length === 0) {
     throw new Error(`DSH reported a ${label} but produced no file changes`);
   }
 
   assertWriteValidationConfigured(input.inputs.runTests, input.inputs.testCommands);
-  const tests = await runValidationCommandsInDocker(
-    input.snapshot.workerRoot,
-    input.inputs.testCommands,
-    input.inputs.containerImage,
-    input.validationTimeoutMs,
+  const tests = await withinValidationDeadline(
+    async () =>
+      runValidationCommandsInDocker(
+        input.snapshot.workerRoot,
+        input.inputs.testCommands,
+        input.inputs.containerImage,
+        remainingValidationMs(validation),
+        undefined,
+        input.signal,
+      ),
+    validation,
   );
   assertValidationSucceeded(tests);
+  throwIfCancelled(input.signal);
 
   input.onPhase?.("write");
-  await revalidatePullRequestIdentity(
-    input.client,
-    input.target.owner,
-    input.target.repo,
-    input.target.issueNumber,
-    input.identity,
+  await withinValidationDeadline(
+    async () =>
+      revalidatePullRequestIdentity(
+        input.client,
+        input.target.owner,
+        input.target.repo,
+        input.target.issueNumber,
+        input.identity,
+      ),
+    validation,
   );
+  throwIfCancelled(input.signal);
+  // Crossing this boundary may create Git objects. Complete the existing
+  // reconcile/update sequence even if cancellation arrives afterwards.
   const created = await createGitHubCommitFromWorkspace(
     input.client,
     {
