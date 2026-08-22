@@ -40,6 +40,12 @@ npm run check
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
 
+For v0.6.0, the DSH audit also proves that the exact headless package still
+accepts only one text task and creates one text content block. That negative
+contract is release evidence for deferring GitHub attachment images; do not
+remove it unless a replacement exact DSH multimodal contract and its security
+review ship together.
+
 Before committing, inspect the complete diff and confirm that only intended source, test, metadata, documentation, and generated bundle changes are present. For a documentation-only PR, verify explicitly that `src/`, `dist/`, runtime assets, `action.yml`, and package files did not change.
 
 ## Version and DSH update checklist
@@ -117,9 +123,17 @@ The golden paths cover:
 | Subagent                    | Real `native.subagent` through a successful no-change write path                                                                                         |
 | Bash trusted write          | `standard` native Bash, validation, and exact branch/PR/commit/file assertions                                                                           |
 | Cancellation                | Graceful `SIGTERM` moves the isolated sticky comment from In progress to cancelled, then removes only the fixture comment and closes its temporary Issue |
+| Trigger and filters         | Deterministic label, assignee, custom phrase, actor deny, historical-comment exclusion, and triggering-comment retention                                 |
+| Branch UX                   | A real task PR targets the candidate branch and uses the configured sanitized prefix/template while retaining the Controller key                         |
+| Typed GitHub tools          | Deferred validated comment mutation plus immutable-head check/status read, bounded receipts, revalidation, and exact cleanup                             |
+| Structured task output      | Trusted bounded schema, final Controller validation, scalar output, and optional field inside the unchanged audit envelope                               |
+| Image boundary              | Markdown attachment URL becomes `[image removed]` and is absent from the deterministic LLM request while multimodal support is deferred                  |
 | Credential isolation        | All candidate and harness checkouts use `persist-credentials: false` and have no residual Git auth configuration                                         |
 
-The workflow also compares `main`, the candidate PR, comments, `dsh/task-*` refs, and Controller-created task PRs on no-mutation paths, then revalidates the candidate identity at the end.
+The workflow also compares `main`, the candidate PR, comments, legacy
+`dsh/task-*` refs, and Controller-created task PRs on no-mutation paths. Its
+run-bound Issue, draft PR, comments, and custom refs are identity-verified and
+removed exactly before the final candidate revalidation.
 
 Graceful cancellation is the verifiable path. `SIGKILL`, runner/host loss, a process crash, or GitHub API/network loss can prevent all finalizers from running; Core E2E must not claim otherwise.
 

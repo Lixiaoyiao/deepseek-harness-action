@@ -16,11 +16,13 @@ DeepSeek Harness can run from automatic repository events, first-line `@dsh` com
 | First-line `@dsh diagnose`                                                                   | `diagnose`         |
 | First-line `@dsh fix`                                                                        | `fix`              |
 | First-line `@dsh implement` on an Issue                                                      | `implement`        |
+| Maintainer-configured label or assignee on an Issue                                          | `task`             |
+| Maintainer-configured label or assignee on a pull request                                    | `review`           |
 | Dispatch or schedule with `command: auto` and a non-empty `prompt`                           | `task`             |
 
 For an interactive command, the command must begin on the first line of the triggering comment. Later lines may continue the instruction. The Controller authorizes every originating actor before treating that command body as trusted operator instruction; permission lookup failure denies the request.
 
-The workflow's `if: contains(..., '@dsh')` expression is only a coarse job filter. The Action still performs exact parsing, context checks, and authorization.
+The workflow's `if: contains(..., '@dsh')` expression is only a coarse job filter. Keep it aligned when changing `trigger-phrase`; the Action still performs exact parsing, context checks, and authorization. Label/assignee routes and actor/comment filters are maintainer-controlled routing only and never grant trust.
 
 ## General tasks
 
@@ -39,7 +41,7 @@ Result delivery depends on the target:
 
 - A read task attached to an Issue or PR reuses one Controller-owned task comment.
 - A read automation without an Issue or PR returns through the step summary and outputs.
-- An Issue-backed or entity-free write task creates a Controller-owned `dsh/task-*` branch and pull request; it never pushes directly to the default branch.
+- An Issue-backed or entity-free write task creates a Controller-owned branch and pull request; it never pushes directly to the selected base branch. Defaults preserve `dsh/task-*`; custom prefixes/templates remain deterministic and retain the Controller key.
 - A write task attached to a same-repository PR can affect only the bound and revalidated PR head branch.
 - If an authorized write task produces no repository change, it may publish its final answer but creates no commit, ref, PR, or release mutation.
 
@@ -87,7 +89,7 @@ On an Issue, comment:
 @dsh implement
 ```
 
-After authorization, the Controller binds the Issue and default-branch head, runs the same edit and validation gates, creates a dedicated branch, and opens a pull request. Editing the bound Issue specification or moving the default-branch head during the operation causes the write to fail closed. Merging the resulting PR is a separate maintainer action.
+After authorization, the Controller binds the Issue and maintainer-selected base head, runs the same edit and validation gates, creates a dedicated branch, and opens a pull request. Editing the bound Issue specification or moving the selected base head during the operation causes the write to fail closed. Merging the resulting PR is a separate maintainer action.
 
 ## Explicit automation
 
@@ -104,7 +106,7 @@ with:
 
 `prompt` is trusted control-plane configuration. Populate it only from a maintainer-authored workflow or a dispatch input whose callers you trust. Do not promote Issue bodies, PR content, logs, repository files, or model output into `prompt`. Apply the same provenance rule to all capability-bearing inputs, especially permission profiles, tool lists, validation, container/runtime, network endpoints, and extension configuration.
 
-The full read/write dispatch template is [`examples/task-automation.yml`](../examples/task-automation.yml).
+The full read/write dispatch template is [`examples/task-automation.yml`](../examples/task-automation.yml). Custom triggers, typed GitHub tools, safe branch UX, and structured task output are shown in [`examples/github-integration.yml`](../examples/github-integration.yml).
 
 ## Multi-turn tools, validation, and repair
 
@@ -135,7 +137,7 @@ For an authorized read operation with an Issue or PR target, the Controller upda
 
 `progress-comment` defaults to `true`. Setting it to `false` disables intermediate lifecycle updates only; normal summaries, inline findings, diagnoses, and authorized final results remain enabled.
 
-Write requests deliberately publish no lifecycle/status comment until validation succeeds or actual-change inspection confirms a no-change task. On failure, inspect the step summary and outputs. The Action sets scalar outputs and the schema-v1 `result-json` on success, neutral, and failure paths.
+Write requests deliberately publish no lifecycle/status comment until validation succeeds or actual-change inspection confirms a no-change task. On failure, inspect the step summary and outputs. The Action sets scalar outputs and the schema-v1 `result-json` on success, neutral, and failure paths. A configured task schema adds only a Controller-validated `task-output`/`taskOutput` value; it does not replace the audit envelope.
 
 Cancellation finalization is bounded and best effort. `SIGTERM` or `SIGINT` can update an eligible sticky comment, but `SIGKILL`, runner/host loss, a process crash, or GitHub API failure can leave it at “In progress.” See [Troubleshooting](troubleshooting.md) and treat the Actions conclusion as authoritative.
 
@@ -148,6 +150,7 @@ For the complete output schema and a safe `always()` consumption example, see [C
 - [CI diagnosis](../examples/ci-diagnose.yml)
 - [Trusted CI auto-fix](../examples/ci-auto-fix.yml)
 - [General task automation](../examples/task-automation.yml)
+- [GitHub integration options](../examples/github-integration.yml)
 - [Controlled extensions](../examples/controlled-extensions.yml)
 
 All templates keep checkout credentials disabled. Replace their release tag with the corresponding immutable release commit SHA before production use.

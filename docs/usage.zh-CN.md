@@ -16,11 +16,13 @@ DeepSeek Harness 可以由仓库自动事件、评论第一行的 `@dsh` 命令�
 | 第一行 `@dsh diagnose`                                                                   | `diagnose`  |
 | 第一行 `@dsh fix`                                                                        | `fix`       |
 | Issue 第一行 `@dsh implement`                                                            | `implement` |
+| 维护者配置的 Issue label 或 assignee                                                     | `task`      |
+| 维护者配置的 PR label 或 assignee                                                        | `review`    |
 | dispatch 或 schedule 中 `command: auto`，并提供非空 `prompt`                             | `task`      |
 
 交互命令必须从触发评论的第一行开始，后续行可以继续写说明。Controller 会先校验所有来源 actor，再把命令正文视为操作者的受信任指令；无法查询权限时会拒绝请求。
 
-workflow 中的 `if: contains(..., '@dsh')` 只是粗略的 job 过滤条件。Action 仍会执行精确解析、上下文检查和授权。
+workflow 中的 `if: contains(..., '@dsh')` 只是粗略的 job 过滤条件；修改 `trigger-phrase` 时也要同步该条件。Action 仍会执行精确解析、上下文检查和授权。Label/assignee 路由以及 actor/comment filters 只影响维护者控制的路由，绝不授予 trust。
 
 ## 通用 task
 
@@ -39,7 +41,7 @@ workflow 中的 `if: contains(..., '@dsh')` 只是粗略的 job 过滤条件。A
 
 - 附着在 Issue 或 PR 上的只读 task 会复用一条 Controller-owned task 评论。
 - 没有 Issue 或 PR 的只读自动化通过 step summary 和 outputs 返回结果。
-- 以 Issue 为目标或没有实体目标的写 task 会创建 Controller-owned `dsh/task-*` 分支和 PR，不会直接推送默认分支。
+- 以 Issue 为目标或没有实体目标的写 task 会创建 Controller-owned 分支和 PR，不会直接推送选定 base branch。默认仍为 `dsh/task-*`；自定义 prefix/template 保持确定性并保留 Controller key。
 - 附着在同仓库 PR 上的写 task 只能影响已经绑定并重新校验的 PR head 分支。
 - 获准的写 task 如果没有产生仓库变化，可以发布最终回答，但不会创建 commit、ref、PR 或 Release 变更。
 
@@ -87,7 +89,7 @@ workflow 必须显式启用受信任写模式和固定验证命令。DSH 在一�
 @dsh implement
 ```
 
-授权通过后，Controller 会绑定 Issue 和默认分支 head，执行同样的修改与验证关卡，再创建专用分支并打开 PR。操作期间如果绑定的 Issue 规格被修改，或默认分支 head 发生变化，写入会默认拒绝。是否合并生成的 PR 仍由维护者另行决定。
+授权通过后，Controller 会绑定 Issue 和维护者选定的 base head，执行同样的修改与验证关卡，再创建专用分支并打开 PR。操作期间如果绑定的 Issue 规格被修改，或选定 base head 发生变化，写入会默认拒绝。是否合并生成的 PR 仍由维护者另行决定。
 
 ## 显式自动化
 
@@ -104,7 +106,7 @@ with:
 
 `prompt` 属于受信任的控制面配置。它只能来自维护者编写的 workflow，或调用者身份受信任的 dispatch 输入。不要把 Issue 正文、PR 内容、日志、仓库文件或模型输出提升为 `prompt`。所有带权限含义的输入都要遵守同一来源规则，尤其是权限档位、工具列表、验证、容器与运行时、网络 endpoint 和扩展配置。
 
-完整的读写 dispatch 模板见 [`examples/task-automation.yml`](../examples/task-automation.yml)。
+完整的读写 dispatch 模板见 [`examples/task-automation.yml`](../examples/task-automation.yml)。自定义 trigger、typed GitHub Tools、安全 branch UX 与结构化 task output 见 [`examples/github-integration.yml`](../examples/github-integration.yml)。
 
 ## 多轮工具、验证与修复
 
@@ -135,7 +137,7 @@ DSH turn
 
 `progress-comment` 默认为 `true`。设为 `false` 只会关闭中间生命周期更新；正常汇总、行内问题、诊断和获准的最终结果仍会发布。
 
-写请求在验证成功或实际变更检查确认任务没有变化前，不会发布生命周期或状态评论。失败时请查看 step summary 和 outputs。Action 在 success、neutral 和 failure 路径都会设置标量 outputs 和 schema-v1 `result-json`。
+写请求在验证成功或实际变更检查确认任务没有变化前，不会发布生命周期或状态评论。失败时请查看 step summary 和 outputs。Action 在 success、neutral 和 failure 路径都会设置标量 outputs 和 schema-v1 `result-json`。配置 task schema 后，只会额外产生 Controller 校验过的 `task-output`/`taskOutput` 数据，不会替换审计信封。
 
 取消收尾有明确时间上限，但只能尽力完成。`SIGTERM` 或 `SIGINT` 可以更新符合条件的 sticky comment；`SIGKILL`、runner/host 丢失、进程崩溃或 GitHub API 失败仍可能让评论停在 “In progress”。应以 Actions conclusion 为准，详见[故障排查](troubleshooting.md)。
 
@@ -148,6 +150,7 @@ DSH turn
 - [CI 诊断](../examples/ci-diagnose.yml)
 - [受信任 CI 自动修复](../examples/ci-auto-fix.yml)
 - [通用 task 自动化](../examples/task-automation.yml)
+- [GitHub integration 配置](../examples/github-integration.yml)
 - [受控扩展](../examples/controlled-extensions.yml)
 
 所有模板都禁用了 checkout 凭据。生产环境请把模板中的发布 Tag 替换为对应版本的完整、不可变 release commit SHA。

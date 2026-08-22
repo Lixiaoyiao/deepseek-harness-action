@@ -3,6 +3,50 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.6.0] - 2026-08-23
+
+### Added
+
+- Added maintainer-controlled `trigger-phrase`, label/assignee routing,
+  actor/bot routing allowlists, and historical-comment include/exclude filters.
+  Defaults preserve the exact `@dsh` behavior; routing configuration does not
+  grant actor, fork, token, or write authority.
+- Added `base-branch`, validated `branch-prefix`, and a deterministic
+  `branch-name-template`. The template supports only Controller values, must
+  retain `{{prefix}}` and the collision key `{{key}}`, and is sanitized and
+  bounded before any ref operation. PR fixes remain bound to their audited head.
+- Added six exact Controller-owned GitHub tools for Issue/PR labels and
+  assignees, Issue state, comment creation, PR metadata, and check/status reads.
+  Repository, entity, and head identity are never model inputs; there is no
+  arbitrary REST, GraphQL, raw URL, or credential pass-through.
+- Added optional `task-output-schema` and `task-output`. The Controller accepts
+  a bounded safe JSON Schema subset from trusted configuration, validates model
+  `taskOutput` twice, and adds the value as an optional field inside the
+  unchanged schema-v1 `result-json` audit envelope.
+
+### Security and compatibility
+
+- GitHub mutation tool requests are exact-ID and policy-intersected, require
+  trusted-write plus `allow-write`, Docker, and Controller validation, and are
+  deferred until finalization. Entity revalidation, bounded retries,
+  postconditions, ambiguous-failure reconciliation, and bounded receipts apply.
+- All prior credential, fork/trust/write, Docker, protected-path, validation,
+  Validation Integrity, and exact DSH audit gates remain in force. Controller
+  credentials are rejected from public branch configuration and task schemas.
+- Existing inputs, scalar outputs, default branch names, and fixed
+  `result-json` schema version remain compatible. The audited DSH family stays
+  exactly `0.1.1-rc.2`; the standalone installer remains unchanged.
+
+### Deferred and out of scope
+
+- GitHub image attachments remain disabled. The exact audited DSH headless
+  entrypoint exposes only a single text-task contract, so v0.6.0 keeps Markdown
+  images inert rather than downloading or forwarding them through an
+  unofficial multimodal path.
+- Session/Resume, cross-run conversation state, Agent Teams, GitHub App/OAuth,
+  commit signing, arbitrary GitHub APIs, and unrelated orchestrator,
+  Validation Integrity, or E2E rewrites are not included.
+
 ## [0.5.3] - 2026-08-23
 
 ### Fixed
@@ -557,6 +601,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.6.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.0...v0.5.1

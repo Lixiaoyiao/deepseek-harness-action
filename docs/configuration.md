@@ -32,14 +32,15 @@ secret recipient.
 
 ### Operation and publication
 
-| Input              | Default | Accepted values and behavior                                                                                                                                |
-| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`          | `auto`  | `auto`, `task`, `review`, `diagnose`, `fix`, or `implement`. `auto` routes from the event; on dispatch/schedule events a non-empty `prompt` selects `task`. |
-| `task-access`      | `read`  | `read` or `write`. A write value requests a capability; it does not authorize a write.                                                                      |
-| `prompt`           | Empty   | Trusted task instructions. Required when `command: task`. See [Usage](usage.md) for event routing and command examples.                                     |
-| `allow-write`      | `false` | Enables consideration of same-repository writes after every actor, event, origin, SHA, protected-path, tool, and validation gate passes.                    |
-| `max-findings`     | `20`    | Maximum number of high-confidence findings to publish; accepted range is 1–100.                                                                             |
-| `progress-comment` | `true`  | Enables eligible read-only lifecycle updates. It does not disable normal final results or inline review comments.                                           |
+| Input                | Default | Accepted values and behavior                                                                                                                                |
+| -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`            | `auto`  | `auto`, `task`, `review`, `diagnose`, `fix`, or `implement`. `auto` routes from the event; on dispatch/schedule events a non-empty `prompt` selects `task`. |
+| `task-access`        | `read`  | `read` or `write`. A write value requests a capability; it does not authorize a write.                                                                      |
+| `prompt`             | Empty   | Trusted task instructions. Required when `command: task`. See [Usage](usage.md) for event routing and command examples.                                     |
+| `allow-write`        | `false` | Enables consideration of same-repository writes after every actor, event, origin, SHA, protected-path, tool, and validation gate passes.                    |
+| `max-findings`       | `20`    | Maximum number of high-confidence findings to publish; accepted range is 1–100.                                                                             |
+| `progress-comment`   | `true`  | Enables eligible read-only lifecycle updates. It does not disable normal final results or inline review comments.                                           |
+| `task-output-schema` | Empty   | Optional bounded JSON Schema for a final `taskOutput` object. The Controller validates it; it never changes authority or replaces `result-json`.            |
 
 Writing `@dsh fix`, `@dsh implement`, or `@dsh task --write` is never enough by
 itself. An actual mutation also requires trusted origin and actors, suitable
@@ -47,11 +48,41 @@ workflow token scopes, `run-tests: "true"`, a non-empty `test-commands` list,
 successful Controller validation, and an effective `workspace.edit` grant. A
 confirmed no-change task can publish only its answer and performs no mutation.
 
+### Routing, filters, and branch UX
+
+| Input                       | Default | Behavior                                                                                                                                                              |
+| --------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trigger-phrase`            | `@dsh`  | Literal first-line command phrase. A custom phrase changes routing only; the command grammar and every authorization gate remain unchanged.                           |
+| `label-trigger`             | Empty   | Exact label for an `issues:labeled` task or `pull_request*:labeled` review. Empty disables the route.                                                                 |
+| `assignee-trigger`          | Empty   | Exact assignee login for an `issues:assigned` task or `pull_request*:assigned` review. Empty disables the route.                                                      |
+| `allowed-actors`            | `*`     | Comma-separated routing allowlist. It cannot make an actor trusted or bypass the GitHub permission check.                                                             |
+| `allowed-bots`              | Empty   | Comma-separated bot allowlist. A listed bot must still have repository write permission; unknown and unlisted bot-like accounts fail the write gate.                  |
+| `include-comments-by-actor` | Empty   | Optional comma-separated allowlist for historical comments included as untrusted model context.                                                                       |
+| `exclude-comments-by-actor` | Empty   | Optional historical-comment deny list. Exclusion wins; the exact triggering comment remains in the audited snapshot.                                                  |
+| `base-branch`               | Empty   | Trusted base for Issue and automation materialization and generated PRs. Empty uses the repository default. PR review/fix remains bound to the audited PR head.       |
+| `branch-prefix`             | `dsh/`  | Validated prefix for Controller-created task branches.                                                                                                                |
+| `branch-name-template`      | Empty   | Optional deterministic template. It must contain `{{prefix}}` and `{{key}}`; supported values also include `{{operation}}`, `{{entityType}}`, and `{{entityNumber}}`. |
+
+The workflow must subscribe to the matching GitHub event and keep any job-level
+`if` expression aligned with a custom trigger. These inputs are trusted
+maintainer configuration: never derive them from Issue, PR, comment, repository,
+or model content. Rendered branch names are sanitized as Git refs, bounded to
+240 UTF-8 bytes, and must retain the Controller operation key. The default
+configuration preserves the existing `dsh/<issue>-implement-<key>` and
+`dsh/task-<key>` names exactly.
+
+`task-output-schema` accepts only a bounded, root-object JSON Schema subset:
+typed object properties, required fields, arrays, scalar constraints, `enum`,
+`const`, and supported formats. References, combinators, conditionals, regex
+patterns, unknown keywords, dangerous keys, and excessive size or complexity
+fail closed. A configured final task must return a valid object; intermediate
+tool requests and blocked tasks omit it. The value remains untrusted task data.
+
 ### Runtime, isolation, and limits
 
 | Input             | Default                                       | Purpose and constraints                                                                                                                                                  |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.5.3 rejects another version, ranges, and `latest`.                                                                                         |
+| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.6.0 rejects another version, ranges, and `latest`.                                                                                         |
 | `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable. This trusted host-compatibility path has no container boundary and cannot load extensions.                      |
 | `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective extensions require Docker. `none` is only for eligible trusted-read work on a dedicated trusted runner. |
 | `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective extensions require a full `name@sha256:<64 lowercase hex>` digest.                 |
@@ -112,13 +143,14 @@ can comment, commit, push, update a ref, or open a pull request.
 
 Use the smallest GitHub `permissions` block that supports the workflow:
 
-| Scenario                                    | Typical scopes                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Automatic or fork PR review                 | `contents: read`, `pull-requests: write`                                                    |
-| Read-only task without Issue/PR publication | `contents: read`                                                                            |
-| Task that creates a branch and PR           | `contents: write`, `pull-requests: write`                                                   |
-| CI diagnosis                                | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`  |
-| Commands with fix/implement, or CI auto-fix | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write` |
+| Scenario                                    | Typical scopes                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Automatic or fork PR review                 | `contents: read`, `pull-requests: write`                                                                 |
+| Read-only task without Issue/PR publication | `contents: read`                                                                                         |
+| Task that creates a branch and PR           | `contents: write`, `pull-requests: write`                                                                |
+| CI diagnosis                                | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`               |
+| Commands with fix/implement, or CI auto-fix | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`              |
+| Selected typed GitHub tools                 | Add only the matching `issues: write`, `pull-requests: write`, `checks: read`, or `statuses: read` scope |
 
 These scopes let the Controller call GitHub; they do not bypass actor, fork,
 event, SHA, protected-path, extension, or validation checks. See [Setup](setup.md)
@@ -143,6 +175,9 @@ Canonical Action tool IDs are:
 - `workspace.read`, `workspace.search`, and `workspace.edit`;
 - `native.bash`, `native.web-search`, and `native.subagent`;
 - `command.<name>` for Controller fixed-argv tools;
+- `github.issue.labels.set`, `github.issue.assignees.set`,
+  `github.issue.state.update`, `github.comment.create`,
+  `github.pull.metadata.update`, and `github.checks.read`;
 - `mcp.<server-id>.<tool-id>` for MCP tools; and
 - `plugin.<extension-id>.<tool-id>` for Bundle or direct plugin tools.
 
@@ -164,6 +199,33 @@ the canonical Action ID.
 - `native.subagent` is available only under eligible trusted-write policy. Its
   ordinary response returns to the root Agent; it does not bypass the Action's
   root structured-output contract.
+
+## Controller-owned GitHub tools
+
+The first GitHub tool set is deliberately typed and closed:
+
+| Tool ID                       | Bound operation                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| `github.issue.labels.set`     | Replace labels on the current Issue or PR.                                     |
+| `github.issue.assignees.set`  | Replace assignees on the current Issue or PR.                                  |
+| `github.issue.state.update`   | Open or close the current Issue with a bounded state reason.                   |
+| `github.comment.create`       | Create one Controller-marked, mention-safe comment on the current Issue or PR. |
+| `github.pull.metadata.update` | Update bounded title/body/state metadata on the current, revalidated PR.       |
+| `github.checks.read`          | Read bounded checks and commit statuses for the immutable bound head SHA.      |
+
+No tool accepts an owner, repository, entity number, head SHA, raw URL,
+credential, REST route, GraphQL document, or arbitrary request body. The
+Controller derives identity from the trusted event snapshot. Read access
+requires the matching `readCi` policy. Every mutation requires an explicitly
+selected exact ID, `trusted-write`, `allow-write: "true"`, compatible entity
+and capability, Docker, and successful Controller-owned validation.
+
+Mutation requests are scheduled during an Agent turn and applied only during
+Controller finalization. Malformed/blocked output or failed validation discards
+the queue. Immediately before mutation the Controller revalidates entity and
+repository identity, then performs bounded API attempts, postcondition checks,
+ambiguous-failure reconciliation, and bounded receipts. Model output never
+becomes GitHub authority.
 
 ## Maintainer-defined command tools
 
@@ -335,6 +397,16 @@ configuration says `network: false`.
 The selected `container-image` itself is trusted worker code. An immutable digest
 proves identity, not safety; review and maintain the image separately.
 
+### GitHub image attachments
+
+v0.6.0 does not download or forward GitHub image attachments. The exact audited
+`@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
+constructs one text content block; it exposes no formal multimodal input
+contract. Markdown image references therefore remain inert as `[image removed]`.
+Enabling attachments is deferred until an exact DSH release provides a formal,
+auditable contract; the Action does not pass image URLs, bytes, local paths, or
+Controller credentials through an unofficial channel.
+
 ## Write validation and integrity
 
 Every repository mutation requires all configured `test-commands` to pass in
@@ -400,7 +472,7 @@ The Action writes outputs on success, neutral completion, and failure paths.
 | `summary`                  | Validated final summary for any operation, or a safe failure summary.                                                        |
 | `review-summary`           | Backward-compatible alias of `summary`.                                                                                      |
 | `findings-count`           | Selected review findings, or validated Agent findings for another operation.                                                 |
-| `branch-name`              | Created or updated `dsh` branch; empty when not applicable.                                                                  |
+| `branch-name`              | Created or updated Controller task branch; empty when not applicable.                                                        |
 | `pull-request-url`         | Created pull request URL; empty when not applicable.                                                                         |
 | `commit-sha`               | Commit created by a successful fix; empty when not applicable.                                                               |
 | `trust`                    | Resolved `untrusted`, `trusted-read`, `trusted-write`, or `none` execution trust.                                            |
@@ -415,6 +487,7 @@ The Action writes outputs on success, neutral completion, and failure paths.
 | `error-message`            | Redacted and bounded failure message.                                                                                        |
 | `extension-profile-digest` | SHA-256 digest of the redacted Controller-generated extension audit Profile; empty when unavailable.                         |
 | `tool-receipts`            | JSON object with bounded Controller/DSH receipt arrays and truncation metadata. Receipts are telemetry, never authorization. |
+| `task-output`              | JSON-encoded Controller-validated value for a configured task schema; otherwise empty.                                       |
 | `result-json`              | Versioned structured envelope described below.                                                                               |
 
 The older scalar outputs remain available. A missing branch, commit, PR, or
@@ -427,7 +500,8 @@ no-change outcomes.
 operation, summary, policy and permission audit, effective extension audit,
 bounded receipts, loop timing/counts, actual isolation report, publication,
 Controller validation, validation integrity, write result, comment ID, and
-error. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
+error. A validated task may add an optional `taskOutput` field without changing
+the fixed envelope or schema version. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
 `validation_failed`, or `denied`. Known errors expose stable `error.code`,
 `error.category`, and `error.retryable` identity. `error.phase` separately
 records the Controller lifecycle location where the error surfaced; it does not
@@ -437,7 +511,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+- uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

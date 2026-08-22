@@ -2,9 +2,9 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status in v0.5.3
+## Status in v0.6.0
 
-The extension model introduced in v0.4 remains active unchanged in v0.5.3
+The extension model introduced in v0.4 remains active unchanged in v0.6.0
 through DeepSeek Harness's official extension mechanisms. The Action does not
 define a second plugin system:
 
@@ -23,15 +23,18 @@ headless process over the same run-scoped `.git`-less workspace and persistent
 invocation-count files. The Action boots its controlled Profile through the
 official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
 general-purpose CLI path. The standalone workflow installer added in v0.5.2
-remains unchanged; v0.5.3 adds no Session/Resume input, reusable session token,
-Label/Assignee trigger, custom trigger phrase, branch template, Agent Teams,
-GitHub App, or other Agent core expansion.
+remains unchanged. v0.6.0 adds Controller-side routing, branch UX, typed GitHub
+operations, and optional task-result validation, but no Session/Resume input,
+reusable session token, Agent Teams, GitHub App, or other Agent core expansion.
 
 ## Versioned configuration
 
 `mcp-config`, `plugin-config`, and `tool-config` currently require
 `schemaVersion: 1`. Agent turns and structured DSH output independently use
 protocol version 1. Unknown fields and unsupported schema versions fail closed.
+`task-output-schema` is not another protocol or authorization envelope: it is a
+bounded trusted schema used to validate one optional `taskOutput` field inside
+the existing Controller result.
 
 The Controller accepts only `@deepseek-ai/dsh@0.1.1-rc.2` and the matching
 official package family. Every directly used DSH package is an exact top-level
@@ -89,9 +92,11 @@ package before starting DSH.
 
 The tool catalog has two deliberately separate execution planes:
 
-1. The Controller `ToolRouter` invokes maintainer-defined `command.*` tools.
-   These accept no model arguments and execute fixed complete argv in separate
-   credential-free containers.
+1. The Controller `ToolRouter` invokes maintainer-defined `command.*` tools and
+   the closed `github.*` catalog. Commands accept no model arguments and run
+   fixed argv in credential-free containers. GitHub tools accept only typed,
+   bounded data while repository/entity/head identity comes from Controller
+   context; mutations are queued until validated finalization.
 2. DSH `ToolRuntime` invokes model-routed native workspace, official MCP, and
    Cordis plugin tools inside the DSH worker. An Action-owned Cordis policy
    adapter applies the Controller-generated positive runtime allowlist and
@@ -110,6 +115,9 @@ Canonical Action IDs are:
 - `workspace.read`, `workspace.search`, and `workspace.edit` for audited DSH
   native tools;
 - `command.<name>` for fixed-argv Controller tools;
+- the six exact `github.issue.*`, `github.comment.create`,
+  `github.pull.metadata.update`, and `github.checks.read` IDs documented in
+  [Configuration](configuration.md#controller-owned-github-tools);
 - `mcp.<server-id>.<tool-id>` for MCP tools; and
 - `plugin.<extension-id>.<tool-id>` for Bundle or direct plugin tools.
 
@@ -278,6 +286,13 @@ Receipts and extension audit data are observability only and never authorization
 input or independent proof. Approved trusted extension code can influence
 worker-side state and receipts.
 
+Controller GitHub receipts never contain credentials, raw request bodies, or
+arbitrary URLs. Mutation receipts begin as scheduled telemetry, then finalization
+reconciles them with bounded API attempts and postconditions. A malformed final
+result, validation failure, or cancellation before flush drops the pending
+queue. The bound repository and entity are revalidated immediately before each
+externally visible mutation.
+
 ## Repository-mutation validation
 
 Every code, Git ref and pull-request mutation requires `run-tests=true`, at
@@ -302,6 +317,20 @@ succeeds. A failed gate therefore produces no GitHub comment, commit, ref update
 or pull request; its bounded failure remains in Action outputs and the step
 summary.
 
+The optional task-result schema is a finite root-object subset with byte,
+depth, node, property, array, and string limits. `$ref`, combinators,
+conditionals, regex patterns, unknown keywords, and prototype-sensitive keys
+are rejected. DSH output is validated at the process boundary and again by the
+outer Agent loop. The fixed `result-json` schema-v1 audit envelope remains the
+Controller record; `taskOutput` is data only.
+
+GitHub attachment images remain deferred. The exact audited
+`@deepseek-ai/dsh-headless@0.1.1-rc.2` configuration accepts one `task` string
+and constructs one text block, with no supported multimodal input contract.
+The Action therefore removes Markdown image references from untrusted text and
+does not download, mount, or forward attachment bytes through an unofficial
+runtime path.
+
 ## `AgentEngine` and deferred sessions
 
 `AgentEngine<TOutput, TMetadata>` remains the provider-neutral outer-turn
@@ -312,7 +341,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.5.3 does not instantiate a store or expose a resume token.
+interfaces only. v0.6.0 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

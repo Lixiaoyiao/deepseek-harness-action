@@ -67,7 +67,7 @@ The default `github-token` is `${{ github.token }}` and is also Controller-only.
 The examples use the current release tag for readability:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
 ```
 
 For production, replace the tag with the full immutable commit SHA published for that release. Do not use `main`, `latest`, a version range, or another floating ref. Keep `dsh-version` at the Action's audited exact value:
@@ -110,7 +110,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -133,6 +133,7 @@ Agent permission profiles do not grant GitHub permissions. The workflow token sc
 | Commands with fix or implement enabled        | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write` |
 | CI auto-fix                                   | The same permissions as the preceding row                                                   |
 | Automation that creates a branch and PR       | `contents: write`, `pull-requests: write`                                                   |
+| Selected typed GitHub tools                   | Add only their matching `issues`, `pull-requests`, `checks`, or `statuses` read/write scope |
 
 A broad workflow token cannot bypass actor, event, origin, SHA, protected-path, validation, or Controller policy checks. Conversely, missing token scopes can stop an otherwise authorized result from being published.
 
@@ -144,11 +145,12 @@ Copy the template that matches the desired entry point:
 - [`examples/ci-diagnose.yml`](../examples/ci-diagnose.yml): diagnose a failed CI run without changing code.
 - [`examples/ci-auto-fix.yml`](../examples/ci-auto-fix.yml): trusted CI repair with mandatory validation.
 - [`examples/task-automation.yml`](../examples/task-automation.yml): a maintainer-authored dispatch task with read or write access.
+- [`examples/github-integration.yml`](../examples/github-integration.yml): custom routes, safe branch naming, typed GitHub tools, and structured task output.
 - [`examples/controlled-extensions.yml`](../examples/controlled-extensions.yml): advanced custom Profile, MCP, and Bundle configuration.
 
 For `issue_comment`, `workflow_run`, dispatch, and schedule workflows, run the workflow definition from the trusted default branch. Check out the bound trusted branch or SHA, always set `persist-credentials: false`, and keep capability-bearing inputs literal or derived only from trusted workflow configuration.
 
-The `prompt` input is trusted instruction. Do not interpolate Issue bodies, PR text, comments, logs, repository files, or model output into it. GitHub resolves expressions before the Action starts, so the Action cannot recover the original provenance.
+The `prompt`, trigger/filter, branch, schema, and tool inputs are trusted maintainer configuration. Do not interpolate Issue bodies, PR text, comments, logs, repository files, or model output into them. GitHub resolves expressions before the Action starts, so the Action cannot recover the original provenance.
 
 ### 6. Enable write mode deliberately
 

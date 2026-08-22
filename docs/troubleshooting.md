@@ -10,7 +10,7 @@ Give the Action step an `id`, then inspect `result-json` even when the step
 fails:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+- uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -74,6 +74,20 @@ If the failure is `ACTION_CONFIGURATION`, fix malformed or contradictory inputs
 before retrying. If it is `EVENT_ROUTING_FAILED`, fix the event/command pairing
 rather than broadening permissions.
 
+### A custom trigger does not route
+
+- Keep the job-level event types and `if` expression aligned with
+  `trigger-phrase`, `label-trigger`, or `assignee-trigger`. The Action cannot run
+  when the workflow filters the event out first.
+- The literal command phrase and operation must be on the first line. A phrase
+  found only in quoted or later text is intentionally ignored.
+- Check `allowed-actors`; this is a routing filter, not a replacement for the
+  repository permission and bot gates.
+- Comment include/exclude settings affect historical prompt context only. They
+  never remove the audited triggering comment or authorize its actor.
+- A custom `base-branch` must exist. Templates must contain `{{prefix}}` and
+  `{{key}}`; unknown variables and rendered invalid/oversized refs fail closed.
+
 ## A tool is missing or denied
 
 Inspect `trust`, `permission-profile`, `effective-tools`, `workspace-write`,
@@ -103,6 +117,8 @@ Use canonical IDs exactly:
 - `workspace.read`, `workspace.search`, `workspace.edit`;
 - `native.bash`, `native.web-search`, `native.subagent`;
 - `command.<name>`;
+- the exact `github.issue.*`, `github.comment.create`,
+  `github.pull.metadata.update`, or `github.checks.read` ID;
 - `mcp.<server>.<tool>`; and
 - `plugin.<extension>.<tool>`.
 
@@ -110,6 +126,14 @@ Unknown IDs, undefined command tools, references to undeclared extension tools,
 missing runtime registrations, and tools that remain visible outside the
 effective allowlist all fail closed. The model cannot approve a tool, edit its
 profile, or expand its own permissions.
+
+For a typed GitHub tool, also confirm the entity matches the operation and the
+workflow token has only the required GitHub scope. Mutation tools require
+`trusted-write`, `allow-write`, Docker, and configured validation. They are
+deferred until finalization; a malformed final result or failed validation
+correctly leaves no mutation. `github.checks.read` requires a bound PR or
+workflow head and the Controller `readCi` capability. No raw REST or GraphQL
+fallback exists.
 
 ## Docker or isolation fails
 
@@ -283,12 +307,18 @@ Typical codes:
 For malformed output, retry once. If it persists:
 
 1. Confirm `dsh-version` is exactly `0.1.1-rc.2` and the Action version is
-   v0.5.3.
+   v0.6.0.
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
 3. Check that trusted prompts do not ask for fences, prefaces, suffixes, a
    separate citation list, or a different operation. Web Search Markdown
    citations may appear only inside JSON string fields.
 4. Reduce conflicting output-format instructions in the task.
+
+When `task-output-schema` is set, a final task must include `taskOutput` and it
+must satisfy the bounded trusted schema. References, combinators, regex
+patterns, unknown keywords, dangerous keys, and excessive complexity are
+configuration errors; a model value that violates an accepted schema is
+`DSH_MALFORMED_OUTPUT`. The schema does not replace `result-json`.
 
 For output-limit failures, reduce the task, repository context, number of
 findings, tool output limits, or extension response size. Do not parse a partial
@@ -303,7 +333,7 @@ bounded log message.
 
 ### DSH runtime
 
-- v0.5.3 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
+- v0.6.0 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
   range, a floating Git ref, or mixed DSH package versions.
 - The runtime installs from the committed lockfile in an ephemeral,
   credential-free container and audits the installed DSH inventory. Registry,
@@ -386,6 +416,8 @@ the Controller.
   and successful no-change writes commonly leave some or all of them empty.
 - `review-summary` is the backward-compatible alias; prefer `summary` for new
   workflows.
+- `task-output` is empty unless a configured task reached a valid final value;
+  when present it is JSON data and remains untrusted.
 - Parse `effective-tools`, `trusted-extensions`, `tool-receipts`, and
   `result-json` as JSON. Do not treat their encoded text as shell source.
 - Receipt arrays may be truncated to the Action output budget. Check
