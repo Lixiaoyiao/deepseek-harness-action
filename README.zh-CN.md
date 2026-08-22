@@ -25,7 +25,7 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具      | 通过 `strict`、`standard` 和精确的 `custom` 档位使用 Bash、Web Search、Subagent、固定命令、MCP、Bundle 与 Plugin |
 | 结构化结果    | 无论成功或失败，都提供稳定的标量 outputs 和 schema-v1 `result-json`                                              |
 
-v0.5.2 只增加轻量安装器与 onboarding 流程，继续使用经过审计的 DeepSeek Harness `0.1.1-rc.2` 精确版本固定，不扩张 Agent 核心功能。Action 的输入、输出、GitHub 权限和所有写入决定仍由 Controller 掌握。
+v0.5.3 是一次小型 architecture/security hardening patch：稳定错误身份，收紧 Git checkout 与 Controller materialized tree 的来源契约，并澄清验证安全边界，不增加 Agent 或产品功能。经过审计的 DeepSeek Harness 精确版本仍为 `0.1.1-rc.2`。
 
 ## 真实运行
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.5.2` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.5.3` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 
@@ -119,6 +119,8 @@ jobs:
 - 仓库内容、diff、Issue、PR、评论、日志、模型输出和工具输出始终是不可信数据。
 - fork 审查使用没有 `.git`、没有凭据的 worker；workflow 只能检出受信任的 base SHA，并设置 `persist-credentials: false`。
 - 写入需要受信任的同仓库上下文、通过授权检查的操作者、Docker、`allow-write: "true"`、非空固定验证命令，以及全部验证成功；受保护路径和 Validation Integrity 检查仍然有效。
+- Validation Integrity 针对已支持的 entrypoint、package script、test/config 变弱、lock/toolchain 控制和已知 wrapper/interpreter 提供高置信度变弱检测与 baseline replay；它不是完整的跨语言 dependency provenance 或形式化完整性证明。
+- Validation 可能使用 Docker bridge network。在 self-hosted runner 或企业网络中，仓库验证代码可能访问 runner 可达的网络服务；应使用专用 runner 以及 runner 级网络分段和出口控制。
 - 获准的 Bundle、Plugin 或 stdio MCP server 属于受信任的 worker code。ToolRuntime 只能限制模型路由的调用，不能沙箱化扩展启动、后台任务或直接进程 I/O。
 
 启用写模式、host 执行、网络访问或第三方扩展前，请完整阅读[安全策略](SECURITY.md)。

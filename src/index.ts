@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   try {
     result = await runAction({ signal: cancellation.signal });
   } catch (error: unknown) {
-    const failure = describeActionFailure(error, "configuration");
+    const failure = describeActionFailure(error, "entrypoint");
     result = {
       schemaVersion: 1,
       conclusion: "failure",

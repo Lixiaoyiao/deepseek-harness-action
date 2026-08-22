@@ -2,9 +2,9 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status in v0.5.2
+## Status in v0.5.3
 
-The extension model introduced in v0.4 remains active unchanged in v0.5.2
+The extension model introduced in v0.4 remains active unchanged in v0.5.3
 through DeepSeek Harness's official extension mechanisms. The Action does not
 define a second plugin system:
 
@@ -22,10 +22,10 @@ Session resume remains deferred. Every outer-loop iteration starts a fresh DSH
 headless process over the same run-scoped `.git`-less workspace and persistent
 invocation-count files. The Action boots its controlled Profile through the
 official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
-general-purpose CLI path. v0.5.2 adds only the standalone workflow installer;
-it adds no Session/Resume input, reusable session token, Label/Assignee trigger,
-custom trigger phrase, branch template, Agent Teams, GitHub App, or other Agent
-core expansion.
+general-purpose CLI path. The standalone workflow installer added in v0.5.2
+remains unchanged; v0.5.3 adds no Session/Resume input, reusable session token,
+Label/Assignee trigger, custom trigger phrase, branch template, Agent Teams,
+GitHub App, or other Agent core expansion.
 
 ## Versioned configuration
 
@@ -312,7 +312,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.5.2 does not instantiate a store or expose a resume token.
+interfaces only. v0.5.3 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

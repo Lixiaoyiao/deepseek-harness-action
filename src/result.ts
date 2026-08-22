@@ -6,6 +6,11 @@ import {
   type AgentToolReceipt,
 } from "./agent/loop.js";
 import { DshError } from "./dsh/errors.js";
+import {
+  isClassifiedActionError,
+  type ActionErrorCategory,
+  type ClassifiedActionError,
+} from "./errors.js";
 import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
 import type { ExtensionAudit } from "./extensions/plan.js";
 import type { PermissionAudit } from "./permissions/profile.js";
@@ -23,6 +28,7 @@ export type ActionConclusion = "success" | "neutral" | "failure";
 export type ActionStatus =
   "success" | "neutral" | "failed" | "timed_out" | "validation_failed" | "denied";
 export type ActionPhase =
+  | "entrypoint"
   | "configuration"
   | "routing"
   | "authorization"
@@ -34,6 +40,8 @@ export type ActionPhase =
 
 export interface ActionFailure {
   readonly code: string;
+  readonly category: ActionErrorCategory;
+  /** Controller lifecycle location where the stable error surfaced. */
   readonly phase: ActionPhase;
   readonly title: string;
   readonly message: string;
@@ -95,203 +103,155 @@ function safeMessage(error: unknown): string {
   return redactSecrets(message).slice(0, 4_000);
 }
 
-const dshFailureMetadata: Readonly<
-  Record<string, { title: string; guidance: string; retryable: boolean }>
-> = {
+const dshFailureMetadata: Readonly<Record<string, { title: string; guidance: string }>> = {
   DSH_ABORTED: {
     title: "DeepSeek Harness was cancelled",
     guidance: "Check whether a newer workflow run cancelled this one, then rerun if needed.",
-    retryable: true,
   },
   DSH_CONFIGURATION: {
     title: "DeepSeek Harness configuration is invalid",
     guidance: "Check the action inputs, pinned DSH version, and container image reference.",
-    retryable: false,
   },
   DSH_CREDENTIAL_LEAK: {
     title: "Credential safety check stopped the run",
     guidance: "Rotate any potentially exposed credential and inspect the linked workflow run.",
-    retryable: false,
   },
   DSH_ENVIRONMENT: {
     title: "The runner environment is not usable",
     guidance: "Check the runner prerequisites and the isolation configuration.",
-    retryable: false,
   },
   DSH_ISOLATION_UNAVAILABLE: {
     title: "Required isolation is unavailable",
     guidance: "Ensure Docker is installed and available to the runner, then rerun the job.",
-    retryable: false,
   },
   DSH_MALFORMED_OUTPUT: {
     title: "DSH output did not pass validation",
     guidance:
       "Retry once. If it persists, verify the pinned dsh-version and inspect the schema error in the workflow run.",
-    retryable: true,
   },
   DSH_OUTPUT_LIMIT: {
     title: "DSH produced too much output",
     guidance: "Reduce the task scope or repository context before rerunning.",
-    retryable: false,
   },
   DSH_PROCESS_FAILED: {
     title: "DeepSeek Harness exited unsuccessfully",
     guidance: "Inspect the workflow run for the worker error, then rerun after correcting it.",
-    retryable: true,
   },
   DSH_PROXY: {
     title: "The DeepSeek API proxy failed",
     guidance:
       "Check API availability, the base URL, and the configured credential before rerunning.",
-    retryable: true,
   },
   DSH_SPAWN: {
     title: "DeepSeek Harness could not start",
     guidance: "Check the runner runtime and configured DSH executable or container.",
-    retryable: false,
   },
   DSH_TIMEOUT: {
     title: "DeepSeek Harness timed out",
     guidance: "Increase timeout-minutes or reduce the task scope, then rerun the workflow.",
-    retryable: true,
   },
 };
 
-const phaseMetadata: Readonly<
-  Record<ActionPhase, { code: string; title: string; guidance: string; retryable: boolean }>
-> = {
-  configuration: {
-    code: "ACTION_CONFIGURATION",
-    title: "Action configuration is invalid",
-    guidance: "Check the workflow inputs and required secrets.",
-    retryable: false,
-  },
-  routing: {
-    code: "EVENT_ROUTING_FAILED",
-    title: "The GitHub event could not be routed",
-    guidance: "Check the supported event and @dsh command syntax.",
-    retryable: false,
-  },
-  authorization: {
-    code: "POLICY_DENIED",
-    title: "The requested operation was denied",
-    guidance: "Review actor permissions, fork status, event type, and the allow-write setting.",
-    retryable: false,
-  },
-  context: {
-    code: "CONTEXT_PREPARATION_FAILED",
-    title: "Repository context could not be prepared",
-    guidance:
-      "Check repository access and whether the issue or pull request changed during the run.",
-    retryable: true,
-  },
-  agent: {
-    code: "AGENT_FAILED",
-    title: "DeepSeek Harness failed",
-    guidance: "Inspect the workflow run, then retry after correcting the reported worker error.",
-    retryable: true,
-  },
-  validation: {
-    code: "VALIDATION_FAILED",
-    title: "Validation did not pass",
-    guidance:
-      "Inspect the failing command in the workflow run and fix the generated change or test setup.",
-    retryable: false,
-  },
-  publication: {
-    code: "PUBLICATION_FAILED",
-    title: "The result could not be published",
-    guidance: "Check GitHub token permissions and rerun; model work may already have completed.",
-    retryable: true,
-  },
-  write: {
-    code: "WRITE_FAILED",
-    title: "The trusted write could not be completed",
-    guidance: "Check whether the bound branch, issue, or pull request changed during the run.",
-    retryable: true,
-  },
-};
+const categoryMetadata: Readonly<Record<ActionErrorCategory, { title: string; guidance: string }>> =
+  {
+    configuration: {
+      title: "Action configuration is invalid",
+      guidance: "Check the workflow inputs and required secrets.",
+    },
+    policy: {
+      title: "The requested operation was denied",
+      guidance: "Review the effective trust policy, permissions, and requested capabilities.",
+    },
+    domain: {
+      title: "The requested operation could not be completed",
+      guidance: "Inspect the workflow run and correct the reported operation state.",
+    },
+    runtime: {
+      title: "The Action runtime failed",
+      guidance: "Inspect the workflow run, correct the reported runtime condition, and retry.",
+    },
+  };
+
+const unexpectedRuntimeMetadata = {
+  code: "ACTION_RUNTIME_FAILED",
+  category: "runtime",
+  title: "The Action runtime failed",
+  guidance: "Inspect the workflow run, correct the reported runtime condition, and retry.",
+  retryable: true,
+} as const;
+
+function classifiedFailure(
+  error: ClassifiedActionError,
+  phase: ActionPhase,
+  presentation: { readonly title: string; readonly guidance: string },
+): ActionFailure {
+  return {
+    code: error.code,
+    category: error.category,
+    phase,
+    title: presentation.title,
+    message: safeMessage(error),
+    guidance: presentation.guidance,
+    retryable: error.retryable,
+  };
+}
 
 export function describeActionFailure(error: unknown, phase: ActionPhase): ActionFailure {
   if (error instanceof AgentDeadlineError) {
-    return {
-      code: error.code,
-      phase: "agent",
+    return classifiedFailure(error, phase, {
       title: "Agent loop timed out",
-      message: safeMessage(error),
       guidance: "Increase timeout-minutes or reduce the task and validation scope.",
-      retryable: true,
-    };
+    });
   }
   if (error instanceof AgentNoProgressError && error.cause instanceof ValidationIntegrityError) {
-    return {
-      code: error.cause.integrityCode,
-      phase: "validation",
+    return classifiedFailure(error.cause, phase, {
       title: "Validation integrity policy blocked the write",
-      message: safeMessage(error.cause),
       guidance:
         "Review the validation-definition audit, restore or strengthen weakened scripts, tests, entrypoints, or configuration, and rerun. The Agent cannot lower validation-integrity; only trusted workflow configuration can change the policy.",
-      retryable: false,
-    };
+    });
   }
   if (error instanceof AgentNoProgressError || error instanceof AgentLoopLimitError) {
-    return {
-      code: error.code,
-      phase: "agent",
+    return classifiedFailure(error, phase, {
       title:
         error instanceof AgentNoProgressError
           ? "Agent repair loop made no progress"
           : "Agent turn limit reached",
-      message: safeMessage(error),
       guidance:
         error instanceof AgentNoProgressError
           ? "Inspect the repeated validation failure and adjust the task, tools, or repository setup."
           : "Increase max-turns or reduce the task scope, then rerun.",
-      retryable: false,
-    };
+    });
   }
   if (error instanceof ValidationIntegrityError) {
-    return {
-      code: error.integrityCode,
-      phase: "validation",
+    return classifiedFailure(error, phase, {
       title: "Validation integrity policy blocked the write",
-      message: safeMessage(error),
       guidance:
         "Review the validation-definition audit, restore or strengthen weakened scripts, tests, entrypoints, or configuration, and rerun. The Agent cannot lower validation-integrity; only trusted workflow configuration can change the policy.",
-      retryable: false,
-    };
+    });
   }
   if (error instanceof ValidationFailureError) {
-    return {
-      code: error.code,
-      phase: "validation",
+    return classifiedFailure(error, phase, {
       title: error.timedOut ? "Validation timed out" : "Validation did not pass",
-      message: safeMessage(error),
       guidance: error.timedOut
         ? "Reduce the validation workload or split the configured commands before rerunning."
         : "Inspect the failing command in the workflow run and correct the generated change or test setup.",
-      retryable: error.timedOut,
-    };
+    });
   }
   if (error instanceof DshError) {
-    const metadata = dshFailureMetadata[error.code] ?? phaseMetadata.agent;
-    return {
-      code: error.code,
-      phase,
-      title: metadata.title,
-      message: safeMessage(error),
-      guidance: metadata.guidance,
-      retryable: metadata.retryable,
-    };
+    const metadata = dshFailureMetadata[error.code] ?? categoryMetadata[error.category];
+    return classifiedFailure(error, phase, metadata);
   }
-  const metadata = phaseMetadata[phase];
+  if (isClassifiedActionError(error)) {
+    return classifiedFailure(error, phase, categoryMetadata[error.category]);
+  }
   return {
-    code: metadata.code,
+    code: unexpectedRuntimeMetadata.code,
+    category: unexpectedRuntimeMetadata.category,
     phase,
-    title: metadata.title,
+    title: unexpectedRuntimeMetadata.title,
     message: safeMessage(error),
-    guidance: metadata.guidance,
-    retryable: metadata.retryable,
+    guidance: unexpectedRuntimeMetadata.guidance,
+    retryable: unexpectedRuntimeMetadata.retryable,
   };
 }
 
@@ -427,17 +387,22 @@ function boundedPublicReceipts(outcome: RunOutcome): PublicReceiptPayload {
 
 export function actionStatus(outcome: RunOutcome): ActionStatus {
   if (outcome.conclusion !== "failure") return outcome.conclusion;
+  if (outcome.error?.category === "policy" || outcome.error?.code === "POLICY_DENIED") {
+    return "denied";
+  }
   if (outcome.error?.code === "DSH_TIMEOUT" || outcome.error?.code === "AGENT_TIMEOUT") {
     return "timed_out";
   }
   if (
-    outcome.error?.phase === "validation" ||
     outcome.error?.code === "DSH_MALFORMED_OUTPUT" ||
     outcome.error?.code.startsWith("VALIDATION_") === true
   ) {
     return "validation_failed";
   }
-  if (outcome.error?.code === "POLICY_DENIED") return "denied";
+  // Preserve phase-based compatibility only for otherwise-unclassified errors.
+  if (outcome.error?.category === undefined && outcome.error?.phase === "validation") {
+    return "validation_failed";
+  }
   return "failed";
 }
 
@@ -573,7 +538,7 @@ export function formatStepSummary(outcome: RunOutcome): string {
       "",
       `### ${safeMarkdown(outcome.error.title)}`,
       "",
-      `**Code:** \`${outcome.error.code}\` · **Phase:** \`${outcome.error.phase}\``,
+      `**Code:** \`${outcome.error.code}\` · **Category:** \`${outcome.error.category}\` · **Phase:** \`${outcome.error.phase}\``,
       "",
       safeMarkdown(outcome.error.message),
       "",

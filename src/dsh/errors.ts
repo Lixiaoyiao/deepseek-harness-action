@@ -1,3 +1,5 @@
+import { ClassifiedActionError, type ActionErrorIdentity } from "../errors.js";
+
 export type DshErrorCode =
   | "DSH_ABORTED"
   | "DSH_CONFIGURATION"
@@ -18,14 +20,45 @@ export interface DshFailureTelemetry {
   readonly toolReceipts?: readonly DshToolReceipt[];
 }
 
-export class DshError extends Error {
-  public readonly code: DshErrorCode;
+const dshErrorIdentities: Readonly<Record<DshErrorCode, ActionErrorIdentity<DshErrorCode>>> = {
+  DSH_ABORTED: { code: "DSH_ABORTED", category: "runtime", retryable: true },
+  DSH_CONFIGURATION: {
+    code: "DSH_CONFIGURATION",
+    category: "configuration",
+    retryable: false,
+  },
+  DSH_CREDENTIAL_LEAK: {
+    code: "DSH_CREDENTIAL_LEAK",
+    category: "runtime",
+    retryable: false,
+  },
+  DSH_ENVIRONMENT: { code: "DSH_ENVIRONMENT", category: "runtime", retryable: false },
+  DSH_ISOLATION_UNAVAILABLE: {
+    code: "DSH_ISOLATION_UNAVAILABLE",
+    category: "runtime",
+    retryable: false,
+  },
+  DSH_MALFORMED_OUTPUT: {
+    code: "DSH_MALFORMED_OUTPUT",
+    category: "domain",
+    retryable: true,
+  },
+  DSH_OUTPUT_LIMIT: { code: "DSH_OUTPUT_LIMIT", category: "runtime", retryable: false },
+  DSH_PROCESS_FAILED: {
+    code: "DSH_PROCESS_FAILED",
+    category: "runtime",
+    retryable: true,
+  },
+  DSH_PROXY: { code: "DSH_PROXY", category: "runtime", retryable: true },
+  DSH_SPAWN: { code: "DSH_SPAWN", category: "runtime", retryable: false },
+  DSH_TIMEOUT: { code: "DSH_TIMEOUT", category: "runtime", retryable: true },
+};
+
+export class DshError extends ClassifiedActionError<DshErrorCode> {
   public telemetry: DshFailureTelemetry | undefined;
 
   public constructor(code: DshErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = new.target.name;
-    this.code = code;
+    super(message, dshErrorIdentities[code], options);
   }
 
   public attachTelemetry(telemetry: DshFailureTelemetry): this {

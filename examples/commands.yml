@@ -1,4 +1,4 @@
-# Copy this file to .github/workflows/dsh-commands.yml. Replace the v0.5.2 tag
+# Copy this file to .github/workflows/dsh-commands.yml. Replace the v0.5.3 tag
 # below with its full release commit SHA before production use.
 name: DSH commands
 
@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2

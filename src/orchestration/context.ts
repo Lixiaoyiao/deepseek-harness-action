@@ -12,6 +12,7 @@ import {
   type PullRequestSnapshot,
 } from "../github/fetch.js";
 import type { ActionInputs } from "../inputs.js";
+import { ActionConfigurationError, OperationContextError, PolicyDeniedError } from "../errors.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
 
 export function runUrl(context: GitHubContext): string {
@@ -83,10 +84,14 @@ export function assertOperationContext(
   const assertTrustedWriteTarget = (): void => {
     const defaultBranch = context.repository.defaultBranch;
     if (defaultBranch === undefined) {
-      throw new Error("Cannot authorize a trusted write without the default branch identity");
+      throw new PolicyDeniedError(
+        "Cannot authorize a trusted write without the default branch identity",
+      );
     }
     if (snapshot?.kind === "pull_request" && snapshot.headRef === defaultBranch) {
-      throw new Error("Refusing to update the repository default branch from a pull-request write");
+      throw new PolicyDeniedError(
+        "Refusing to update the repository default branch from a pull-request write",
+      );
     }
   };
   if (command.operation === "task") {
@@ -95,14 +100,16 @@ export function assertOperationContext(
   }
   if (command.operation === "implement") {
     if (snapshot?.kind !== "issue") {
-      throw new Error("@dsh implement is supported only on issues");
+      throw new OperationContextError("@dsh implement is supported only on issues");
     }
     if (command.requestedAccess === "write") assertTrustedWriteTarget();
     return;
   }
   if (command.operation === "review" || command.operation === "fix") {
     if (snapshot?.kind !== "pull_request") {
-      throw new Error(`@dsh ${command.operation} is supported only on pull requests`);
+      throw new OperationContextError(
+        `@dsh ${command.operation} is supported only on pull requests`,
+      );
     }
     if (command.operation === "fix" && command.requestedAccess === "write") {
       assertTrustedWriteTarget();
@@ -110,7 +117,9 @@ export function assertOperationContext(
     return;
   }
   if (snapshot?.kind !== "pull_request" && !isWorkflowRunContext(context)) {
-    throw new Error("@dsh diagnose requires a pull request or workflow_run context");
+    throw new OperationContextError(
+      "@dsh diagnose requires a pull request or workflow_run context",
+    );
   }
 }
 
@@ -192,7 +201,9 @@ export async function resolvePullRequest(
 
 export function requireWorkspace(): string {
   const workspace = process.env.GITHUB_WORKSPACE;
-  if (workspace === undefined || workspace === "") throw new Error("GITHUB_WORKSPACE is missing");
+  if (workspace === undefined || workspace === "") {
+    throw new ActionConfigurationError("GITHUB_WORKSPACE is missing");
+  }
   return resolve(workspace);
 }
 

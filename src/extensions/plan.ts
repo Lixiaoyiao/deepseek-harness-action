@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { AgentToolManifest } from "../agent/contracts.js";
+import { PolicyDeniedError } from "../errors.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import {
   mcpToolId,
@@ -107,10 +108,9 @@ export interface EffectiveExtensionPlan {
   readonly audit: ExtensionAudit;
 }
 
-export class ExtensionPolicyError extends Error {
+export class ExtensionPolicyError extends PolicyDeniedError {
   public constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = "ExtensionPolicyError";
   }
 }
 

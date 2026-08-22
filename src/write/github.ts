@@ -2,6 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { GitHubClient } from "../github/client.js";
+import { PolicyDeniedError } from "../errors.js";
 import { assertPathWithin } from "../security/paths.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
 import { inspectWorkspaceChanges, type WorkspaceSnapshot } from "./workspace.js";
@@ -47,7 +48,7 @@ export function assertWritablePath(path: string): void {
         normalized === protectedPath.replace(/\/$/u, "") || normalized.startsWith(protectedPath),
     )
   ) {
-    throw new Error(`Protected path cannot be changed by DSH: ${path}`);
+    throw new PolicyDeniedError(`Protected path cannot be changed by DSH: ${path}`);
   }
 }
 

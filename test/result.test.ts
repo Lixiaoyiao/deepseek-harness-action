@@ -6,11 +6,14 @@ import {
   DshMalformedOutputError,
   DshTimeoutError,
 } from "../src/dsh/errors.js";
+import { ActionConfigurationError, PolicyDeniedError } from "../src/errors.js";
+import { ExtensionPolicyError } from "../src/extensions/plan.js";
 import {
   actionStatus,
   buildActionOutputs,
   describeActionFailure,
   formatStepSummary,
+  type ActionPhase,
   type RunOutcome,
 } from "../src/result.js";
 import type { PermissionAudit } from "../src/permissions/profile.js";
@@ -257,7 +260,7 @@ describe("versioned action results", () => {
       ),
     );
     const denied = failureOutcome(
-      describeActionFailure(new Error("allow-write is false"), "authorization"),
+      describeActionFailure(new PolicyDeniedError("allow-write is false"), "context"),
     );
     const validationTimeout = failureOutcome(
       describeActionFailure(
@@ -288,28 +291,138 @@ describe("versioned action results", () => {
     expect(actionStatus(validation)).toBe("validation_failed");
     expect(validation.error).toMatchObject({
       code: "VALIDATION_FAILED",
-      phase: "validation",
+      category: "domain",
+      phase: "write",
       retryable: false,
     });
     expect(actionStatus(validationTimeout)).toBe("validation_failed");
     expect(validationTimeout.error).toMatchObject({
       code: "VALIDATION_TIMEOUT",
-      phase: "validation",
+      category: "domain",
+      phase: "write",
       retryable: true,
     });
     expect(actionStatus(denied)).toBe("denied");
+    expect(denied.error).toMatchObject({
+      code: "POLICY_DENIED",
+      category: "policy",
+      phase: "context",
+      retryable: false,
+    });
     expect(actionStatus(malformed)).toBe("validation_failed");
     expect(validationInfrastructure.error).toMatchObject({
-      code: "VALIDATION_FAILED",
+      code: "ACTION_RUNTIME_FAILED",
+      category: "runtime",
+      phase: "validation",
+      retryable: true,
+    });
+    expect(actionStatus(validationInfrastructure)).toBe("failed");
+    expect(validationConfiguration.error).toMatchObject({
+      code: "DSH_CONFIGURATION",
+      category: "configuration",
       phase: "validation",
       retryable: false,
     });
-    expect(actionStatus(validationInfrastructure)).toBe("validation_failed");
-    expect(validationConfiguration.error).toMatchObject({
-      code: "DSH_CONFIGURATION",
-      phase: "validation",
+    expect(actionStatus(validationConfiguration)).toBe("failed");
+  });
+
+  it("keeps classified error identity stable while phase records only where it surfaced", () => {
+    const phases: readonly ActionPhase[] = [
+      "entrypoint",
+      "configuration",
+      "routing",
+      "authorization",
+      "context",
+      "agent",
+      "validation",
+      "publication",
+      "write",
+    ];
+    const classified = [
+      {
+        error: new ActionConfigurationError("invalid input"),
+        identity: { code: "ACTION_CONFIGURATION", category: "configuration", retryable: false },
+        status: "failed",
+      },
+      {
+        error: new ExtensionPolicyError("extension denied"),
+        identity: { code: "POLICY_DENIED", category: "policy", retryable: false },
+        status: "denied",
+      },
+      {
+        error: new DshTimeoutError(1_000),
+        identity: { code: "DSH_TIMEOUT", category: "runtime", retryable: true },
+        status: "timed_out",
+      },
+      {
+        error: new ValidationFailureError({
+          argv: ["npm", "test"],
+          result: {
+            exitCode: 1,
+            stdout: "",
+            stderr: "failed",
+            timedOut: false,
+            outputTruncated: false,
+          },
+        }),
+        identity: { code: "VALIDATION_FAILED", category: "domain", retryable: false },
+        status: "validation_failed",
+      },
+    ] as const;
+
+    for (const { error, identity, status } of classified) {
+      for (const phase of phases) {
+        const failure = describeActionFailure(error, phase);
+        expect(failure).toMatchObject({ ...identity, phase });
+        expect(actionStatus(failureOutcome(failure))).toBe(status);
+      }
+    }
+  });
+
+  it("reports extension policy denial from context without phase-based reclassification", () => {
+    const failure = describeActionFailure(
+      new ExtensionPolicyError("Bridge-networked extensions are denied"),
+      "context",
+    );
+    const outputs = buildActionOutputs(failureOutcome(failure));
+    const structured = JSON.parse(String(outputs["result-json"])) as {
+      readonly error: unknown;
+    };
+
+    expect(failure).toMatchObject({
+      code: "POLICY_DENIED",
+      category: "policy",
+      phase: "context",
+      retryable: false,
     });
-    expect(actionStatus(validationConfiguration)).toBe("validation_failed");
+    expect(failure.code).not.toBe("CONTEXT_PREPARATION_FAILED");
+    expect(outputs["error-code"]).toBe("POLICY_DENIED");
+    expect(structured.error).toEqual(failure);
+  });
+
+  it("keeps the generic runtime identity stable for unclassified errors across phases", () => {
+    const phases: readonly ActionPhase[] = [
+      "entrypoint",
+      "configuration",
+      "routing",
+      "authorization",
+      "context",
+      "agent",
+      "validation",
+      "publication",
+      "write",
+    ];
+
+    for (const phase of phases) {
+      const failure = describeActionFailure(new Error("unknown"), phase);
+      expect(failure).toMatchObject({
+        code: "ACTION_RUNTIME_FAILED",
+        category: "runtime",
+        phase,
+        retryable: true,
+      });
+      expect(actionStatus(failureOutcome(failure))).toBe("failed");
+    }
   });
 
   it("classifies validation-integrity failures before generic validation failures", () => {
@@ -337,7 +450,8 @@ describe("versioned action results", () => {
 
     expect(failure).toMatchObject({
       code: "VALIDATION_INTEGRITY",
-      phase: "validation",
+      category: "domain",
+      phase: "write",
       title: "Validation integrity policy blocked the write",
       retryable: false,
     });
@@ -350,7 +464,8 @@ describe("versioned action results", () => {
     );
     expect(noProgress).toMatchObject({
       code: "VALIDATION_INTEGRITY",
-      phase: "validation",
+      category: "domain",
+      phase: "agent",
     });
   });
 

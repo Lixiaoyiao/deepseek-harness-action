@@ -265,6 +265,20 @@ afterEach(() => {
 });
 
 describe("orchestrator task no-change publication", () => {
+  it("copies the immutable GitHub tree through the explicit materialized-tree source contract", async () => {
+    await runAction();
+
+    expect(mocks.materializeRepositoryAtSha).toHaveBeenCalledOnce();
+    const materializationCalls = mocks.materializeRepositoryAtSha.mock
+      .calls as unknown as readonly (readonly unknown[])[];
+    const immutableSource = materializationCalls[0]?.[4];
+    expect(immutableSource).toEqual(expect.any(String));
+    expect(mocks.createWorkspaceSnapshot).toHaveBeenCalledWith(
+      { kind: "materialized-tree", root: immutableSource },
+      expect.any(String),
+    );
+  });
+
   it("publishes the final answer for a deferred task --write without mutating the repository", async () => {
     expect(deferProgressUntilWriteValidation({ requestedAccess: "write" })).toBe(true);
 
@@ -322,7 +336,7 @@ describe("orchestrator task no-change publication", () => {
 
     expect(outcome).toMatchObject({
       conclusion: "failure",
-      error: { code: "AGENT_TIMEOUT", phase: "agent" },
+      error: { code: "AGENT_TIMEOUT", category: "runtime", phase: "validation" },
     });
     expect(mocks.publishTaskAnswer).not.toHaveBeenCalled();
   });

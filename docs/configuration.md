@@ -51,7 +51,7 @@ confirmed no-change task can publish only its answer and performs no mutation.
 
 | Input             | Default                                       | Purpose and constraints                                                                                                                                                  |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.5.2 rejects another version, ranges, and `latest`.                                                                                         |
+| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.5.3 rejects another version, ranges, and `latest`.                                                                                         |
 | `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable. This trusted host-compatibility path has no container boundary and cannot load extensions.                      |
 | `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective extensions require Docker. `none` is only for eligible trusted-read work on a dedicated trusted runner. |
 | `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective extensions require a full `name@sha256:<64 lowercase hex>` digest.                 |
@@ -325,9 +325,12 @@ configuration says `network: false`.
   egress. It is not a destination allowlist.
 - Network namespaces and mounts apply to the complete DSH process, not one tool.
   All co-hosted extension owners must agree on network and workspace-write mode.
-- The validation container uses bridge networking for dependency installation.
-  Apply runner egress controls when source confidentiality or reproducibility
-  requires them.
+- The validation container currently uses bridge networking for validation
+  commands, including dependency installation. On a self-hosted or
+  corporate-network runner, repository validation code may reach services
+  available through that Docker bridge path. Apply dedicated runner
+  segmentation and egress controls when source confidentiality, reproducibility,
+  or internal-network isolation requires them.
 
 The selected `container-image` itself is trusted worker code. An immutable digest
 proves identity, not safety; review and maintain the image separately.
@@ -339,8 +342,11 @@ order. Commands are argv arrays, not shell strings, and execute without the
 GitHub token or DeepSeek key. Model-reported verification and ToolRuntime
 receipts never replace Controller validation.
 
-`validation-integrity` separately checks whether the proposed change redefines
-what “validation passed” means:
+`validation-integrity` provides high-confidence validation weakening detection
+plus baseline replay. It analyzes supported validation entrypoints, package
+scripts, test/config weakening, lock/toolchain controls, and known
+wrappers/interpreters to determine whether the proposed change redefines what
+“validation passed” means:
 
 - `off` records classified validation-definition changes without blocking;
 - `warn` records changed categories and suspicious weakening signals; and
@@ -352,6 +358,11 @@ Changing tests with an implementation is allowed. The Agent cannot lower this
 mode, approve an integrity finding, or replace the audit with its own claim.
 Validation and integrity must both pass before the Controller performs any
 GitHub mutation.
+
+This mechanism is not complete cross-language dependency provenance and is not
+a formal integrity proof. Repository-specific controls remain necessary for
+unsupported ecosystems, custom dependency resolution, generated inputs, and
+unknown wrappers.
 
 ## Progress comments
 
@@ -417,14 +428,16 @@ operation, summary, policy and permission audit, effective extension audit,
 bounded receipts, loop timing/counts, actual isolation report, publication,
 Controller validation, validation integrity, write result, comment ID, and
 error. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
-`validation_failed`, or `denied`. Inspect `error.code` and `error.phase` for the
-specific cause.
+`validation_failed`, or `denied`. Known errors expose stable `error.code`,
+`error.category`, and `error.retryable` identity. `error.phase` separately
+records the Controller lifecycle location where the error surfaced; it does not
+reclassify a known error.
 
 Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.5.2
+- uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

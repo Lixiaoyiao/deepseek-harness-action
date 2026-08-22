@@ -5,6 +5,7 @@ import {
   assertControllerCredentialsAbsentFromExtensions,
   validateExtensionToolReferences,
 } from "./extensions/plan.js";
+import { ActionConfigurationError } from "./errors.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "./extensions/schema.js";
 import {
   assertPermissionProfileConfiguration,
@@ -177,7 +178,7 @@ function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): vo
       argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
     )
   ) {
-    throw new Error(
+    throw new ActionConfigurationError(
       "Invalid action inputs: controller credentials must not appear in the task prompt, test-commands, or tool-config argv",
     );
   }
@@ -220,7 +221,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   });
 
   if (!parsed.success) {
-    throw new Error(`Invalid action inputs: ${z.prettifyError(parsed.error)}`);
+    throw new ActionConfigurationError(`Invalid action inputs: ${z.prettifyError(parsed.error)}`);
   }
   try {
     assertPermissionProfileConfiguration(parsed.data.permissionProfile, parsed.data.allowedTools);
@@ -247,14 +248,16 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       [parsed.data.deepseekApiKey, parsed.data.githubToken],
     );
   } catch (error: unknown) {
-    throw new Error(
+    throw new ActionConfigurationError(
       `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
   }
   assertControllerSecretsAbsentFromWorkerInputs(parsed.data);
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
-    throw new Error("Invalid action inputs: prompt is required when command is task");
+    throw new ActionConfigurationError(
+      "Invalid action inputs: prompt is required when command is task",
+    );
   }
   if (
     parsed.data.permissionProfile === "standard" &&
@@ -262,7 +265,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       parsed.data.pluginConfig.bundles.length > 0 ||
       parsed.data.pluginConfig.plugins.length > 0)
   ) {
-    throw new Error(
+    throw new ActionConfigurationError(
       "Invalid action inputs: MCP, Bundle, and Plugin configuration requires permission-profile custom (strict remains accepted for v0.4 compatibility)",
     );
   }

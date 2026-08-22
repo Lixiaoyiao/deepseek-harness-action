@@ -232,7 +232,7 @@ describe("orchestrator cancellation finalization", () => {
 
     expect(outcome).toMatchObject({
       conclusion: "failure",
-      error: { code: "VALIDATION_INTEGRITY", phase: "validation" },
+      error: { code: "VALIDATION_INTEGRITY", category: "domain", phase: "agent" },
       validation: {
         status: "failed",
         integrity: { mode: "strict", status: "blocked", dangerousChangeCount: 1 },
@@ -240,7 +240,11 @@ describe("orchestrator cancellation finalization", () => {
     });
     expect(mocks.progressFail).toHaveBeenCalledTimes(2);
     expect(mocks.progressFail).toHaveBeenLastCalledWith(
-      expect.objectContaining({ code: "VALIDATION_INTEGRITY", phase: "validation" }),
+      expect.objectContaining({
+        code: "VALIDATION_INTEGRITY",
+        category: "domain",
+        phase: "agent",
+      }),
     );
   });
 

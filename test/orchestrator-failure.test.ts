@@ -8,6 +8,7 @@ import type * as GitHubClientModule from "../src/github/client.js";
 import type * as GitHubPayloadModule from "../src/github/payload.js";
 import type * as GitHubPermissionsModule from "../src/github/permissions.js";
 import type * as InputsModule from "../src/inputs.js";
+import { parseMcpConfiguration } from "../src/extensions/schema.js";
 import { runAction } from "../src/orchestrator.js";
 import { buildActionOutputs } from "../src/result.js";
 import { inputs } from "./helpers.js";
@@ -133,6 +134,65 @@ afterEach(() => {
 });
 
 describe("orchestrator DSH failure reporting", () => {
+  it("preserves an extension policy denial that surfaces during context preparation", async () => {
+    mocks.loadInputs.mockReturnValue(
+      inputs({
+        command: "task",
+        prompt: "Inspect the repository",
+        taskAccess: "read",
+        isolation: "none",
+        progressComment: false,
+        permissionProfile: "custom",
+        allowedTools: ["mcp.filesystem.write"],
+        mcpConfig: parseMcpConfiguration(
+          JSON.stringify({
+            schemaVersion: 1,
+            servers: [
+              {
+                id: "filesystem",
+                transport: "stdio",
+                command: "filesystem-mcp",
+                tools: [
+                  {
+                    id: "write",
+                    name: "write_file",
+                    description: "Write a file",
+                    permissions: ["read", "workspace-write"],
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+      }),
+    );
+
+    const outcome = await runAction();
+    const outputs = buildActionOutputs(outcome);
+
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      operation: "task",
+      error: {
+        code: "POLICY_DENIED",
+        category: "policy",
+        phase: "context",
+        retryable: false,
+      },
+    });
+    expect(outcome.error?.code).not.toBe("CONTEXT_PREPARATION_FAILED");
+    expect(JSON.parse(String(outputs["result-json"]))).toMatchObject({
+      status: "denied",
+      error: {
+        code: "POLICY_DENIED",
+        category: "policy",
+        phase: "context",
+        retryable: false,
+      },
+    });
+    expect(mocks.runAgentLoop).not.toHaveBeenCalled();
+  });
+
   it("preserves extension audit and failure receipts in public outputs", async () => {
     const telemetry: DshFailureTelemetry = {
       durationMs: 25,
@@ -178,6 +238,22 @@ describe("orchestrator DSH failure reporting", () => {
       extensions: extensionAudit,
       loop: { dshToolReceipts: [failureReceipt] },
       error: { code: "DSH_PROCESS_FAILED", phase: "agent" },
+    });
+  });
+
+  it("records pre-turn runtime initialization failures in the agent phase", async () => {
+    mocks.runAgentLoop.mockRejectedValue(new DshProcessError(9, null, "startup failed"));
+
+    const outcome = await runAction();
+
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      error: {
+        code: "DSH_PROCESS_FAILED",
+        category: "runtime",
+        phase: "agent",
+        retryable: true,
+      },
     });
   });
 });

@@ -90,6 +90,38 @@ describe("immutable repository materialization", () => {
     ).rejects.toThrow("parent file");
   });
 
+  it("rejects materialization file and byte limits before fetching any blob", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dsh-materialize-limits-"));
+    roots.push(root);
+    const tooManyFiles = api(
+      Array.from({ length: 50_001 }, (_, index) => ({
+        path: `file-${String(index)}`,
+        type: "blob",
+        mode: "100644",
+        sha: blobSha,
+        size: 0,
+      })),
+    );
+    await expect(
+      materializeRepositoryAtSha(tooManyFiles, "o", "r", commitSha, join(root, "too-many-files")),
+    ).rejects.toThrow("materialization file limit");
+    expect(tooManyFiles.rest.git.getBlob).not.toHaveBeenCalled();
+
+    const tooManyBytes = api([
+      {
+        path: "huge",
+        type: "blob",
+        mode: "100644",
+        sha: blobSha,
+        size: 1024 * 1024 * 1024 + 1,
+      },
+    ]);
+    await expect(
+      materializeRepositoryAtSha(tooManyBytes, "o", "r", commitSha, join(root, "too-many-bytes")),
+    ).rejects.toThrow("materialization byte limit");
+    expect(tooManyBytes.rest.git.getBlob).not.toHaveBeenCalled();
+  });
+
   it("rejects API identity drift, truncation, and malformed blob data", async () => {
     const root = await mkdtemp(join(tmpdir(), "dsh-materialize-identity-"));
     roots.push(root);
