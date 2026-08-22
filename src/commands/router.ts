@@ -2,6 +2,7 @@ import type { ActionInputs } from "../inputs.js";
 import { areContextActorsAllowed, normalizeActor } from "../github/actors.js";
 import type { GitHubContext } from "../github/context.js";
 import { isAutomaticReviewAction } from "../github/events.js";
+import { removeMarkdownImages } from "../security/redaction.js";
 import { parseCommand, type Operation, type RequestedAccess } from "./parse.js";
 
 export interface CommandSource {
@@ -126,7 +127,13 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
   const body = mentionBody(context);
   if (body !== undefined) {
     const parsed = parseCommand(body, inputs.triggerPhrase);
-    if (parsed !== null) return { ...parsed, source: "mention" };
+    if (parsed !== null) {
+      return {
+        ...parsed,
+        instructions: removeMarkdownImages(parsed.instructions),
+        source: "mention",
+      };
+    }
   }
 
   const entityTrigger = configuredEntityTrigger(context, inputs);

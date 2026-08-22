@@ -88,6 +88,23 @@ describe("routeCommand", () => {
     expect(routeCommand(context, inputs())).toBeNull();
   });
 
+  it("keeps GitHub image sources out of trusted mention instructions", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: {
+        comment: {
+          body: "@dsh task --read inspect this\n![upload](https://github.com/user-attachments/assets/secret)",
+        },
+      },
+    });
+    expect(routeCommand(context, inputs())).toMatchObject({
+      operation: "task",
+      instructions: "inspect this\n[image removed]",
+      source: "mention",
+    });
+  });
+
   it("routes maintainer-configured label and assignee events by entity kind", () => {
     const issue = pullRequestContext({
       rawEventName: "issues",

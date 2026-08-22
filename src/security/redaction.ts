@@ -27,12 +27,16 @@ export function redactSecrets(content: string): string {
     );
 }
 
+/** Keep Markdown image sources out of every model text channel until multimodal input is audited. */
+export function removeMarkdownImages(content: string): string {
+  return content
+    .replace(/!\[[^\]]*\]\([^\n)]*\)/gu, "[image removed]")
+    .replace(/!\[[^\]]*\]\[[^\]]*\]/gu, "[image removed]");
+}
+
 export function sanitizeUntrustedText(content: string): string {
   return redactSecrets(
-    stripInvisibleCharacters(content)
-      .replace(/<!--[\s\S]*?-->/gu, "")
-      .replace(/!\[[^\]]*\]\([^\n)]*\)/gu, "[image removed]")
-      .replace(/!\[[^\]]*\]\[[^\]]*\]/gu, "[image removed]")
+    removeMarkdownImages(stripInvisibleCharacters(content).replace(/<!--[\s\S]*?-->/gu, ""))
       .replace(/(^|[^\w])@([A-Za-z0-9][A-Za-z0-9-]{0,38})/gu, "$1@\u200b$2")
       .replace(
         /\s(?:alt|title|aria-label|placeholder|data-[\w-]+)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu,
