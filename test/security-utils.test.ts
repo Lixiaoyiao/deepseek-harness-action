@@ -56,6 +56,17 @@ describe("redaction", () => {
       "ok [image removed] <b>x</b>",
     );
   });
+
+  it("keeps GitHub attachment references inert while the audited DSH contract is text-only", () => {
+    expect(
+      sanitizeUntrustedText(
+        "before ![upload](https://github.com/user-attachments/assets/example?token=secret) after",
+      ),
+    ).toBe("before [image removed] after");
+    expect(sanitizeUntrustedText("before ![upload][attachment]\nafter")).toBe(
+      "before [image removed]\nafter",
+    );
+  });
 });
 
 describe("safe command execution", () => {
