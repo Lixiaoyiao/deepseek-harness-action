@@ -182,7 +182,23 @@ function mergeGitHubFlushReceipts(
         ? { attempts: output.attempts }
         : {}),
       ...(typeof output.reconciled === "boolean" ? { reconciled: output.reconciled } : {}),
+      ...(output.externalEffect === "possible" || output.externalEffect === "confirmed"
+        ? { externalEffect: output.externalEffect }
+        : {}),
     };
+  });
+}
+
+function githubFlushHasExternalEffect(receipts: readonly GitHubToolFlushReceipt[]): boolean {
+  return receipts.some(({ result }) => {
+    if (typeof result.output !== "object" || result.output === null) return false;
+    const output = result.output as Record<string, unknown>;
+    return (
+      output.effect === "created" ||
+      output.effect === "updated" ||
+      output.externalEffect === "possible" ||
+      output.externalEffect === "confirmed"
+    );
   });
 }
 
@@ -606,27 +622,33 @@ async function runActionInternal(
       githubValidationFingerprint = after;
     };
     const githubFlushReceipts: GitHubToolFlushReceipt[] = [];
+    const recordGitHubFlushReceipts = (receipts: readonly GitHubToolFlushReceipt[]): void => {
+      githubFlushReceipts.push(...receipts);
+      if (githubFlushHasExternalEffect(receipts)) {
+        state.partialWrite ??= { writeStatus: "partial-success" };
+      }
+      if (state.agent?.toolReceipts !== undefined) {
+        state.agent = {
+          ...state.agent,
+          toolReceipts: mergeGitHubFlushReceipts(state.agent.toolReceipts, githubFlushReceipts),
+        };
+      }
+    };
     const flushGitHubMutations = async (remainingMs: number): Promise<void> => {
       if (githubToolProvider?.hasPendingMutations() !== true) return;
       await ensureGitHubMutationValidation();
       state.phase = "write";
       try {
-        githubFlushReceipts.push(
-          ...(await githubToolProvider.flush({
+        recordGitHubFlushReceipts(
+          await githubToolProvider.flush({
             workspacePath: agentWorkspace,
             timeoutMs: Math.min(remainingMs, deadlineMs - Date.now()),
             ...(options.signal === undefined ? {} : { signal: options.signal }),
-          })),
+          }),
         );
       } catch (error: unknown) {
         if (error instanceof GitHubToolFlushError) {
-          githubFlushReceipts.push(...error.receipts);
-          if (state.agent?.toolReceipts !== undefined) {
-            state.agent = {
-              ...state.agent,
-              toolReceipts: mergeGitHubFlushReceipts(state.agent.toolReceipts, githubFlushReceipts),
-            };
-          }
+          recordGitHubFlushReceipts(error.receipts);
         }
         throw error;
       }

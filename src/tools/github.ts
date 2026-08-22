@@ -22,6 +22,12 @@ const MAX_COMMENT_BYTES = 32 * 1024;
 const MAX_PULL_BODY_BYTES = 64 * 1024;
 const COMMENT_MARKER_PREFIX = "<!-- dsh-action:github-tool-call=";
 const RESERVED_MARKER_PATTERN = /<!--\s*dsh-action\s*:/iu;
+const COMMENT_MARKER_BYTES = Buffer.byteLength(
+  `${COMMENT_MARKER_PREFIX}${"0".repeat(64)} -->`,
+  "utf8",
+);
+const COMMENT_SUFFIX_BYTES = Buffer.byteLength("\n\n", "utf8") + COMMENT_MARKER_BYTES;
+const MAX_COMMENT_INPUT_BYTES = MAX_COMMENT_BYTES - COMMENT_SUFFIX_BYTES;
 
 const boundedString = (maximumCharacters: number, maximumBytes: number) =>
   z
@@ -91,7 +97,9 @@ const issueStateInputSchema = z
   });
 
 const commentInputSchema = z
-  .strictObject({ body: boundedString(MAX_COMMENT_BYTES, MAX_COMMENT_BYTES).trim().min(1) })
+  .strictObject({
+    body: boundedString(MAX_COMMENT_INPUT_BYTES, MAX_COMMENT_INPUT_BYTES).trim().min(1),
+  })
   .superRefine(({ body }, context) => {
     if (RESERVED_MARKER_PATTERN.test(body)) {
       context.addIssue({
@@ -173,7 +181,7 @@ const inputJsonSchemas: Readonly<Record<GitHubToolId, Readonly<Record<string, un
     type: "object",
     additionalProperties: false,
     required: ["body"],
-    properties: { body: { type: "string", minLength: 1, maxLength: MAX_COMMENT_BYTES } },
+    properties: { body: { type: "string", minLength: 1, maxLength: MAX_COMMENT_INPUT_BYTES } },
   },
   "github.pull.metadata.update": {
     type: "object",
@@ -403,12 +411,19 @@ export function createGitHubToolApi(client: GitHubClient): GitHubToolApi {
   return {
     async revalidateEntity(binding, allowClosed, control) {
       if (binding.target === "issue") {
-        const response = await client.rest.issues.get({
-          owner: binding.owner,
-          repo: binding.repo,
-          issue_number: binding.entityNumber,
-          ...request(control),
-        });
+        const [repository, response] = await Promise.all([
+          client.rest.repos.get({
+            owner: binding.owner,
+            repo: binding.repo,
+            ...request(control),
+          }),
+          client.rest.issues.get({
+            owner: binding.owner,
+            repo: binding.repo,
+            issue_number: binding.entityNumber,
+            ...request(control),
+          }),
+        ]);
         const fingerprint = issueContentFingerprint({
           number: response.data.number,
           title: response.data.title,
@@ -416,6 +431,7 @@ export function createGitHubToolApi(client: GitHubClient): GitHubToolApi {
           authorId: response.data.user?.id,
         });
         if (
+          repository.data.id !== binding.repositoryId ||
           response.data.number !== binding.entityNumber ||
           "pull_request" in response.data ||
           fingerprint !== binding.contentFingerprint ||
@@ -593,6 +609,7 @@ const commonOutputSchema = z.strictObject({
   target: boundedString(160, 160),
   attempts: z.number().int().min(0).max(2),
   reconciled: z.boolean(),
+  externalEffect: z.enum(["none", "possible", "confirmed"]).optional(),
 });
 const labelsOutputSchema = commonOutputSchema.extend({ labels: z.array(labelSchema).max(20) });
 const assigneesOutputSchema = commonOutputSchema.extend({
@@ -751,6 +768,7 @@ class GitHubMutationExecutionError extends Error {
   public constructor(
     public readonly attempts: number,
     public readonly reconciled: boolean,
+    public readonly externalEffect: "none" | "possible" | "confirmed",
     options?: ErrorOptions,
   ) {
     super("GitHub mutation failed its bounded retry and reconciliation policy", options);
@@ -761,7 +779,7 @@ class GitHubMutationExecutionError extends Error {
 async function mutateWithPostcondition<T>(options: {
   readonly invocation: InvocationDeadline;
   readonly read: (control: RequestControl) => Promise<T>;
-  readonly mutate: (control: RequestControl) => Promise<void>;
+  readonly mutate: (control: RequestControl, markStarted: () => void) => Promise<void>;
   readonly matches: (value: T) => boolean;
 }): Promise<MutationResult<T>> {
   const read = async (): Promise<T> => await apiCall(options.invocation, options.read);
@@ -772,19 +790,45 @@ async function mutateWithPostcondition<T>(options: {
   let attempts = 0;
   let lastError: unknown;
   let reconciled = false;
+  let possibleExternalEffect = false;
   while (attempts < 2) {
     attempts += 1;
+    const mutation = { started: false };
+    let mutationAcknowledged = false;
     try {
-      await apiCall(options.invocation, options.mutate);
+      await apiCall(options.invocation, async (control) =>
+        options.mutate(control, () => {
+          mutation.started = true;
+        }),
+      );
+      mutationAcknowledged = true;
       const after = await read();
       if (!options.matches(after)) {
         throw new Error("GitHub mutation postcondition did not match the requested state");
       }
       return { value: after, attempts, effect: "updated", reconciled: true };
     } catch (error: unknown) {
-      if (options.invocation.signal?.aborted === true || !ambiguousMutationError(error)) {
-        throw new GitHubMutationExecutionError(attempts, reconciled, { cause: error });
+      if (mutationAcknowledged) {
+        throw new GitHubMutationExecutionError(attempts, reconciled, "confirmed", {
+          cause: error,
+        });
       }
+      if (!mutation.started || error instanceof GitHubEntityRevalidationError) {
+        throw new GitHubMutationExecutionError(
+          attempts,
+          reconciled,
+          possibleExternalEffect ? "possible" : "none",
+          { cause: error },
+        );
+      }
+      if (options.invocation.signal?.aborted === true || !ambiguousMutationError(error)) {
+        const externalEffect =
+          possibleExternalEffect || ambiguousMutationError(error) ? "possible" : "none";
+        throw new GitHubMutationExecutionError(attempts, reconciled, externalEffect, {
+          cause: error,
+        });
+      }
+      possibleExternalEffect = true;
       lastError = error;
       try {
         const value = await read();
@@ -793,11 +837,18 @@ async function mutateWithPostcondition<T>(options: {
           return { value, attempts, effect: "updated", reconciled: true };
         }
       } catch (readError: unknown) {
-        lastError = readError;
+        throw new GitHubMutationExecutionError(attempts, reconciled, "possible", {
+          cause: readError,
+        });
       }
     }
   }
-  throw new GitHubMutationExecutionError(attempts, reconciled, { cause: lastError });
+  throw new GitHubMutationExecutionError(
+    attempts,
+    reconciled,
+    possibleExternalEffect ? "possible" : "none",
+    { cause: lastError },
+  );
 }
 
 export interface GitHubToolProviderOptions {
@@ -817,11 +868,22 @@ export interface GitHubToolFlushReceipt {
 
 export class GitHubToolFlushError extends Error {
   public readonly receipts: readonly GitHubToolFlushReceipt[];
+  public readonly hasExternalEffect: boolean;
 
   public constructor(receipts: readonly GitHubToolFlushReceipt[], options?: ErrorOptions) {
     super("A deferred GitHub tool mutation failed during Controller finalization", options);
     this.name = "GitHubToolFlushError";
     this.receipts = receipts;
+    this.hasExternalEffect = receipts.some(({ result }) => {
+      if (typeof result.output !== "object" || result.output === null) return false;
+      const output = result.output as Record<string, unknown>;
+      return (
+        output.effect === "created" ||
+        output.effect === "updated" ||
+        output.externalEffect === "possible" ||
+        output.externalEffect === "confirmed"
+      );
+    });
   }
 }
 
@@ -927,6 +989,9 @@ export class GitHubToolProvider implements ToolProvider {
             target: this.target(),
             attempts: mutationError?.attempts ?? 0,
             reconciled: mutationError?.reconciled ?? false,
+            ...(mutationError === undefined || mutationError.externalEffect === "none"
+              ? {}
+              : { externalEffect: mutationError.externalEffect }),
             operation: call.id,
           });
           receipts.push({
@@ -1088,8 +1153,9 @@ export class GitHubToolProvider implements ToolProvider {
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.api.getIssue(binding, control),
-        mutate: async (control) => {
+        mutate: async (control, markStarted) => {
           await revalidate(control);
+          markStarted();
           await this.api.setLabels(binding, input.labels, control);
         },
         matches: (value) => equalSet(value.labels, input.labels),
@@ -1108,8 +1174,9 @@ export class GitHubToolProvider implements ToolProvider {
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.api.getIssue(binding, control),
-        mutate: async (control) => {
+        mutate: async (control, markStarted) => {
           await revalidate(control);
+          markStarted();
           await this.api.setAssignees(binding, input.assignees, control);
         },
         matches: (value) => equalSet(value.assignees, input.assignees),
@@ -1129,8 +1196,9 @@ export class GitHubToolProvider implements ToolProvider {
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.api.getIssue(binding, control),
-        mutate: async (control) => {
+        mutate: async (control, markStarted) => {
           await revalidate(control);
+          markStarted();
           await this.api.updateIssueState(binding, input, control);
         },
         matches: (value) =>
@@ -1149,16 +1217,21 @@ export class GitHubToolProvider implements ToolProvider {
     }
     if (id === "github.comment.create") {
       const input = commentInputSchema.parse(parsedInput.data);
+      const markerId = createHash("sha256").update(call.callId, "utf8").digest("hex");
+      const marker = `${COMMENT_MARKER_PREFIX}${markerId} -->`;
+      const suffix = `\n\n${marker}`;
+      const safeBodyBytes = MAX_COMMENT_BYTES - Buffer.byteLength(suffix, "utf8");
       const safeBody = sanitizedPublicText(
         input.body,
         "GitHub comment body",
         false,
-        MAX_COMMENT_BYTES - 100,
-        MAX_COMMENT_BYTES - 100,
+        safeBodyBytes,
+        safeBodyBytes,
       );
-      const markerId = createHash("sha256").update(call.callId, "utf8").digest("hex");
-      const marker = `${COMMENT_MARKER_PREFIX}${markerId} -->`;
-      const body = `${safeBody}\n\n${marker}`;
+      const body = `${safeBody}${suffix}`;
+      if (Buffer.byteLength(body, "utf8") > MAX_COMMENT_BYTES) {
+        throw new Error("GitHub comment body exceeds its complete outbound byte bound");
+      }
       const find = (comments: readonly OwnedCommentView[]) =>
         comments.find(
           (comment) =>
@@ -1177,49 +1250,57 @@ export class GitHubToolProvider implements ToolProvider {
         });
         return { callId: call.callId, id, ok: true, output };
       }
-      let attempts = 0;
-      let lastError: unknown;
-      let reconciled = false;
-      while (attempts < 2) {
-        attempts += 1;
-        let acknowledged = false;
-        try {
-          await apiCall(invocation, async (control) => {
-            await revalidate(control);
-            await this.api.createComment(binding, body, control);
-          });
-          acknowledged = true;
-        } catch (error: unknown) {
-          if (context.signal?.aborted === true || !ambiguousMutationError(error)) {
-            throw new GitHubMutationExecutionError(attempts, reconciled, { cause: error });
-          }
-          lastError = error;
+      const attempts = 1;
+      const mutation = { started: false };
+      let acknowledged = false;
+      let mutationError: unknown;
+      try {
+        await apiCall(invocation, async (control) => {
+          await revalidate(control);
+          mutation.started = true;
+          await this.api.createComment(binding, body, control);
+        });
+        acknowledged = true;
+      } catch (error: unknown) {
+        mutationError = error;
+        if (!mutation.started || error instanceof GitHubEntityRevalidationError) {
+          throw new GitHubMutationExecutionError(attempts, false, "none", { cause: error });
         }
-        try {
-          const recovered = find(
-            await apiCall(invocation, async (control) =>
-              this.api.listRecentComments(binding, control),
-            ),
-          );
-          reconciled = true;
-          if (recovered !== undefined) {
-            const output = commentOutputSchema.parse({
-              effect: "created",
-              target,
-              attempts,
-              reconciled: true,
-              commentId: recovered.id,
-            });
-            return { callId: call.callId, id, ok: true, output };
-          }
-        } catch (error: unknown) {
-          lastError = error;
-        }
-        if (acknowledged) {
-          throw new GitHubMutationExecutionError(attempts, reconciled, { cause: lastError });
+        if (!ambiguousMutationError(error)) {
+          throw new GitHubMutationExecutionError(attempts, false, "none", { cause: error });
         }
       }
-      throw new GitHubMutationExecutionError(attempts, reconciled, { cause: lastError });
+      try {
+        const recovered = find(
+          await apiCall(invocation, async (control) =>
+            this.api.listRecentComments(binding, control),
+          ),
+        );
+        if (recovered !== undefined) {
+          const output = commentOutputSchema.parse({
+            effect: "created",
+            target,
+            attempts,
+            reconciled: true,
+            commentId: recovered.id,
+          });
+          return { callId: call.callId, id, ok: true, output };
+        }
+        throw new GitHubMutationExecutionError(
+          attempts,
+          true,
+          acknowledged ? "confirmed" : "possible",
+          { cause: mutationError },
+        );
+      } catch (error: unknown) {
+        if (error instanceof GitHubMutationExecutionError) throw error;
+        throw new GitHubMutationExecutionError(
+          attempts,
+          false,
+          acknowledged ? "confirmed" : "possible",
+          { cause: error },
+        );
+      }
     }
 
     if (binding.target !== "pull_request") throw new Error("Pull metadata target is not a PR");
@@ -1252,8 +1333,9 @@ export class GitHubToolProvider implements ToolProvider {
     const result = await mutateWithPostcondition<PullView>({
       invocation,
       read: async (control) => this.api.getPull(binding, control),
-      mutate: async (control) => {
+      mutate: async (control, markStarted) => {
         await revalidate(control);
+        markStarted();
         await this.api.updatePull(binding, input, control);
       },
       matches,

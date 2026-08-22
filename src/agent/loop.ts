@@ -73,6 +73,7 @@ export interface AgentToolReceipt {
   readonly target?: string;
   readonly attempts?: number;
   readonly reconciled?: boolean;
+  readonly externalEffect?: "possible" | "confirmed";
 }
 
 export interface AgentLoopResult<TFinal = undefined> {
@@ -454,6 +455,10 @@ export async function runAgentLoop<TFinal>(
             : {}),
           ...(typeof toolOutput?.reconciled === "boolean"
             ? { reconciled: toolOutput.reconciled }
+            : {}),
+          ...(toolOutput?.externalEffect === "possible" ||
+          toolOutput?.externalEffect === "confirmed"
+            ? { externalEffect: toolOutput.externalEffect }
             : {}),
         });
         await hooks.onState?.(aggregate, stats(turn));

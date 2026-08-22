@@ -447,7 +447,10 @@ describe("orchestrator task no-change publication", () => {
       return Promise.resolve({ data: [] });
     });
     mocks.createGitHubClient.mockReturnValueOnce({
-      rest: { issues: { get: getIssue, setLabels } },
+      rest: {
+        repos: { get: vi.fn(() => Promise.resolve({ data: { id: 1 } })) },
+        issues: { get: getIssue, setLabels },
+      },
     });
     mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
       const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
@@ -505,6 +508,139 @@ describe("orchestrator task no-change publication", () => {
         ],
       },
     });
+  });
+
+  it("surfaces partial-success and final receipts when a later GitHub mutation fails", async () => {
+    const title = "Check whether a change is needed";
+    const body = "Inspect the current implementation and answer.";
+    const fingerprint = issueContentFingerprint({ number: 7, title, body, authorId: 101 });
+    mocks.fetchEntitySnapshot.mockResolvedValueOnce({
+      ...issue,
+      title,
+      body,
+      contentFingerprint: fingerprint,
+    });
+    mocks.loadInputs.mockReturnValueOnce(
+      inputs({
+        command: "task",
+        prompt: "Update issue metadata only",
+        taskAccess: "write",
+        allowWrite: true,
+        isolation: "docker",
+        permissionProfile: "custom",
+        allowedTools: [
+          "workspace.read",
+          "workspace.edit",
+          "github.issue.labels.set",
+          "github.issue.assignees.set",
+        ],
+        testCommands: [["npm", "test"]],
+      }),
+    );
+    let labels: readonly string[] = [];
+    const getIssue = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          number: 7,
+          title,
+          body,
+          state: "open",
+          state_reason: null,
+          labels: labels.map((name) => ({ name })),
+          assignees: [],
+          user: { id: 101, login: "alice" },
+          updated_at: "2026-08-22T00:00:00Z",
+        },
+      }),
+    );
+    const setLabels = vi.fn((request: { labels: readonly string[] }) => {
+      labels = request.labels;
+      return Promise.resolve({ data: [] });
+    });
+    // GitHub acknowledges the request, but the authoritative follow-up read
+    // does not show the requested postcondition. This must not be retried.
+    const updateIssue = vi.fn(() => Promise.resolve({ data: {} }));
+    mocks.createGitHubClient.mockReturnValueOnce({
+      rest: {
+        repos: { get: vi.fn(() => Promise.resolve({ data: { id: 1 } })) },
+        issues: { get: getIssue, setLabels, update: updateIssue },
+      },
+    });
+    const firstCallId = `call-${"a".repeat(40)}`;
+    const secondCallId = `call-${"b".repeat(40)}`;
+    mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
+      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+      await hooks.toolProvider?.invoke(
+        {
+          callId: firstCallId,
+          id: "github.issue.labels.set",
+          input: { labels: ["triaged"] },
+        },
+        { workspacePath: "agent-workspace", timeoutMs: 60_000 },
+      );
+      await hooks.toolProvider?.invoke(
+        {
+          callId: secondCallId,
+          id: "github.issue.assignees.set",
+          input: { assignees: ["alice"] },
+        },
+        { workspacePath: "agent-workspace", timeoutMs: 60_000 },
+      );
+      const stats: AgentLoopModule.AgentLoopStats = {
+        turns: 3,
+        toolCalls: 2,
+        validationRetries: 0,
+        toolReceipts: [
+          {
+            callId: firstCallId,
+            id: "github.issue.labels.set",
+            ok: true,
+            durationMs: 1,
+            effect: "scheduled",
+            target: "repository:1/issue:7",
+            attempts: 0,
+            reconciled: false,
+          },
+          {
+            callId: secondCallId,
+            id: "github.issue.assignees.set",
+            ok: true,
+            durationMs: 1,
+            effect: "scheduled",
+            target: "repository:1/issue:7",
+            attempts: 0,
+            reconciled: false,
+          },
+        ],
+      };
+      await hooks.onState?.(agentResult, stats);
+      const finalization = await hooks.finalize(agentResult, 60_000);
+      return { agent: agentResult, stats, finalization };
+    });
+
+    const outcome = await runAction();
+
+    expect(setLabels).toHaveBeenCalledOnce();
+    expect(updateIssue).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      writeStatus: "partial-success",
+      error: { phase: "write" },
+      agent: {
+        toolReceipts: [
+          { callId: firstCallId, ok: true, effect: "updated", attempts: 1 },
+          {
+            callId: secondCallId,
+            ok: false,
+            effect: "scheduled",
+            attempts: 1,
+            externalEffect: "confirmed",
+            error: true,
+          },
+        ],
+      },
+    });
+    expect(mocks.publishTaskAnswer).not.toHaveBeenCalled();
   });
 
   it("never starts the Agent or a GitHub mutation when the pre-Agent validation gate fails", async () => {

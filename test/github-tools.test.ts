@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { SecurityPolicy } from "../src/security/policy.js";
@@ -353,10 +355,164 @@ describe("Controller-owned typed GitHub tools", () => {
       result: {
         callId: "call-wrong-bot",
         ok: false,
-        output: { effect: "scheduled", attempts: 1, reconciled: true },
+        output: {
+          effect: "scheduled",
+          attempts: 1,
+          reconciled: true,
+          externalEffect: "confirmed",
+        },
       },
     });
+    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
     expect(createComment).toHaveBeenCalledTimes(1);
+  });
+
+  it("never blindly retries a comment whose ambiguous result cannot be reconciled", async () => {
+    const createComment = vi.fn(() =>
+      Promise.reject(Object.assign(new Error("lost response"), { status: 503 })),
+    );
+    const listRecentComments = vi
+      .fn<GitHubToolApi["listRecentComments"]>()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("reconciliation unavailable"));
+    const tools = provider({
+      ids: ["github.comment.create"],
+      api: fakeApi({ listRecentComments, createComment }),
+    });
+    await tools.invoke(
+      { callId: "call-comment-unknown", id: "github.comment.create", input: { body: "Done" } },
+      invocation,
+    );
+
+    const failure = await tools.flush(invocation).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubToolFlushError);
+    expect(createComment).toHaveBeenCalledOnce();
+    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+      attempts: 1,
+      reconciled: false,
+      externalEffect: "possible",
+    });
+    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+  });
+
+  it("bounds the complete marked comment to 32 KiB for ASCII and multibyte bodies", async () => {
+    const flushBoundedComment = async (callId: string, body: string): Promise<string> => {
+      let published: { id: number; body: string; authorId: number } | undefined;
+      const tools = provider({
+        ids: ["github.comment.create"],
+        api: fakeApi({
+          listRecentComments: () => Promise.resolve(published === undefined ? [] : [published]),
+          createComment: (_binding, value) => {
+            published = { id: 99, body: value, authorId: 41898282 };
+            return Promise.resolve();
+          },
+        }),
+      });
+      await tools.invoke({ callId, id: "github.comment.create", input: { body } }, invocation);
+      await tools.flush(invocation);
+      expect(published).toBeDefined();
+      return published?.body ?? "";
+    };
+    const callId = "call-comment-bound";
+    const marker = `<!-- dsh-action:github-tool-call=${createHash("sha256").update(callId).digest("hex")} -->`;
+    const available = 32 * 1024 - Buffer.byteLength(`\n\n${marker}`, "utf8");
+
+    const ascii = await flushBoundedComment(callId, "x".repeat(available));
+    expect(Buffer.byteLength(ascii, "utf8")).toBe(32 * 1024);
+
+    const emoji = "🙂";
+    const emojiBytes = Buffer.byteLength(emoji, "utf8");
+    const multibyteBody =
+      emoji.repeat(Math.floor(available / emojiBytes)) + "x".repeat(available % emojiBytes);
+    const multibyte = await flushBoundedComment("call-comment-multibyte", multibyteBody);
+    expect(Buffer.byteLength(multibyte, "utf8")).toBe(32 * 1024);
+
+    const oversized = provider({ ids: ["github.comment.create"] });
+    await expect(
+      oversized.invoke(
+        {
+          callId: "call-comment-too-large",
+          id: "github.comment.create",
+          input: { body: "x".repeat(available + 1) },
+        },
+        invocation,
+      ),
+    ).rejects.toThrow(/Invalid input/u);
+  });
+
+  it("reports an acknowledged mutation with a failed postcondition without retrying", async () => {
+    const setLabels = vi.fn(() => Promise.resolve());
+    const tools = provider({
+      ids: ["github.issue.labels.set"],
+      api: fakeApi({
+        getIssue: () =>
+          Promise.resolve({ labels: [], assignees: [], state: "open", stateReason: null }),
+        setLabels,
+      }),
+    });
+    await tools.invoke(
+      { callId: "call-postcondition", id: "github.issue.labels.set", input: { labels: ["bug"] } },
+      invocation,
+    );
+
+    const failure = await tools.flush(invocation).catch((error: unknown) => error);
+
+    expect(setLabels).toHaveBeenCalledOnce();
+    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+      attempts: 1,
+      externalEffect: "confirmed",
+    });
+    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+  });
+
+  it("retains successful receipts when a later queued mutation fails without an effect", async () => {
+    let labels: readonly string[] = [];
+    const setLabels = vi.fn((_binding, desired: readonly string[]) => {
+      labels = desired;
+      return Promise.resolve();
+    });
+    const setAssignees = vi.fn(() =>
+      Promise.reject(Object.assign(new Error("invalid assignee"), { status: 422 })),
+    );
+    const tools = provider({
+      ids: ["github.issue.labels.set", "github.issue.assignees.set"],
+      api: fakeApi({
+        getIssue: () =>
+          Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
+        setLabels,
+        setAssignees,
+      }),
+    });
+    await tools.invoke(
+      { callId: "call-first", id: "github.issue.labels.set", input: { labels: ["bug"] } },
+      invocation,
+    );
+    await tools.invoke(
+      {
+        callId: "call-second",
+        id: "github.issue.assignees.set",
+        input: { assignees: ["alice"] },
+      },
+      invocation,
+    );
+
+    const failure = await tools.flush(invocation).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubToolFlushError);
+    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+    expect((failure as GitHubToolFlushError).receipts).toHaveLength(2);
+    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+      effect: "updated",
+    });
+    expect((failure as GitHubToolFlushError).receipts[1]?.result.output).toMatchObject({
+      effect: "scheduled",
+    });
+    expect((failure as GitHubToolFlushError).receipts[1]?.result.output).not.toHaveProperty(
+      "externalEffect",
+    );
+    expect(setLabels).toHaveBeenCalledOnce();
+    expect(setAssignees).toHaveBeenCalledOnce();
   });
 
   it("rejects every reserved marker and sanitizes PR public text before mutation", async () => {
@@ -430,6 +586,7 @@ describe("Controller-owned typed GitHub tools", () => {
       callId: "call-stale",
       ok: false,
     });
+    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
   });
 
   it("the Octokit adapter rejects PR head, base, or origin drift", async () => {
@@ -455,6 +612,35 @@ describe("Controller-owned typed GitHub tools", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow(/identity or state changed/u);
+  });
+
+  it("the Octokit adapter rejects issue repository slug reuse by numeric id", async () => {
+    const getRepository = vi.fn(() => Promise.resolve({ data: { id: 99 } }));
+    const getIssue = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          number: 7,
+          title: "title",
+          body: "body",
+          state: "open",
+          user: { id: 101 },
+        },
+      }),
+    );
+    const client = {
+      rest: { repos: { get: getRepository }, issues: { get: getIssue } },
+    } as unknown as GitHubClient;
+
+    await expect(
+      createGitHubToolApi(client).revalidateEntity(issueBinding, false, {
+        timeoutMs: 1_000,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/identity or state changed/u);
+    expect(getRepository).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "trusted-owner", repo: "trusted-repo" }),
+    );
+    expect(getIssue).toHaveBeenCalledOnce();
   });
 
   it("advances only the trusted same-PR head after a validated Controller write", async () => {
