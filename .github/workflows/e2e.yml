@@ -1263,15 +1263,17 @@ jobs:
             -f title="$pr_title" -f head="$branch" -f base="$DEFAULT_BRANCH" -f body="$pr_body" -F draft=true)"
           pr_number="$(jq -r .number <<<"$pr_json")"
           pr_id="$(jq -r .id <<<"$pr_json")"
+          default_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
+          [[ "$default_sha" =~ ^[a-f0-9]{40}$ ]]
           echo "$pr_json" > "$RUNNER_TEMP/dsh-e2e-integration-pr.json"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "pr_id=$pr_id" >> "$GITHUB_OUTPUT"
           jq -e --argjson number "$pr_number" --argjson id "$pr_id" --arg repo "${REPOSITORY,,}" \
             --arg branch "$branch" --arg base "$DEFAULT_BRANCH" --arg sha "$head_sha" \
-            --arg candidate "$CANDIDATE_SHA" --arg title "$pr_title" --arg body "$pr_body" '
+            --arg base_sha "$default_sha" --arg title "$pr_title" --arg body "$pr_body" '
             .number == $number and .id == $id and .state == "open" and .draft == true and
             (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
-            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $candidate and
+            (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $base_sha and
             .title == $title and .body == $body
           ' <<<"$pr_json" >/dev/null
 
@@ -1535,6 +1537,7 @@ jobs:
           CHECKS_PR: ${{ steps.integration_entities.outputs.pr_number }}
           CHECKS_PR_ID: ${{ steps.integration_entities.outputs.pr_id }}
         run: |
+          set +e
           set -uo pipefail
           cleanup_failures=0
           record_failure() {
@@ -1597,12 +1600,14 @@ jobs:
             [[ -z "$CHECKS_PR_ID" || "$CHECKS_PR_ID" == "$actual_pr_id" ]]
             if [[ -z "$expected_head" ]]; then expected_head="$(jq -r .head.sha <<<"$pr_json")"; fi
             [[ "$expected_head" =~ ^[a-f0-9]{40}$ ]]
+            default_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
+            [[ "$default_sha" =~ ^[a-f0-9]{40}$ ]]
             jq -e --argjson number "$CHECKS_PR" --arg repo "${REPOSITORY,,}" \
               --arg branch "$CHECKS_BRANCH" --arg base "$DEFAULT_BRANCH" --arg sha "$expected_head" \
-              --arg candidate "$CANDIDATE_SHA" --arg title "$pr_title" --arg mutated "$mutated_pr_title" --arg body "$pr_body" '
+              --arg base_sha "$default_sha" --arg title "$pr_title" --arg mutated "$mutated_pr_title" --arg body "$pr_body" '
               .number == $number and .state == "open" and .draft == true and
               (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
-              (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $candidate and
+              (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $base_sha and
               (.title == $title or .title == $mutated) and .body == $body
             ' <<<"$pr_json" >/dev/null
             gh api --method PATCH "repos/$REPOSITORY/pulls/$CHECKS_PR" -f title="$pr_title" >/dev/null
@@ -1629,9 +1634,13 @@ jobs:
             [[ "$(jq -r '.parents[0].sha' <<<"$commit_json")" == "$CANDIDATE_SHA" ]]
             [[ "$CHECKS_TREE" =~ ^[a-f0-9]{40}$ && "$(jq -r .tree.sha <<<"$commit_json")" == "$CHECKS_TREE" ]]
             [[ "$(jq -r .message <<<"$commit_json")" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
-            gh api "repos/$REPOSITORY/compare/$CANDIDATE_SHA...$ref_sha" \
-              | jq -e --arg path "$FIXTURE_PATH" '.files | length == 1 and .[0].filename == $path and .[0].status == "added"' >/dev/null
-            content="$(gh api "repos/$REPOSITORY/contents/$FIXTURE_PATH?ref=$ref_sha" --jq .content | tr -d '\n' | base64 --decode)"
+            compare_json="$(gh api "repos/$REPOSITORY/compare/$CANDIDATE_SHA...$ref_sha")"
+            blob_sha="$(jq -r --arg path "$FIXTURE_PATH" '
+              if (.files | length == 1) and .files[0].filename == $path and .files[0].status == "added"
+              then .files[0].sha else empty end
+            ' <<<"$compare_json")"
+            [[ "$blob_sha" =~ ^[a-f0-9]{40}$ ]]
+            content="$(gh api "repos/$REPOSITORY/git/blobs/$blob_sha" --jq .content | tr -d '\n' | base64 --decode)"
             [[ "$content" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
             gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"
             if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" >/dev/null 2>&1; then return 1; fi
