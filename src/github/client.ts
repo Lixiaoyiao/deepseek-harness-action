@@ -44,14 +44,22 @@ export function createGitHubClient(token: string, signal?: AbortSignal): GitHubC
   const client = getOctokit(token, { userAgent: "dsh-action/0.2" });
   if (signal !== undefined) {
     client.hook.wrap("request", async (request, options) => {
-      return await waitForRequest(
-        async () =>
-          await request({
-            ...options,
-            request: { ...options.request, signal },
-          }),
-        signal,
-      );
+      const requestController = new AbortController();
+      const abort = (): void => requestController.abort(abortReason(signal));
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      try {
+        return await waitForRequest(
+          async () =>
+            await request({
+              ...options,
+              request: { ...options.request, signal: requestController.signal },
+            }),
+          signal,
+        );
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
     });
   }
   return client;
