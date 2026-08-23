@@ -167,6 +167,7 @@ describe("trusted core E2E workflow", () => {
     const cleanup = stepBlock(workflow, "Remove only verified integration fixtures");
 
     expect(cleanup).toContain("if: always()");
+    expect(cleanup).toContain("set +e");
     expect(cleanup).toContain("dsh-e2e:github-integration:v1");
     expect(cleanup).toContain("^dsh-e2e/checks-");
     expect(cleanup).toContain("cleanup_issue() (");
@@ -178,6 +179,7 @@ describe("trusted core E2E workflow", () => {
     expect(cleanup).toContain(".parents[0].sha");
     expect(cleanup).toContain(".tree.sha");
     expect(cleanup).toContain(".files | length == 1");
+    expect(cleanup).toContain("git/blobs/$blob_sha");
     expect(cleanup).toContain(
       'gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"',
     );
