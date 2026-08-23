@@ -69,6 +69,11 @@ export interface AgentToolReceipt {
   readonly durationMs: number;
   readonly timedOut?: boolean;
   readonly error?: boolean;
+  readonly effect?: "read" | "scheduled" | "created" | "updated" | "unchanged";
+  readonly target?: string;
+  readonly attempts?: number;
+  readonly reconciled?: boolean;
+  readonly externalEffect?: "possible" | "confirmed";
 }
 
 export interface AgentLoopResult<TFinal = undefined> {
@@ -361,7 +366,11 @@ export async function runAgentLoop<TFinal>(
         }
         throw error;
       }
-      const validatedOutput = parseDshOutput(JSON.stringify(response.output), task.operation);
+      const validatedOutput = parseDshOutput(
+        JSON.stringify(response.output),
+        task.operation,
+        task.operation === "task" ? inputs.taskOutputSchema : undefined,
+      );
       dshToolReceipts.push(...(response.metadata.toolReceipts ?? []));
       const result: DshRunResult = {
         output: validatedOutput,
@@ -427,6 +436,30 @@ export async function runAgentLoop<TFinal>(
           ok: toolResult.ok,
           durationMs: Math.max(0, now() - toolStartedAt),
           ...(typeof toolOutput?.timedOut === "boolean" ? { timedOut: toolOutput.timedOut } : {}),
+          ...(toolOutput?.effect === "read" ||
+          toolOutput?.effect === "scheduled" ||
+          toolOutput?.effect === "created" ||
+          toolOutput?.effect === "updated" ||
+          toolOutput?.effect === "unchanged"
+            ? { effect: toolOutput.effect }
+            : {}),
+          ...(typeof toolOutput?.target === "string" &&
+          Buffer.byteLength(toolOutput.target, "utf8") <= 160
+            ? { target: toolOutput.target }
+            : {}),
+          ...(typeof toolOutput?.attempts === "number" &&
+          Number.isInteger(toolOutput.attempts) &&
+          toolOutput.attempts >= 0 &&
+          toolOutput.attempts <= 2
+            ? { attempts: toolOutput.attempts }
+            : {}),
+          ...(typeof toolOutput?.reconciled === "boolean"
+            ? { reconciled: toolOutput.reconciled }
+            : {}),
+          ...(toolOutput?.externalEffect === "possible" ||
+          toolOutput?.externalEffect === "confirmed"
+            ? { externalEffect: toolOutput.externalEffect }
+            : {}),
         });
         await hooks.onState?.(aggregate, stats(turn));
         feedback.push({ kind: "tool", turn, data: boundedFeedbackData(toolResult) });

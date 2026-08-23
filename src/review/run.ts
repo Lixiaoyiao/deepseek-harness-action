@@ -9,6 +9,7 @@ import {
 import type { DshOutput } from "../dsh/schema.js";
 import type { Operation, RequestedAccess } from "../commands/parse.js";
 import type { SecurityPolicy } from "../security/policy.js";
+import { removeMarkdownImages } from "../security/redaction.js";
 import type { EffectiveTools } from "../tools/registry.js";
 import type { AgentEngine, AgentToolManifest, AgentTurnRequest } from "../agent/contracts.js";
 import type { EffectiveExtensionPlan } from "../extensions/plan.js";
@@ -46,7 +47,7 @@ export function partitionDshToolPlanes(tools: readonly AgentToolManifest[]): {
   const controllerTools: AgentToolManifest[] = [];
   const extensionTools: AgentToolManifest[] = [];
   for (const tool of tools) {
-    if (tool.provider === "command") {
+    if (tool.provider === "command" || tool.provider === "github") {
       controllerTools.push(tool);
       continue;
     }
@@ -85,11 +86,16 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
     const result = await runDsh(
       {
         operation: request.operation,
-        prompt: JSON.stringify(request.context),
-        trustedInstructions: request.instructions,
+        prompt: JSON.stringify(request.context, (_key, value: unknown) =>
+          typeof value === "string" ? removeMarkdownImages(value) : value,
+        ),
+        trustedInstructions: removeMarkdownImages(request.instructions),
         workspacePath: request.workspacePath,
         toolCatalog: controllerTools,
         nativeTools,
+        ...(request.operation !== "task" || this.inputs.taskOutputSchema === undefined
+          ? {}
+          : { taskOutputSchema: this.inputs.taskOutputSchema }),
         ...(this.extensions === undefined ? {} : { extensions: this.extensions }),
         trust: this.policy.trust,
         isolation: this.inputs.isolation,

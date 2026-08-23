@@ -67,7 +67,7 @@ DEEPSEEK_API_KEY
 为了便于阅读，示例使用当前发布 Tag：
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
 ```
 
 生产环境应把 Tag 替换为该版本发布时的完整、不可变 commit SHA。不要使用 `main`、`latest`、版本范围或其它浮动 ref。`dsh-version` 必须保持为本版本审计过的精确值：
@@ -110,7 +110,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -133,6 +133,7 @@ Agent 权限档位不会授予 GitHub 权限。workflow token scope 只决定受
 | 允许 fix 或 implement 的命令      | `actions: read`、`checks: read`、`contents: write`、`issues: write`、`pull-requests: write` |
 | CI 自动修复                       | 与上一行相同                                                                                |
 | 创建分支和 PR 的自动化任务        | `contents: write`、`pull-requests: write`                                                   |
+| 选中的 typed GitHub Tools         | 只增加对应的 `issues`、`pull-requests`、`checks` 或 `statuses` 读写 scope                   |
 
 较宽的 workflow token 不能绕过 actor、事件、来源、SHA、受保护路径、验证或 Controller 策略。反过来，缺少必要 scope 也会让本来获准的结果无法发布。
 
@@ -144,11 +145,12 @@ Agent 权限档位不会授予 GitHub 权限。workflow token scope 只决定受
 - [`examples/ci-diagnose.yml`](../examples/ci-diagnose.yml)：诊断失败的 CI，不修改代码。
 - [`examples/ci-auto-fix.yml`](../examples/ci-auto-fix.yml)：带强制验证的受信任 CI 修复。
 - [`examples/task-automation.yml`](../examples/task-automation.yml)：由维护者发起、可选只读或写入的 dispatch task。
+- [`examples/github-integration.yml`](../examples/github-integration.yml)：自定义路由、安全分支命名、typed GitHub Tools 与结构化 task output。
 - [`examples/controlled-extensions.yml`](../examples/controlled-extensions.yml)：高级 custom Profile、MCP 和 Bundle 配置。
 
 对于 `issue_comment`、`workflow_run`、dispatch 和 schedule workflow，应从受信任的默认分支运行 workflow 定义。检出已经绑定的受信任分支或 SHA，始终设置 `persist-credentials: false`，并确保带权限含义的输入只使用字面值，或只从受信任 workflow 配置推导。
 
-`prompt` 输入属于受信任指令。不要把 Issue 正文、PR 内容、评论、日志、仓库文件或模型输出插入其中。GitHub 会在 Action 启动前解析表达式，Action 无法恢复这些值原来的来源。
+`prompt`、trigger/filter、branch、schema 与 tool inputs 都属于受信任的维护者配置。不要把 Issue 正文、PR 内容、评论、日志、仓库文件或模型输出插入其中。GitHub 会在 Action 启动前解析表达式，Action 无法恢复这些值原来的来源。
 
 ### 6. 谨慎启用写模式
 

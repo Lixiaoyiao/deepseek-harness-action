@@ -66,7 +66,8 @@ The same rule applies to capability-bearing inputs such as `command`,
 `disallowed-tools`, `tool-config`, `mcp-config`, `plugin-config`,
 `allow-plugin-install`, `run-tests`, `test-commands`, `validation-integrity`,
 `container-image`, `base-url`, `web-search-base-url`, `isolation`, and
-`dsh-executable`: keep them literal or derive them only from trusted workflow
+`dsh-executable`, plus trigger/filter, branch, and `task-output-schema` inputs:
+keep them literal or derive them only from trusted workflow
 configuration. These values select Agent authority, executable worker code,
 credential-routing destinations, validation policy, or whether an
 operating-system boundary exists. In particular, do not interpolate pull
@@ -86,6 +87,10 @@ controller instructions.
 - Agent output is also untrusted. The controller accepts only one complete JSON
   value and rejects unknown fields, invalid paths, unsafe ranges, oversized
   collections and controller-owned tracking markers.
+- Optional maintainer-defined `taskOutput` remains untrusted data inside the
+  fixed schema-v1 Controller envelope. Its root-object schema and value are
+  bounded for bytes and complexity; references, combinators, patterns, unknown
+  keywords, and prototype-sensitive keys fail closed.
 - The controlled root Profile repeats that machine-output rule after rc.2
   tool-specific system guidance and binds the JSON `operation` field to the
   exact Controller-selected operation. Markdown citations are allowed only
@@ -194,6 +199,28 @@ maintainer configuration, `allowed-tools` and the controller policy:
   closed if they contain a withheld credential, without echoing the value.
   Command output remains untrusted even though the argv is trusted.
 
+#### Controller-owned GitHub tools
+
+v0.6.0 exposes only six exact typed operations: label and assignee replacement,
+Issue state update, comment creation, PR metadata update, and check/status
+read. The tool input never accepts an owner, repository, entity number, head
+SHA, raw URL, REST route, GraphQL document, or credential. Those identities
+come only from the Controller-validated event snapshot.
+
+Read checks require a compatible immutable head and `readCi`. Mutations require
+an explicitly allowed exact ID, same-repository `trusted-write`,
+`allow-write=true`, a compatible current entity, Docker, and successful fixed
+Controller validation. A model request is only queued; malformed or blocked
+final output, cancellation, or validation failure discards it. Before flushing,
+the Controller revalidates the repository/entity binding, sanitizes public
+text and reserved markers, then uses bounded attempts, postconditions,
+ambiguous-failure reconciliation, and receipts. The GitHub token never enters
+the model, DSH worker, tool input, feedback, or receipt.
+
+If a sequential flush confirms or cannot exclude an earlier external effect
+before a later failure, the Controller records `partial-success` and an
+`externalEffect` receipt instead of presenting an ordinary retry-safe failure.
+
 #### Controlled DSH native, MCP, Bundle, and plugin tools
 
 v0.4 introduced the official DSH extension mechanisms. v0.5.1 re-audits them
@@ -212,7 +239,7 @@ handling, and the packaged `dist` entrypoint. It did not require a change to
 the Action's existing input, output, or permission semantics. That conclusion
 does not approve any release after `0.1.1-rc.2`.
 v0.5.2 added a standalone installer that only writes workflow files and does
-not run inside the Agent or Controller. v0.5.3 retains the exact audited runtime
+not run inside the Agent or Controller. v0.6.0 retains the exact audited runtime
 pin while hardening Controller error and repository-source boundaries.
 
 The Action starts this generated Profile through the official
@@ -388,12 +415,15 @@ mutation.
   and `node_modules` directories because those generated paths are also
   excluded from the publishable change set.
 - Entity-free automation and issue-backed `task` writes never push directly to
-  the repository default branch. They bind the default-branch head as an
+  the maintainer-selected base branch. They bind that branch head as an
   immutable base, then create a controller-owned task branch and pull request.
   A task attached to an existing pull request follows the separately authorized
   same-repository PR-head fix path, which rejects a head ref equal to the
   repository default branch. Merging a task PR into the default branch remains
   a separate repository action.
+- Controller GitHub mutation tools use the same trust and validation policy but
+  remain bound to the current Issue/PR identity. Model output cannot retarget a
+  repository, entity, head, or PR base branch.
 - The controller owns the `summary`, `diagnosis`, `write` and `task` sticky markers.
   Read-only progress reuses the applicable final-result marker and updates it in
   place. Write-task lifecycle publication is deferred until final validation
@@ -421,21 +451,21 @@ mutation.
 Use the smallest token permission set that supports the selected entry point.
 The supplied templates use the following sets:
 
-| Scenario                                        | Permissions                                                                                                                                   |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Automatic or fork PR review                     | `contents: read`, `pull-requests: write`                                                                                                      |
-| CI diagnosis                                    | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`                                                    |
-| Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                   |
-| CI auto-fix                                     | Same as the preceding row                                                                                                                     |
-| Core E2E gate/read/write/cancellation           | Split per job: read-only gate, `contents`/PR write only for the write golden path, and Issue write only for the isolated cancellation fixture |
-| v0.5.3 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                     |
+| Scenario                                        | Permissions                                                                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Automatic or fork PR review                     | `contents: read`, `pull-requests: write`                                                                                                           |
+| CI diagnosis                                    | `actions: read`, `checks: read`, `contents: read`, `issues: write`, `pull-requests: write`                                                         |
+| Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                        |
+| CI auto-fix                                     | Same as the preceding row                                                                                                                          |
+| Core E2E jobs                                   | Split per job: secretless gate; bounded read/write/cancellation scopes; exact Issue/PR/ref/check scopes only for the isolated integration fixtures |
+| v0.6.0 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                          |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
 
 The release canary requires repository variable `DSH_RELEASE_CANARY_SHA` to be
-the lowercase full 40-character commit SHA referenced by the formal v0.5.3 tag
+the lowercase full 40-character commit SHA referenced by the formal v0.6.0 tag
 and its non-draft, non-prerelease GitHub Release. Before any environment secret
 is available, a secretless gate requires `refs/heads/main`, requires the
 run/workflow SHA to equal the live default-branch SHA, and fails if `main` is no
@@ -448,15 +478,22 @@ The permanent Core E2E workflow is trusted release infrastructure and must be
 bootstrapped onto the default branch before it qualifies a candidate. Its gate
 has no secret access and requires the dispatch ref, workflow/dispatch SHA, and
 live default-branch SHA to agree before it binds the explicit full candidate
-SHA, `DSH_E2E_CANDIDATE_SHA`, a write-capable actor, and an open non-draft
-same-repository PR targeting the default branch. The three jobs that can access
-`DEEPSEEK_API_KEY` all use the `core-e2e` environment; repository operators must
-configure that environment with a default-branch-only deployment policy.
+SHA, `DSH_E2E_CANDIDATE_SHA`, and a write-capable actor. Pull-request mode also
+requires an open non-draft same-repository PR targeting the default branch.
+Protected main mode rejects a PR number and requires candidate, workflow,
+dispatch, repository-variable, and live default-branch SHAs to be identical;
+the complete Core E2E must pass in that mode on the exact post-merge release
+commit before tagging. The three jobs that can access `DEEPSEEK_API_KEY` all use
+the `core-e2e` environment; repository operators must configure that environment
+with a default-branch-only deployment policy.
 Harness/fixture code is checked out at the immutable trusted SHA and candidate
 code only at the bound candidate SHA, always without persisted checkout
 credentials. Cancellation uses a dedicated temporary Issue and one locked bot
 comment ID, then strictly deletes the comment and closes the Issue instead of
-touching the candidate PR's sticky comment.
+touching the candidate PR's sticky comment. The integration job exercises all
+six typed GitHub operations against run-bound label, Issue, draft PR, commit and
+ref fixtures, restores their remote state, and independently performs exact,
+identity-verified cleanup without broad matching or deletion.
 
 ## Known boundary
 
@@ -497,6 +534,17 @@ and destinations that are reachable through the runner's Docker bridge path.
 Use dedicated runners, network segmentation, and runner-level egress controls
 for that threat model.
 
+GitHub attachment images are not an enabled input path in v0.6.0. The exact
+audited `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text task
+and constructs one text content block; it has no formal multimodal contract.
+Markdown images are rendered inert as `[image removed]`. The Controller does
+not download attachments, forward their URLs, mount their bytes, or attach
+credentials to an unofficial fetch path. Used reference definitions, HTML
+image/source tags, and recognized raw GitHub attachment URLs are removed from
+all prompt channels. Future enablement requires a newly audited exact DSH
+contract plus independent source, SSRF, magic-byte, type, count, size,
+total-size, timeout, and credential-free-download gates.
+
 Each validation command receives a random container name and `--rm`. On a
 launch error or timeout the controller also attempts `docker rm --force`, and
 the temporary validation workspace is removed in a `finally` block. Cleanup is
@@ -509,7 +557,7 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred in v0.5.3. On `SIGTERM` or
+A marker-level freshness guard remains deferred in v0.6.0. On `SIGTERM` or
 `SIGINT`, the Controller aborts the active worker and immediately starts a
 bounded, best-effort terminal comment update while run-scoped cleanup proceeds.
 A later authoritative non-cancellation failure can correct a provisional
@@ -519,7 +567,7 @@ crash, or a network/GitHub API outage can prevent all finalization code from
 running; an “In progress” comment may therefore remain stale. The Actions run
 conclusion is authoritative.
 
-v0.5.3 retains the binding of its generated Profile and positive native-tool
+v0.6.0 retains the binding of its generated Profile and positive native-tool
 policy to the exact DSH version whose complete tool surface was audited. It
 accepts only the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family; another
 tag, range or exact version is

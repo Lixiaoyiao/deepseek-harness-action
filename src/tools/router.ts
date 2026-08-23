@@ -9,7 +9,7 @@ import type {
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}(?:\.[a-z][a-z0-9-]{0,63})*$/u;
 const TOOL_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}(?:\.[a-z][a-z0-9-]{0,63})+$/u;
 
-/** Exact-ID router for Controller-hosted providers such as fixed-argv commands. */
+/** Exact-ID router for Controller-hosted command and typed GitHub providers. */
 export class ToolRouter implements ToolProvider {
   public readonly id = "router";
   private readonly routes: ReadonlyMap<string, ToolProvider>;
@@ -26,7 +26,7 @@ export class ToolRouter implements ToolProvider {
         if (!TOOL_ID_PATTERN.test(manifest.id)) {
           throw new Error(`Invalid agent tool id: ${manifest.id}`);
         }
-        if (manifest.provider !== "command") {
+        if (manifest.provider !== "command" && manifest.provider !== "github") {
           throw new Error(
             `Controller provider ${provider.id} cannot claim ${manifest.provider} tools; native, MCP, and plugin tools must run through the official DSH ToolRuntime`,
           );

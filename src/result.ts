@@ -86,6 +86,8 @@ export interface RunOutcome {
   readonly pullRequestNumber?: number;
   readonly pullRequestUrl?: string;
   readonly commentId?: number;
+  /** Controller-validated maintainer-defined task result; never an authority input. */
+  readonly taskOutput?: unknown;
   readonly error?: ActionFailure;
 }
 
@@ -199,8 +201,8 @@ function classifiedFailure(
 export function describeActionFailure(error: unknown, phase: ActionPhase): ActionFailure {
   if (error instanceof AgentDeadlineError) {
     return classifiedFailure(error, phase, {
-      title: "Agent loop timed out",
-      guidance: "Increase timeout-minutes or reduce the task and validation scope.",
+      title: "Action execution timed out",
+      guidance: "Increase timeout-minutes or reduce the context, task, and validation scope.",
     });
   }
   if (error instanceof AgentNoProgressError && error.cause instanceof ValidationIntegrityError) {
@@ -252,6 +254,19 @@ export function describeActionFailure(error: unknown, phase: ActionPhase): Actio
     message: safeMessage(error),
     guidance: unexpectedRuntimeMetadata.guidance,
     retryable: unexpectedRuntimeMetadata.retryable,
+  };
+}
+
+/** Build the provisional SIGINT/SIGTERM identity without cross-bundle instanceof checks. */
+export function describeCancellationFailure(phase: ActionPhase): ActionFailure {
+  return {
+    code: "DSH_ABORTED",
+    category: "runtime",
+    phase,
+    title: "DeepSeek Harness was cancelled",
+    message: "DSH execution was aborted",
+    guidance: "Check whether a newer workflow run cancelled this one, then rerun if needed.",
+    retryable: true,
   };
 }
 
@@ -321,6 +336,7 @@ function structuredResult(
     ...(outcome.validation === undefined ? {} : { validation: outcome.validation }),
     ...(Object.keys(write).length === 0 ? {} : { write }),
     ...(outcome.commentId === undefined ? {} : { commentId: outcome.commentId }),
+    ...(outcome.taskOutput === undefined ? {} : { taskOutput: outcome.taskOutput }),
     ...(outcome.error === undefined ? {} : { error: outcome.error }),
   };
 }
@@ -420,6 +436,7 @@ export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string,
     trust: outcome.policy?.trust ?? "none",
     "duration-ms": outcome.durationMs,
     "comment-id": outcome.commentId ?? "",
+    "task-output": outcome.taskOutput === undefined ? "" : JSON.stringify(outcome.taskOutput),
     "error-code": outcome.error?.code ?? "",
     "error-message": outcome.error?.message ?? "",
     "extension-profile-digest": outcome.agent?.extensionAudit?.digest ?? "",

@@ -15,6 +15,8 @@ describe("evaluatePolicy", () => {
     expect(policy.capabilities.publishComments).toBe(true);
     expect(policy.capabilities.executeRepositoryCode).toBe(false);
     expect(policy.capabilities.modifyWorkspace).toBe(false);
+    expect(policy.capabilities.manageIssueLabels).toBe(false);
+    expect(policy.capabilities.updatePullRequestMetadata).toBe(false);
   });
 
   it("denies mention commands from actors without write permission", () => {
@@ -98,6 +100,10 @@ describe("evaluatePolicy", () => {
       commit: true,
       push: true,
       createPullRequest: true,
+      manageIssueLabels: true,
+      manageIssueAssignees: true,
+      updateIssueState: true,
+      updatePullRequestMetadata: true,
     });
   });
 

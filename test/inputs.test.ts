@@ -18,6 +18,16 @@ describe("loadInputs", () => {
     );
     expect(result.allowWrite).toBe(false);
     expect(result.progressComment).toBe(true);
+    expect(result.triggerPhrase).toBe("@dsh");
+    expect(result.labelTrigger).toBe("");
+    expect(result.assigneeTrigger).toBe("");
+    expect(result.allowedActors).toEqual(["*"]);
+    expect(result.allowedBots).toEqual([]);
+    expect(result.includeCommentsByActor).toEqual([]);
+    expect(result.excludeCommentsByActor).toEqual([]);
+    expect(result.baseBranch).toBe("");
+    expect(result.branchPrefix).toBe("dsh/");
+    expect(result.branchNameTemplate).toBe("");
     expect(result.taskAccess).toBe("read");
     expect(result.maxTurns).toBe(3);
     expect(result.permissionProfile).toBe("strict");
@@ -33,6 +43,49 @@ describe("loadInputs", () => {
       ["npm", "test"],
       ["node", "script with spaces.js"],
     ]);
+    expect(result.taskOutputSchema).toBeUndefined();
+  });
+
+  it("validates base branch and deterministic branch naming configuration", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "base-branch": " release/next ",
+        "branch-prefix": "automation/",
+        "branch-name-template": "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}",
+      }),
+    );
+    expect(result).toMatchObject({
+      baseBranch: "release/next",
+      branchPrefix: "automation/",
+      branchNameTemplate: "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}",
+    });
+  });
+
+  it("parses bounded maintainer-owned routing and actor filters", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "trigger-phrase": "  /deepseek  ",
+        "label-trigger": "agent-ready",
+        "assignee-trigger": "@deepseek-bot",
+        "allowed-actors": "Alice, @BOB, alice",
+        "allowed-bots": "dependabot[bot]",
+        "include-comments-by-actor": "maintainer, *[bot]",
+        "exclude-comments-by-actor": "renovate[bot]",
+      }),
+    );
+    expect(result).toMatchObject({
+      triggerPhrase: "/deepseek",
+      labelTrigger: "agent-ready",
+      assigneeTrigger: "@deepseek-bot",
+      allowedActors: ["Alice", "BOB"],
+      allowedBots: ["dependabot[bot]"],
+      includeCommentsByActor: ["maintainer", "*[bot]"],
+      excludeCommentsByActor: ["renovate[bot]"],
+    });
   });
 
   it("keeps the action manifest allow and deny defaults empty", () => {
@@ -60,6 +113,16 @@ describe("loadInputs", () => {
     ["disallowed-tools", '["command.missing"]'],
     ["allowed-tools", '["mcp.docs.lookup"]'],
     ["disallowed-tools", '["plugin.lint.scan"]'],
+    ["trigger-phrase", "bad\nphrase"],
+    ["label-trigger", "bad\u0000label"],
+    ["allowed-actors", "alice,not an actor"],
+    ["allowed-bots", "alice/../../admin"],
+    ["task-output-schema", '{"type":"object","$ref":"https://example.test/schema"}'],
+    ["task-output-schema", '{"type":"object","oneOf":[{"type":"object"}]}'],
+    ["base-branch", "refs/heads/main"],
+    ["branch-prefix", "-unsafe/"],
+    ["branch-name-template", "{{prefix}}{{operation}}"],
+    ["branch-name-template", "{{prefix}}{{key}}-{{timestamp}}"],
   ])("rejects invalid %s", (name, value) => {
     expect(() =>
       loadInputs(
@@ -201,6 +264,74 @@ describe("loadInputs", () => {
             "github-token": githubToken,
             command: "task",
             prompt: `Use ${secret} to finish the task`,
+          }),
+        ),
+      ).toThrow(/credentials must not appear/u);
+    }
+  });
+
+  it("loads a bounded trusted task output schema and rejects credentials embedded in it", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "sk-deepseek-secret-value",
+        "github-token": "ghs_controller-secret-value",
+        "task-output-schema": JSON.stringify({
+          type: "object",
+          properties: { status: { type: "string", enum: ["ready", "blocked"] } },
+          required: ["status"],
+          additionalProperties: false,
+        }),
+      }),
+    );
+    expect(result.taskOutputSchema).toEqual({
+      type: "object",
+      properties: { status: { type: "string", enum: ["ready", "blocked"] } },
+      required: ["status"],
+      additionalProperties: false,
+    });
+
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "sk-deepseek-secret-value",
+          "github-token": "ghs_controller-secret-value",
+          "task-output-schema": JSON.stringify({
+            type: "object",
+            description: "ghs_controller-secret-value",
+          }),
+        }),
+      ),
+    ).toThrow(/credentials must not appear/u);
+
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "sk-deepseek-secret-value",
+          "github-token": "ghs_controller-secret-value",
+          command: "review",
+          "task-output-schema": JSON.stringify({ type: "object" }),
+        }),
+      ),
+    ).toThrow(/supported only for command task or auto/u);
+  });
+
+  it("rejects controller credentials embedded in public branch configuration", () => {
+    const deepseekKey = "sk-deepseek-secret-value";
+    const githubToken = "ghs_controller-secret-value";
+    for (const values of [
+      { "base-branch": githubToken },
+      { "branch-prefix": `${deepseekKey}/` },
+      {
+        "branch-name-template": `{{prefix}}{{operation}}-${githubToken}-{{key}}`,
+      },
+      { "branch-name-template": `{{prefix}}{{key}}-{{${githubToken}}}` },
+    ]) {
+      expect(() =>
+        loadInputs(
+          reader({
+            "deepseek-api-key": deepseekKey,
+            "github-token": githubToken,
+            ...values,
           }),
         ),
       ).toThrow(/credentials must not appear/u);

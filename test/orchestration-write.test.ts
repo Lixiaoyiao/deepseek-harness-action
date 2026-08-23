@@ -5,6 +5,7 @@ import type { DshRunResult } from "../src/dsh/runner.js";
 import type { GitHubClient } from "../src/github/client.js";
 import type { GitHubContext } from "../src/github/context.js";
 import type { IssueSnapshot, PullRequestSnapshot } from "../src/github/fetch.js";
+import type { ActionInputs } from "../src/inputs.js";
 import { issueTaskIdentity } from "../src/orchestration/context.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
@@ -47,6 +48,10 @@ const policy: SecurityPolicy = {
     commit: true,
     push: true,
     createPullRequest: true,
+    manageIssueLabels: true,
+    manageIssueAssignees: true,
+    updateIssueState: true,
+    updatePullRequestMetadata: true,
   },
 };
 const result: DshRunResult = {
@@ -162,7 +167,12 @@ describe("executeWrite", () => {
       client,
       entityContext,
       command("implement"),
-      inputs({ allowWrite: true }),
+      inputs({
+        allowWrite: true,
+        baseBranch: "release/next",
+        branchPrefix: "automation/",
+        branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
+      }),
       policy,
       issue,
       workspace,
@@ -183,7 +193,7 @@ describe("executeWrite", () => {
       expect.objectContaining({
         issueNumber: 7,
         issueTitle: issue.title,
-        baseBranch: "trunk",
+        baseBranch: "release/next",
         boundHeadSha: "d".repeat(40),
         validationDeadlineMs: 123_456,
         issueIdentity: {
@@ -194,6 +204,13 @@ describe("executeWrite", () => {
         onPhase,
       }),
     );
+    const finishCall = mocks.finishImplementation.mock.calls[0]?.[0] as unknown as {
+      readonly inputs: ActionInputs;
+    };
+    expect(finishCall.inputs).toMatchObject({
+      branchPrefix: "automation/",
+      branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
+    });
   });
 
   it("routes an Issue task and binds its related Issue identity", async () => {
@@ -233,7 +250,7 @@ describe("executeWrite", () => {
       client,
       pullRequestContext(),
       command("fix"),
-      inputs({ allowWrite: true }),
+      inputs({ allowWrite: true, baseBranch: "release/next" }),
       policy,
       pullRequest,
       workspace,
@@ -263,7 +280,12 @@ describe("executeWrite", () => {
       client,
       automationContext,
       command("task"),
-      inputs({ allowWrite: true }),
+      inputs({
+        allowWrite: true,
+        baseBranch: "release/next",
+        branchPrefix: "automation/",
+        branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
+      }),
       policy,
       undefined,
       workspace,
@@ -277,9 +299,11 @@ describe("executeWrite", () => {
     expect(write).toMatchObject({ writeStatus: "success", branchName: "dsh/task" });
     expect(mocks.finishAutomationTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        baseBranch: "trunk",
+        baseBranch: "release/next",
         taskIdentity: "automation-key",
         boundHeadSha: "d".repeat(40),
+        branchPrefix: "automation/",
+        branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
       }),
     );
   });

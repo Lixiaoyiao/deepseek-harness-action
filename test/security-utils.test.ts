@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildChildEnvironment, runCommand } from "../src/security/argv.js";
 import { assertPathWithin } from "../src/security/paths.js";
-import { redactSecrets, sanitizeUntrustedText } from "../src/security/redaction.js";
+import {
+  redactSecrets,
+  removeMarkdownImages,
+  sanitizeUntrustedText,
+} from "../src/security/redaction.js";
 import { validateCommitSha, validateRefName } from "../src/security/refs.js";
 
 describe("ref validation", () => {
@@ -55,6 +59,47 @@ describe("redaction", () => {
     expect(sanitizeUntrustedText('ok<!-- ignore --> ![inject](x) <b aria-label="bad">x</b>')).toBe(
       "ok [image removed] <b>x</b>",
     );
+  });
+
+  it("keeps GitHub attachment references inert while the audited DSH contract is text-only", () => {
+    expect(
+      sanitizeUntrustedText(
+        "before ![upload](https://github.com/user-attachments/assets/example?token=secret) after",
+      ),
+    ).toBe("before [image removed] after");
+    expect(sanitizeUntrustedText("before ![upload][attachment]\nafter")).toBe(
+      "before [image removed]\nafter",
+    );
+  });
+
+  it("removes used image reference definitions while preserving ordinary links", () => {
+    const content = [
+      "before ![upload][attachment] after",
+      "[attachment]: https://github.com/user-attachments/assets/example?token=signed-secret",
+      "[documentation]: https://github.com/openai/codex",
+      "[ordinary link](https://github.com/openai/codex)",
+    ].join("\n");
+    const sanitized = removeMarkdownImages(content);
+    expect(sanitized).toContain("before [image removed] after");
+    expect(sanitized).not.toContain("signed-secret");
+    expect(sanitized).toContain("[documentation]: https://github.com/openai/codex");
+    expect(sanitized).toContain("[ordinary link](https://github.com/openai/codex)");
+  });
+
+  it("removes nested inline images, HTML image sources, and raw GitHub attachment URLs", () => {
+    const content = [
+      String.raw`![escaped \] alt](https://example.test/image_(nested).png "title")`,
+      '<picture><source srcset="https://example.test/a.png"><img src="https://example.test/b.png"></picture>',
+      "https://github.com/user-attachments/assets/example?signed=secret&expires=tomorrow",
+      "https://private-user-images.githubusercontent.com/example/image.png?jwt=secret",
+      "https://github.com/openai/codex",
+    ].join("\n");
+    const sanitized = removeMarkdownImages(content);
+    expect(sanitized.match(/\[image removed\]/gu)?.length).toBeGreaterThanOrEqual(4);
+    expect(sanitized).not.toContain("example.test");
+    expect(sanitized).not.toContain("signed=secret");
+    expect(sanitized).not.toContain("jwt=secret");
+    expect(sanitized).toContain("https://github.com/openai/codex");
   });
 });
 

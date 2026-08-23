@@ -18,6 +18,9 @@ import {
   validateAllowedToolReferences,
 } from "./tools/schema.js";
 import { DSH_VERSION } from "./release.js";
+import { parseTaskOutputSchema } from "./dsh/task-output.js";
+import { validateRefName } from "./security/refs.js";
+import { validateBranchNameTemplate, validateBranchPrefix } from "./write/branch.js";
 
 const booleanInput = z.enum(["true", "false"]).transform((value) => value === "true");
 
@@ -48,6 +51,110 @@ const argvListInput = z.string().transform((value, context): readonly (readonly 
   return result.data;
 });
 
+const MAX_TRIGGER_PHRASE_BYTES = 128;
+const MAX_ROUTING_LITERAL_BYTES = 256;
+const MAX_ACTOR_LIST_BYTES = 4 * 1024;
+const MAX_ACTOR_ENTRIES = 100;
+const MAX_ACTOR_ENTRY_BYTES = 100;
+
+function boundedRoutingLiteral(name: string, maximumBytes: number, allowEmpty: boolean) {
+  return z.string().transform((value, context): string => {
+    const trimmed = value.trim();
+    if ((!allowEmpty && trimmed === "") || Buffer.byteLength(trimmed, "utf8") > maximumBytes) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must be ${allowEmpty ? "at most" : "between 1 and"} ${String(maximumBytes)} UTF-8 bytes`,
+      });
+      return z.NEVER;
+    }
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/u.test(trimmed)) {
+      context.addIssue({ code: "custom", message: `${name} must not contain control characters` });
+      return z.NEVER;
+    }
+    return trimmed;
+  });
+}
+
+function actorListInput(name: string) {
+  return z.string().transform((value, context): readonly string[] => {
+    if (Buffer.byteLength(value, "utf8") > MAX_ACTOR_LIST_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must not exceed ${String(MAX_ACTOR_LIST_BYTES)} UTF-8 bytes`,
+      });
+      return z.NEVER;
+    }
+    const entries = value
+      .split(",")
+      .map((entry) => entry.trim().replace(/^@/u, ""))
+      .filter(Boolean);
+    if (entries.length > MAX_ACTOR_ENTRIES) {
+      context.addIssue({
+        code: "custom",
+        message: `${name} must contain at most ${String(MAX_ACTOR_ENTRIES)} actors`,
+      });
+      return z.NEVER;
+    }
+    const unique = new Map<string, string>();
+    for (const entry of entries) {
+      if (
+        Buffer.byteLength(entry, "utf8") > MAX_ACTOR_ENTRY_BYTES ||
+        !/^(?:\*|\*\[bot\]|[A-Za-z0-9_.-]+(?:\[bot\])?)$/u.test(entry)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `${name} contains an invalid actor pattern: ${entry || "<empty>"}`,
+        });
+        return z.NEVER;
+      }
+      const normalized = entry.toLowerCase();
+      if (!unique.has(normalized)) unique.set(normalized, entry);
+    }
+    return [...unique.values()];
+  });
+}
+
+const baseBranchInput = z.string().transform((value, context): string => {
+  const branch = value.trim();
+  if (branch === "") return "";
+  if (Buffer.byteLength(branch, "utf8") > 240) {
+    context.addIssue({ code: "custom", message: "base-branch must not exceed 240 UTF-8 bytes" });
+    return z.NEVER;
+  }
+  if (branch.startsWith("refs/")) {
+    context.addIssue({ code: "custom", message: "base-branch must be an unqualified branch name" });
+    return z.NEVER;
+  }
+  try {
+    return validateRefName(branch);
+  } catch (error: unknown) {
+    context.addIssue({
+      code: "custom",
+      message:
+        error instanceof Error ? `invalid base-branch: ${error.message}` : "invalid base-branch",
+    });
+    return z.NEVER;
+  }
+});
+
+function validatedBranchInput(
+  name: "branch-prefix" | "branch-name-template",
+  validate: (value: string) => string,
+) {
+  return z.string().transform((value, context): string => {
+    try {
+      return validate(value);
+    } catch (error: unknown) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : `invalid ${name}`,
+      });
+      return z.NEVER;
+    }
+  });
+}
+
 const actionInputsSchema = z.object({
   deepseekApiKey: z.string().min(8, "deepseek-api-key must be at least 8 characters"),
   githubToken: z.string().min(8, "github-token must be at least 8 characters"),
@@ -67,6 +174,16 @@ const actionInputsSchema = z.object({
   webSearchBaseUrl: z.url(),
   botUserId: integerInput(1, 2_147_483_647),
   progressComment: booleanInput,
+  triggerPhrase: boundedRoutingLiteral("trigger-phrase", MAX_TRIGGER_PHRASE_BYTES, false),
+  labelTrigger: boundedRoutingLiteral("label-trigger", MAX_ROUTING_LITERAL_BYTES, true),
+  assigneeTrigger: boundedRoutingLiteral("assignee-trigger", MAX_ROUTING_LITERAL_BYTES, true),
+  allowedActors: actorListInput("allowed-actors"),
+  allowedBots: actorListInput("allowed-bots"),
+  includeCommentsByActor: actorListInput("include-comments-by-actor"),
+  excludeCommentsByActor: actorListInput("exclude-comments-by-actor"),
+  baseBranch: baseBranchInput,
+  branchPrefix: validatedBranchInput("branch-prefix", validateBranchPrefix),
+  branchNameTemplate: validatedBranchInput("branch-name-template", validateBranchNameTemplate),
   maxTurns: integerInput(1, 10),
   permissionProfile: permissionProfileSchema,
   validationIntegrity: z.enum(["off", "warn", "strict"]),
@@ -126,6 +243,20 @@ const actionInputsSchema = z.object({
       return z.NEVER;
     }
   }),
+  taskOutputSchema: z
+    .string()
+    .transform((value, context) => {
+      try {
+        return parseTaskOutputSchema(value);
+      } catch (error: unknown) {
+        context.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return z.NEVER;
+      }
+    })
+    .optional(),
 });
 
 export type ActionInputs = z.infer<typeof actionInputsSchema>;
@@ -150,6 +281,16 @@ const defaults = {
   webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
   botUserId: "41898282",
   progressComment: "true",
+  triggerPhrase: "@dsh",
+  labelTrigger: "",
+  assigneeTrigger: "",
+  allowedActors: "*",
+  allowedBots: "",
+  includeCommentsByActor: "",
+  excludeCommentsByActor: "",
+  baseBranch: "",
+  branchPrefix: "dsh/",
+  branchNameTemplate: "",
   maxTurns: "3",
   permissionProfile: "strict",
   validationIntegrity: "warn",
@@ -159,6 +300,7 @@ const defaults = {
   toolConfig: '{"schemaVersion":1,"commands":[]}',
   mcpConfig: '{"schemaVersion":1,"servers":[]}',
   pluginConfig: '{"schemaVersion":1,"bundles":[],"plugins":[]}',
+  taskOutputSchema: "",
 } as const;
 
 function optionalInput(reader: InputReader, name: string, fallback: string): string {
@@ -166,29 +308,70 @@ function optionalInput(reader: InputReader, name: string, fallback: string): str
   return value === "" ? fallback : value;
 }
 
+function containsSecret(value: unknown, secret: string): boolean {
+  if (typeof value === "string") return value.includes(secret);
+  if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(
+      ([key, item]) => key.includes(secret) || containsSecret(item, secret),
+    );
+  }
+  return false;
+}
+
 function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): void {
   const secrets = [inputs.deepseekApiKey, inputs.githubToken];
+  const publicRefConfiguration = [
+    inputs.baseBranch,
+    inputs.branchPrefix,
+    inputs.branchNameTemplate,
+  ];
   const configuredArgv = [
     ...inputs.testCommands,
     ...inputs.toolConfig.commands.map(({ argv }) => argv),
   ];
   if (
-    secrets.some((secret) => inputs.prompt.includes(secret)) ||
+    secrets.some(
+      (secret) =>
+        inputs.prompt.includes(secret) ||
+        publicRefConfiguration.some((value) => value.includes(secret)),
+    ) ||
+    secrets.some((secret) => containsSecret(inputs.taskOutputSchema, secret)) ||
     configuredArgv.some((argv) =>
       argv.some((argument) => secrets.some((secret) => argument.includes(secret))),
     )
   ) {
     throw new ActionConfigurationError(
-      "Invalid action inputs: controller credentials must not appear in the task prompt, test-commands, or tool-config argv",
+      "Invalid action inputs: controller credentials must not appear in the task prompt, branch configuration, task-output-schema, test-commands, or tool-config argv",
     );
   }
 }
 
 /** Parse and validate all action inputs before any external side effect occurs. */
 export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
+  const deepseekApiKey = reader("deepseek-api-key", { required: true });
+  const githubToken = reader("github-token", { required: true });
+  const baseBranch = optionalInput(reader, "base-branch", defaults.baseBranch);
+  const branchPrefix = optionalInput(reader, "branch-prefix", defaults.branchPrefix);
+  const branchNameTemplate = optionalInput(
+    reader,
+    "branch-name-template",
+    defaults.branchNameTemplate,
+  );
+  if (
+    [deepseekApiKey, githubToken].some(
+      (secret) =>
+        secret !== "" &&
+        [baseBranch, branchPrefix, branchNameTemplate].some((value) => value.includes(secret)),
+    )
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: controller credentials must not appear in branch configuration",
+    );
+  }
   const parsed = actionInputsSchema.safeParse({
-    deepseekApiKey: reader("deepseek-api-key", { required: true }),
-    githubToken: reader("github-token", { required: true }),
+    deepseekApiKey,
+    githubToken,
     allowWrite: optionalInput(reader, "allow-write", defaults.allowWrite),
     command: optionalInput(reader, "command", defaults.command),
     taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
@@ -205,6 +388,24 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     webSearchBaseUrl: optionalInput(reader, "web-search-base-url", defaults.webSearchBaseUrl),
     botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
     progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
+    triggerPhrase: optionalInput(reader, "trigger-phrase", defaults.triggerPhrase),
+    labelTrigger: optionalInput(reader, "label-trigger", defaults.labelTrigger),
+    assigneeTrigger: optionalInput(reader, "assignee-trigger", defaults.assigneeTrigger),
+    allowedActors: optionalInput(reader, "allowed-actors", defaults.allowedActors),
+    allowedBots: optionalInput(reader, "allowed-bots", defaults.allowedBots),
+    includeCommentsByActor: optionalInput(
+      reader,
+      "include-comments-by-actor",
+      defaults.includeCommentsByActor,
+    ),
+    excludeCommentsByActor: optionalInput(
+      reader,
+      "exclude-comments-by-actor",
+      defaults.excludeCommentsByActor,
+    ),
+    baseBranch,
+    branchPrefix,
+    branchNameTemplate,
     maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
     permissionProfile: optionalInput(reader, "permission-profile", defaults.permissionProfile),
     validationIntegrity: optionalInput(
@@ -218,6 +419,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
     mcpConfig: optionalInput(reader, "mcp-config", defaults.mcpConfig),
     pluginConfig: optionalInput(reader, "plugin-config", defaults.pluginConfig),
+    taskOutputSchema: optionalInput(reader, "task-output-schema", defaults.taskOutputSchema),
   });
 
   if (!parsed.success) {
@@ -257,6 +459,15 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
     throw new ActionConfigurationError(
       "Invalid action inputs: prompt is required when command is task",
+    );
+  }
+  if (
+    parsed.data.taskOutputSchema !== undefined &&
+    parsed.data.command !== "auto" &&
+    parsed.data.command !== "task"
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: task-output-schema is supported only for command task or auto",
     );
   }
   if (

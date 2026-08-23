@@ -16,16 +16,16 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 
 ## Core capabilities
 
-| Capability              | What it does                                                                                                                           |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Pull request review     | Reviews new commits, publishes one summary, and adds high-confidence inline findings                                                   |
-| General tasks           | Answers repository questions or performs an explicitly authorized coding task                                                          |
-| CI diagnosis and repair | Reads failed checks and logs; trusted workflows may validate and publish a fix                                                         |
-| Issue implementation    | Turns an authorized Issue request into a validated branch and pull request                                                             |
-| Controlled tools        | Offers `strict`, `standard`, and exact `custom` profiles for Bash, Web Search, Subagent, fixed commands, MCP, Bundle, and Plugin tools |
-| Structured results      | Reports stable scalar outputs plus a schema-v1 `result-json` envelope on success and failure                                           |
+| Capability              | What it does                                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| Pull request review     | Reviews new commits, publishes one summary, and adds high-confidence inline findings                  |
+| General tasks           | Answers repository questions or performs an explicitly authorized coding task                         |
+| CI diagnosis and repair | Reads failed checks and logs; trusted workflows may validate and publish a fix                        |
+| Issue implementation    | Turns an authorized Issue request into a validated branch and pull request                            |
+| Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
+| Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.5.3 is a small architecture/security hardening patch. It stabilizes error identity, tightens Git checkout versus Controller-materialized tree handling, and clarifies validation security boundaries without adding Agent or product features. The exact audited DeepSeek Harness pin remains `0.1.1-rc.2`.
+v0.6.0 adds maintainer-controlled triggers, actor/comment filters, safe branch configuration, typed Controller-owned GitHub tools, and optional structured task output without changing defaults or authority. GitHub image attachments remain deferred because the exact audited DSH headless contract is text-only; the DSH pin remains `0.1.1-rc.2`.
 
 ## Live runs
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.5.3` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.6.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 
@@ -113,12 +113,15 @@ Put the command on the first line of an Issue or pull request comment.
 
 `--write`, `fix`, and `implement` request capabilities; they do not grant them. The workflow must explicitly enable write mode and provide Controller-run validation. See [Usage](docs/usage.md) for commands and automation, and [Configuration](docs/configuration.md) for the gates.
 
+Maintainers can change the trigger phrase, add label/assignee routes, filter actors or historical comments, select a base branch, and choose a deterministic branch template. These settings change routing and naming only; GitHub authority still comes from the Controller policy and workflow token scopes.
+
 ## Security
 
 - The Agent receives neither the real `GITHUB_TOKEN` nor the real DeepSeek key. Only the Controller can call GitHub mutation APIs.
 - Repository content, diffs, issues, pull requests, comments, logs, model output, and tool output remain untrusted data.
 - Fork review uses a `.git`-less, credential-free worker and must check out only the trusted base SHA with `persist-credentials: false`.
 - Writes require a trusted same-repository context, authorized actors, Docker, `allow-write: "true"`, non-empty fixed validation commands, and successful validation. Protected-path and Validation Integrity checks still apply.
+- Typed `github.*` mutations are exact-ID, entity-bound, deferred until Controller validation, and reconciled with bounded receipts. No arbitrary REST, GraphQL, URL, or credential pass-through exists.
 - Validation Integrity provides high-confidence weakening detection plus baseline replay for its supported entrypoints, scripts, test/config weakening, lock/toolchain controls, and known wrappers/interpreters; it is not complete cross-language dependency provenance or a formal proof.
 - Validation may use Docker bridge networking. On self-hosted or corporate-network runners, repository validation code may reach runner-accessible network services; use dedicated runners and runner-level segmentation/egress controls.
 - An approved Bundle, Plugin, or stdio MCP server is trusted worker code. ToolRuntime limits model-routed calls; it does not sandbox extension startup, background work, or direct process I/O.

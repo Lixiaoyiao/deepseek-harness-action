@@ -22,6 +22,8 @@ interface BuildImplementationOperationInput {
   readonly baseSha: string;
   /** GITHUB_RUN_ID: stable across attempts of the same workflow run. */
   readonly runIdentity: string;
+  readonly branchPrefix?: string;
+  readonly branchNameTemplate?: string;
 }
 
 function fingerprint(parts: readonly string[], length: number): string {
@@ -61,7 +63,12 @@ export function buildImplementationOperation(
   return {
     key,
     snapshotFingerprint,
-    branch: buildDshBranch(input.issueNumber, "implement", key),
+    branch: buildDshBranch(input.issueNumber, "implement", key, {
+      ...(input.branchPrefix === undefined ? {} : { branchPrefix: input.branchPrefix }),
+      ...(input.branchNameTemplate === undefined
+        ? {}
+        : { branchNameTemplate: input.branchNameTemplate }),
+    }),
     commitMessage,
     pullRequestMarker: `<!-- dsh-action:implement:v1 operation=${key} snapshot=${snapshotFingerprint} -->`,
   };

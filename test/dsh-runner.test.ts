@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DshAbortedError,
   DshConfigurationError,
+  DshCredentialLeakError,
   DshIsolationUnavailableError,
   DshOutputLimitError,
   DshTimeoutError,
@@ -22,6 +23,7 @@ import {
   installedTopLevelPackageInventory,
   runDsh,
 } from "../src/dsh/runner.js";
+import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
 import type {
   DshProcessLimits,
   DshProcessResult,
@@ -177,6 +179,72 @@ describe("executeBoundedDshProcess", () => {
 });
 
 describe("runDsh", () => {
+  it("passes the trusted task schema to the prompt and returns only Controller-validated taskOutput", async () => {
+    const fixture = await fixtures();
+    const proxy = fakeProxy();
+    let captured: DshProcessSpec | undefined;
+    const taskOutputSchema = parseTaskOutputSchema(
+      JSON.stringify({
+        type: "object",
+        properties: { status: { type: "string", enum: ["ready"] } },
+        required: ["status"],
+        additionalProperties: false,
+      }),
+    );
+    if (taskOutputSchema === undefined) throw new Error("expected task output schema");
+    const result = await runDsh(
+      request({
+        operation: "task",
+        workspacePath: fixture.workspace,
+        dshExecutable: fixture.executable,
+        taskOutputSchema,
+      }),
+      {
+        assetsDirectory: fixture.assets,
+        temporaryDirectory: fixture.root,
+        startProxy: () => Promise.resolve(proxy),
+        executeProcess: (spec) => {
+          captured = spec;
+          return Promise.resolve({
+            stdout: JSON.stringify({
+              protocolVersion: 1,
+              operation: "task",
+              state: "final",
+              summary: "Complete",
+              findings: [],
+              taskOutput: { status: "ready" },
+            }),
+            stderr: "",
+            exitCode: 0,
+            signal: null,
+          });
+        },
+      },
+    );
+
+    expect(result.output.taskOutput).toEqual({ status: "ready" });
+    expect(captured?.args.join("\n")).toContain("TRUSTED_TASK_OUTPUT_SCHEMA_JSON");
+  });
+
+  it("fails closed if a direct caller places a Controller credential in the task schema", async () => {
+    const fixture = await fixtures();
+    const taskOutputSchema = parseTaskOutputSchema(
+      JSON.stringify({ type: "object", description: "controller-real-key" }),
+    );
+    if (taskOutputSchema === undefined) throw new Error("expected task output schema");
+    await expect(
+      runDsh(
+        request({
+          operation: "task",
+          workspacePath: fixture.workspace,
+          dshExecutable: fixture.executable,
+          taskOutputSchema,
+        }),
+        { assetsDirectory: fixture.assets, temporaryDirectory: fixture.root },
+      ),
+    ).rejects.toBeInstanceOf(DshCredentialLeakError);
+  });
+
   it("prevents extension installation from shadowing the locked runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "dsh-runtime-inventory-test-"));
     temporaryPaths.push(root);
@@ -750,6 +818,10 @@ describe("runDsh", () => {
           commit: true,
           push: true,
           createPullRequest: true,
+          manageIssueLabels: true,
+          manageIssueAssignees: true,
+          updateIssueState: true,
+          updatePullRequestMetadata: true,
         },
       },
     });
@@ -957,6 +1029,10 @@ describe("runDsh", () => {
             commit: false,
             push: false,
             createPullRequest: false,
+            manageIssueLabels: false,
+            manageIssueAssignees: false,
+            updateIssueState: false,
+            updatePullRequestMetadata: false,
           },
         },
       });

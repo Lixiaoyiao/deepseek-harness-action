@@ -130,19 +130,102 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   vi.unstubAllEnvs();
 });
 
 describe("orchestrator cancellation finalization", () => {
+  it("actively aborts pre-agent GitHub requests at the overall deadline", async () => {
+    vi.useFakeTimers();
+    mocks.loadInputs.mockReturnValue(
+      inputs({
+        command: "task",
+        prompt: "Inspect the issue",
+        taskAccess: "read",
+        isolation: "none",
+        progressComment: false,
+        allowedTools: [],
+        timeoutMinutes: 1,
+      }),
+    );
+    let requestSignal: AbortSignal | undefined;
+    mocks.createGitHubClient.mockImplementation((_token: string, signal?: AbortSignal) => {
+      requestSignal = signal;
+      return {};
+    });
+    mocks.checkActorPermissions.mockImplementation(
+      async () =>
+        await new Promise((_, reject) => {
+          const abort = (): void => {
+            reject(
+              requestSignal?.reason instanceof Error
+                ? requestSignal.reason
+                : new Error("Controller request aborted"),
+            );
+          };
+          if (requestSignal?.aborted === true) abort();
+          else requestSignal?.addEventListener("abort", abort, { once: true });
+        }),
+    );
+
+    const action = runAction();
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    expect(requestSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(action).resolves.toMatchObject({
+      conclusion: "failure",
+      error: { code: "AGENT_TIMEOUT", phase: "authorization", retryable: true },
+    });
+    expect(requestSignal?.aborted).toBe(true);
+    expect(mocks.runAgentLoop).not.toHaveBeenCalled();
+  });
+
+  it("propagates external cancellation through a pending Controller GitHub request", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    mocks.createGitHubClient.mockImplementation((_token: string, signal?: AbortSignal) => {
+      requestSignal = signal;
+      return {};
+    });
+    mocks.checkActorPermissions.mockImplementation(
+      async () =>
+        await new Promise((_, reject) => {
+          const abort = (): void => {
+            reject(
+              requestSignal?.reason instanceof Error
+                ? requestSignal.reason
+                : new Error("Controller request aborted"),
+            );
+          };
+          if (requestSignal?.aborted === true) abort();
+          else requestSignal?.addEventListener("abort", abort, { once: true });
+        }),
+    );
+
+    const action = runAction({ signal: controller.signal });
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    const cancellation = new DshAbortedError();
+    controller.abort(cancellation);
+
+    await expect(action).resolves.toMatchObject({
+      conclusion: "failure",
+      error: { code: "DSH_ABORTED", phase: "authorization" },
+    });
+    expect(requestSignal?.reason).toBe(cancellation);
+    expect(mocks.runAgentLoop).not.toHaveBeenCalled();
+  });
+
   it("turns a run signal into a terminal sticky failure", async () => {
     const controller = new AbortController();
     mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
       const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
-      expect(hooks.signal).toBe(controller.signal);
+      expect(hooks.signal).not.toBe(controller.signal);
       await hooks.onTurn?.(1, 3);
       const cancellation = new DshAbortedError();
       controller.abort(cancellation);
+      expect(hooks.signal?.reason).toBe(cancellation);
       throw cancellation;
     });
 
@@ -154,6 +237,27 @@ describe("orchestrator cancellation finalization", () => {
       commentId: 71,
       error: { code: "DSH_ABORTED", phase: "agent" },
     });
+    expect(mocks.progressFail).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "DSH_ABORTED", phase: "agent" }),
+    );
+    expect(mocks.createGitHubClient).toHaveBeenNthCalledWith(1, "token", expect.any(AbortSignal));
+    expect(mocks.createGitHubClient).toHaveBeenNthCalledWith(2, "token");
+  });
+
+  it("keeps a stable cancellation identity when the signal reason is foreign", async () => {
+    const controller = new AbortController();
+    mocks.runAgentLoop.mockImplementation(() => {
+      controller.abort(new Error("DSH execution was aborted"));
+      return Promise.reject(new Error("DSH execution was aborted"));
+    });
+
+    const outcome = await runAction({ signal: controller.signal });
+
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      error: { code: "DSH_ABORTED", phase: "agent" },
+    });
+    expect(mocks.progressFail).toHaveBeenCalledOnce();
     expect(mocks.progressFail).toHaveBeenCalledWith(
       expect.objectContaining({ code: "DSH_ABORTED", phase: "agent" }),
     );

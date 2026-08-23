@@ -7,6 +7,7 @@ import {
   reviewTestSchema,
 } from "../review/schema.js";
 import { DshMalformedOutputError } from "./errors.js";
+import { validateTaskOutput, type TaskOutputSchema } from "./task-output.js";
 
 export const dshOperationSchema = z.enum(["task", "review", "diagnose", "fix", "implement"]);
 export type DshOperation = z.infer<typeof dshOperationSchema>;
@@ -38,6 +39,7 @@ export const dshOutputSchema = z
     changePlan: z.array(reviewChangeSchema).max(REVIEW_LIMITS.maxChanges).optional(),
     verification: z.array(reviewTestSchema).max(REVIEW_LIMITS.maxTests).optional(),
     toolRequest: dshToolRequestSchema.optional(),
+    taskOutput: z.unknown().optional(),
   })
   .superRefine((output, context) => {
     if (output.state === "needs_tool" && output.toolRequest === undefined) {
@@ -57,6 +59,16 @@ export const dshOutputSchema = z
         message: `must be omitted when state is ${output.state}`,
       });
     }
+    if (
+      output.taskOutput !== undefined &&
+      (output.operation !== "task" || output.state !== "final")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskOutput"],
+        message: "is allowed only for a final task operation",
+      });
+    }
   });
 
 export type DshOutput = z.infer<typeof dshOutputSchema>;
@@ -72,7 +84,11 @@ function renderIssues(error: z.ZodError): string {
 }
 
 /** Parse one complete JSON value. Markdown fences and trailing prose fail. */
-export function parseDshOutput(raw: string, expectedOperation?: DshOperation): DshOutput {
+export function parseDshOutput(
+  raw: string,
+  expectedOperation?: DshOperation,
+  taskOutputSchema?: TaskOutputSchema,
+): DshOutput {
   let value: unknown;
   try {
     value = JSON.parse(raw.trim());
@@ -92,6 +108,33 @@ export function parseDshOutput(raw: string, expectedOperation?: DshOperation): D
     throw new DshMalformedOutputError(
       `DSH returned operation ${parsed.data.operation}; expected ${expectedOperation}`,
     );
+  }
+  if (parsed.data.taskOutput !== undefined && taskOutputSchema === undefined) {
+    throw new DshMalformedOutputError(
+      "DSH output failed schema validation: $.taskOutput: no trusted task-output-schema is configured",
+    );
+  }
+  if (
+    taskOutputSchema !== undefined &&
+    parsed.data.operation === "task" &&
+    parsed.data.state === "final"
+  ) {
+    if (parsed.data.taskOutput === undefined) {
+      throw new DshMalformedOutputError(
+        "DSH output failed schema validation: $.taskOutput: is required for a final task when task-output-schema is configured",
+      );
+    }
+    try {
+      return {
+        ...parsed.data,
+        taskOutput: validateTaskOutput(parsed.data.taskOutput, taskOutputSchema),
+      };
+    } catch (error: unknown) {
+      throw new DshMalformedOutputError(
+        `DSH output failed schema validation: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
   }
   return parsed.data;
 }

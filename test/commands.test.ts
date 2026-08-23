@@ -25,6 +25,17 @@ describe("parseCommand", () => {
     });
   });
 
+  it("treats a custom trigger phrase literally while preserving first-line grammar", () => {
+    expect(parseCommand("  /dsh+ review focus", "/dsh+")).toEqual({
+      operation: "review",
+      instructions: "focus",
+      requestedAccess: "read",
+    });
+    expect(parseCommand("please /dsh+ review", "/dsh+")).toBeNull();
+    expect(parseCommand("/dsh+ review\n/dsh+ fix", "/dsh+")).toBeNull();
+    expect(parseCommand("@dsh review", "/dsh+")).toBeNull();
+  });
+
   it("parses generic task intent with explicit access and multiline instructions", () => {
     expect(parseCommand("@dsh task explain the cache")).toEqual({
       operation: "task",
@@ -60,6 +71,122 @@ describe("routeCommand", () => {
       source: "mention",
       instructions: "now",
       requestedAccess: "read",
+    });
+  });
+
+  it("uses the configured trigger phrase without broadening comment parsing", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: { comment: { body: "/deepseek diagnose now" } },
+    });
+    expect(routeCommand(context, inputs({ triggerPhrase: "/deepseek" }))).toMatchObject({
+      operation: "diagnose",
+      source: "mention",
+      instructions: "now",
+    });
+    expect(routeCommand(context, inputs())).toBeNull();
+  });
+
+  it("keeps GitHub image sources out of trusted mention instructions", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: {
+        comment: {
+          body: "@dsh task --read inspect this\n![upload](https://github.com/user-attachments/assets/secret)",
+        },
+      },
+    });
+    expect(routeCommand(context, inputs())).toMatchObject({
+      operation: "task",
+      instructions: "inspect this\n[image removed]",
+      source: "mention",
+    });
+  });
+
+  it("removes reference, HTML, and raw attachment sources from command instructions", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: {
+        comment: {
+          body: [
+            "@dsh task --read inspect these",
+            "![upload][attachment]",
+            "[attachment]: https://github.com/user-attachments/assets/example?token=secret",
+            '<picture><source srcset="https://example.test/a"><img src="https://example.test/b"></picture>',
+            "raw https://user-images.githubusercontent.com/1/example.png?sig=secret",
+          ].join("\n"),
+        },
+      },
+    });
+    const routed = routeCommand(context, inputs());
+    expect(routed?.instructions).not.toContain("user-attachments");
+    expect(routed?.instructions).not.toContain("example.test");
+    expect(routed?.instructions).not.toContain("user-images.githubusercontent.com");
+    expect(routed?.instructions).toContain("[image removed]");
+  });
+
+  it("applies the same text-only boundary to configured prompts", () => {
+    const routed = routeCommand(
+      pullRequestContext(),
+      inputs({
+        command: "review",
+        prompt:
+          'inspect <img src="https://example.test/private.png"> and https://github.com/user-attachments/assets/example?token=secret',
+      }),
+    );
+    expect(routed?.instructions).toBe("inspect [image removed] and [image removed]");
+  });
+
+  it("routes maintainer-configured label and assignee events by entity kind", () => {
+    const issue = pullRequestContext({
+      rawEventName: "issues",
+      eventName: "issues",
+      eventAction: "labeled",
+      isPullRequest: false,
+      pullRequest: undefined,
+      payload: { label: { name: "dsh-ready" } },
+    });
+    expect(
+      routeCommand(
+        issue,
+        inputs({ labelTrigger: "DSH-READY", taskAccess: "write", prompt: "handle issue" }),
+      ),
+    ).toEqual({
+      operation: "task",
+      source: "automatic-event",
+      instructions: "handle issue",
+      requestedAccess: "write",
+    });
+
+    const pull = pullRequestContext({
+      eventAction: "assigned",
+      payload: { assignee: { login: "review-bot" } },
+    });
+    expect(
+      routeCommand(pull, inputs({ assigneeTrigger: "@Review-Bot", taskAccess: "write" })),
+    ).toEqual({
+      operation: "review",
+      source: "automatic-event",
+      instructions: "",
+      requestedAccess: "read",
+    });
+    expect(routeCommand(issue, inputs({ labelTrigger: "other" }))).toBeNull();
+  });
+
+  it("applies allowed-actors only as a routing filter", () => {
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      actor: "outsider",
+      payload: { comment: { body: "@dsh review" } },
+    });
+    expect(routeCommand(context, inputs({ allowedActors: ["maintainer"] }))).toBeNull();
+    expect(routeCommand(context, inputs({ allowedActors: ["*"] }))).toMatchObject({
+      operation: "review",
+      source: "mention",
     });
   });
 

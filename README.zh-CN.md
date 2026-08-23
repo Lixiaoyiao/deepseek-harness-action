@@ -16,16 +16,16 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 
 ## 核心能力
 
-| 能力          | 作用                                                                                                             |
-| ------------- | ---------------------------------------------------------------------------------------------------------------- |
-| PR 审查       | 审查新提交，发布一条汇总，并为高置信度问题添加行内评论                                                           |
-| 通用任务      | 回答仓库问题，或执行经过明确授权的编码任务                                                                       |
-| CI 诊断与修复 | 读取失败的检查和日志；受信任 workflow 可以验证并发布修复                                                         |
-| Issue 实现    | 把经过授权的 Issue 请求实现为已验证的分支和 PR                                                                   |
-| 受控工具      | 通过 `strict`、`standard` 和精确的 `custom` 档位使用 Bash、Web Search、Subagent、固定命令、MCP、Bundle 与 Plugin |
-| 结构化结果    | 无论成功或失败，都提供稳定的标量 outputs 和 schema-v1 `result-json`                                              |
+| 能力          | 作用                                                                            |
+| ------------- | ------------------------------------------------------------------------------- |
+| PR 审查       | 审查新提交，发布一条汇总，并为高置信度问题添加行内评论                          |
+| 通用任务      | 回答仓库问题，或执行经过明确授权的编码任务                                      |
+| CI 诊断与修复 | 读取失败的检查和日志；受信任 workflow 可以验证并发布修复                        |
+| Issue 实现    | 把经过授权的 Issue 请求实现为已验证的分支和 PR                                  |
+| 受控工具      | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
+| 结构化结果    | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.5.3 是一次小型 architecture/security hardening patch：稳定错误身份，收紧 Git checkout 与 Controller materialized tree 的来源契约，并澄清验证安全边界，不增加 Agent 或产品功能。经过审计的 DeepSeek Harness 精确版本仍为 `0.1.1-rc.2`。
+v0.6.0 新增维护者控制的触发器、actor/comment 过滤、安全分支配置、Controller-owned typed GitHub Tools，以及可选的结构化 task output；默认行为和 authority 不变。由于精确审计的 DSH headless 契约仍只支持文本，GitHub 图片附件明确 defer；DSH pin 仍为 `0.1.1-rc.2`。
 
 ## 真实运行
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.5.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.5.3` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.6.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 
@@ -113,12 +113,15 @@ jobs:
 
 `--write`、`fix` 和 `implement` 只是请求能力，并不授予权限。workflow 必须显式启用写模式，并提供由 Controller 执行的验证命令。命令和自动化用法见[使用指南](docs/usage.zh-CN.md)，完整关卡见[配置参考](docs/configuration.md)。
 
+维护者可以修改 trigger phrase，添加 label/assignee 路由，过滤 actor 或历史评论，选择 base branch，并配置确定性 branch template。这些设置只改变路由和命名；GitHub authority 仍由 Controller policy 与 workflow token scope 决定。
+
 ## 安全边界
 
 - Agent 不会拿到真实的 `GITHUB_TOKEN` 或 DeepSeek key。只有 Controller 能调用 GitHub 写入 API。
 - 仓库内容、diff、Issue、PR、评论、日志、模型输出和工具输出始终是不可信数据。
 - fork 审查使用没有 `.git`、没有凭据的 worker；workflow 只能检出受信任的 base SHA，并设置 `persist-credentials: false`。
 - 写入需要受信任的同仓库上下文、通过授权检查的操作者、Docker、`allow-write: "true"`、非空固定验证命令，以及全部验证成功；受保护路径和 Validation Integrity 检查仍然有效。
+- Typed `github.*` mutation 使用精确 ID、绑定当前 entity，并延迟到 Controller 验证成功后执行，同时保留有界 receipts 与 reconciliation；不存在 arbitrary REST、GraphQL、raw URL 或凭据透传。
 - Validation Integrity 针对已支持的 entrypoint、package script、test/config 变弱、lock/toolchain 控制和已知 wrapper/interpreter 提供高置信度变弱检测与 baseline replay；它不是完整的跨语言 dependency provenance 或形式化完整性证明。
 - Validation 可能使用 Docker bridge network。在 self-hosted runner 或企业网络中，仓库验证代码可能访问 runner 可达的网络服务；应使用专用 runner 以及 runner 级网络分段和出口控制。
 - 获准的 Bundle、Plugin 或 stdio MCP server 属于受信任的 worker code。ToolRuntime 只能限制模型路由的调用，不能沙箱化扩展启动、后台任务或直接进程 I/O。

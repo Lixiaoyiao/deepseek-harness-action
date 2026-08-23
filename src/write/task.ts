@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 
 import type { GitHubClient } from "../github/client.js";
-import { validateCommitSha, validateRefName } from "../security/refs.js";
+import { validateCommitSha } from "../security/refs.js";
+import { buildControllerBranchName } from "./branch.js";
 import { getBranchHeadIfExists } from "./github.js";
 
 export interface AutomationTaskOperation {
@@ -22,6 +23,9 @@ export function buildAutomationTaskOperation(input: {
   readonly baseSha: string;
   readonly runIdentity: string;
   readonly taskIdentity: string;
+  readonly branchPrefix?: string;
+  readonly branchNameTemplate?: string;
+  readonly entityNumber?: number;
 }): AutomationTaskOperation {
   const baseSha = validateCommitSha(input.baseSha);
   if (input.runIdentity.trim() === "" || input.runIdentity.includes("\0")) {
@@ -34,7 +38,23 @@ export function buildAutomationTaskOperation(input: {
     input.taskIdentity,
   ]);
   const snapshotFingerprint = fingerprint([baseSha, input.taskIdentity]);
-  const branch = validateRefName(`dsh/task-${key}`);
+  if (
+    input.entityNumber !== undefined &&
+    (!Number.isSafeInteger(input.entityNumber) || input.entityNumber < 1)
+  ) {
+    throw new Error("Task entity number must be a positive integer");
+  }
+  const branch = buildControllerBranchName({
+    ...(input.branchPrefix === undefined ? {} : { branchPrefix: input.branchPrefix }),
+    ...(input.branchNameTemplate === undefined
+      ? {}
+      : { branchNameTemplate: input.branchNameTemplate }),
+    key,
+    operation: "task",
+    entityType: input.entityNumber === undefined ? "task" : "issue",
+    entityNumber: input.entityNumber === undefined ? "task" : String(input.entityNumber),
+    legacySuffix: `task-${key}`,
+  });
   const commitMessage = [
     "feat: apply DeepSeek Harness task",
     "",

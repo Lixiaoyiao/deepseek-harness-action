@@ -28,6 +28,7 @@ import { buildDshPrompt, DEFAULT_MAX_PROMPT_BYTES, WINDOWS_MAX_PROMPT_BYTES } fr
 import { startDeepSeekProxy } from "./proxy.js";
 import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "./proxy.js";
 import { parseDshOutput } from "./schema.js";
+import type { TaskOutputSchema } from "./task-output.js";
 import type { DshOperation, DshOutput } from "./schema.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
 import {
@@ -126,6 +127,8 @@ export interface DshRunRequest {
   readonly containerImage: string;
   readonly toolCatalog?: readonly AgentToolManifest[];
   readonly nativeTools?: readonly NativeToolId[];
+  /** Trusted maintainer schema. It affects task result validation only. */
+  readonly taskOutputSchema?: TaskOutputSchema;
   readonly extensions?: EffectiveExtensionPlan;
   readonly signal?: AbortSignal;
 }
@@ -583,6 +586,9 @@ export async function runDsh(
     trust: request.trust,
     toolCatalog: request.toolCatalog ?? [],
     nativeTools: effectiveNativeTools(request),
+    ...(request.taskOutputSchema === undefined
+      ? {}
+      : { taskOutputSchema: request.taskOutputSchema }),
     maxBytes: platform === "win32" ? WINDOWS_MAX_PROMPT_BYTES : DEFAULT_MAX_PROMPT_BYTES,
   });
   assertNoSecretOutput(
@@ -913,7 +919,7 @@ export async function runDsh(
             redactKnownSecrets(processResult.stderr.trim(), workerSecrets),
           );
         }
-        output = parseDshOutput(processResult.stdout, request.operation);
+        output = parseDshOutput(processResult.stdout, request.operation, request.taskOutputSchema);
       } catch (error: unknown) {
         executionFailure = error;
       }

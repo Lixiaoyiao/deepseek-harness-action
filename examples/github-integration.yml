@@ -1,0 +1,76 @@
+# v0.6.0 GitHub integration example. Replace the Action tag, maintainer and
+# assignee placeholders, validation argv, and container image before use.
+name: DSH GitHub integration
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [labeled, assigned]
+  pull_request_target:
+    types: [labeled, assigned]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: dsh-integration-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: >-
+      github.event.sender.id != 41898282 &&
+      (github.event_name != 'issue_comment' ||
+       contains(github.event.comment.body || '', '/deepseek'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # pull_request_target stays on the immutable trusted base; other
+          # routes use the trusted default-branch workflow definition.
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
+        id: dsh
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          dsh-version: 0.1.1-rc.2
+          trigger-phrase: /deepseek
+          label-trigger: dsh-ready
+          assignee-trigger: REPLACE_WITH_ASSIGNEE_LOGIN
+          allowed-actors: REPLACE_WITH_MAINTAINER_LOGIN
+          allowed-bots: ""
+          include-comments-by-actor: "*"
+          exclude-comments-by-actor: dependabot[bot],renovate[bot]
+          prompt: Handle the maintainer-routed Issue or review the selected pull request.
+          task-access: write
+          base-branch: "" # Empty means the trusted repository default branch.
+          branch-prefix: dsh/
+          branch-name-template: "{{prefix}}{{entityType}}-{{entityNumber}}-{{operation}}-{{key}}"
+          permission-profile: custom
+          allowed-tools: >-
+            ["workspace.read","workspace.search","workspace.edit","github.issue.labels.set","github.comment.create"]
+          allow-write: "true"
+          run-tests: "true"
+          validation-integrity: strict
+          test-commands: >-
+            [["node","-e","console.error('REQUIRED: replace test-commands with repository validation');process.exit(1)"]]
+          container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
+          task-output-schema: >-
+            {"type":"object","properties":{"status":{"type":"string","enum":["completed","blocked"]},"note":{"type":"string","maxLength":500}},"required":["status"],"additionalProperties":false}
+
+      - name: Inspect Controller-validated task output
+        if: ${{ always() && steps.dsh.outputs['task-output'] != '' }}
+        env:
+          DSH_TASK_OUTPUT: ${{ steps.dsh.outputs['task-output'] }}
+        run: printf '%s\n' "$DSH_TASK_OUTPUT" | jq .
+
+# Trigger and branch inputs are trusted workflow configuration only. Never
+# interpolate Issue/PR/comment/model content into them. Typed github.* tools
+# remain bound to the current Controller entity and cannot call arbitrary APIs.

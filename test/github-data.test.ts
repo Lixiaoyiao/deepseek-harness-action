@@ -6,6 +6,7 @@ import {
   fetchIssueSnapshot,
   fetchPullRequestSnapshot,
   filterCommentsToTriggerTime,
+  filterHistoricalCommentsByActor,
 } from "../src/github/fetch.js";
 import { pullRequestContext } from "./helpers.js";
 
@@ -126,6 +127,24 @@ describe("GitHub data snapshotting", () => {
     ).toEqual([1]);
   });
 
+  it("filters only historical comment context with exclusion precedence", () => {
+    const comments = [
+      { ...comment(1, "2026-08-14T00:00:00Z"), author: "alice" },
+      { ...comment(2, "2026-08-14T00:00:00Z"), author: "renovate[bot]" },
+      { ...comment(3, "2026-08-14T00:00:00Z"), author: "bob" },
+      { ...comment(9, "2026-08-14T00:00:00Z"), author: "blocked" },
+    ];
+    expect(
+      filterHistoricalCommentsByActor(comments, 9, {
+        include: ["alice", "*[bot]"],
+        exclude: ["renovate[bot]", "alice"],
+      }).map(({ id }) => id),
+    ).toEqual([9]);
+    expect(filterHistoricalCommentsByActor(comments, undefined).map(({ id }) => id)).toEqual([
+      1, 2, 3, 9,
+    ]);
+  });
+
   it("aborts when a PR head changes during snapshot collection", async () => {
     const client = pullClient([pullResponse(), pullResponse("d".repeat(40))]);
     await expect(fetchPullRequestSnapshot(client, pullRequestContext(), 7)).rejects.toThrow(
@@ -188,6 +207,49 @@ describe("GitHub data snapshotting", () => {
     });
     const snapshot = await fetchPullRequestSnapshot(client, context, 7);
     expect(snapshot.comments).toMatchObject([{ id: 9, body: "@dsh review from webhook" }]);
+  });
+
+  it("applies actor filters while collecting bounded historical comments", async () => {
+    const client = pullClient([pullResponse(), pullResponse()]);
+    const listComments = client.rest.issues.listComments as unknown as ReturnType<typeof vi.fn>;
+    listComments.mockResolvedValue({
+      data: [
+        {
+          id: 1,
+          body: "maintainer context",
+          created_at: "2026-08-14T00:58:00Z",
+          updated_at: "2026-08-14T00:58:00Z",
+          user: { login: "alice" },
+        },
+        {
+          id: 2,
+          body: "bot context",
+          created_at: "2026-08-14T00:59:00Z",
+          updated_at: "2026-08-14T00:59:00Z",
+          user: { login: "renovate[bot]" },
+        },
+      ],
+      headers: {},
+    });
+    const context = pullRequestContext({
+      rawEventName: "issue_comment",
+      eventName: "issue_comment",
+      payload: {
+        issue: { title: "PR", body: "body", user: { login: "alice" } },
+        comment: {
+          id: 9,
+          body: "@dsh review",
+          created_at: "2026-08-14T01:00:00Z",
+          updated_at: "2026-08-14T01:00:00Z",
+          user: { login: "blocked" },
+        },
+      },
+    });
+    const snapshot = await fetchPullRequestSnapshot(client, context, 7, {
+      include: ["alice", "*[bot]"],
+      exclude: ["renovate[bot]"],
+    });
+    expect(snapshot.comments.map(({ id }) => id)).toEqual([1, 9]);
   });
 
   it("aborts when an issue changes during comment collection", async () => {

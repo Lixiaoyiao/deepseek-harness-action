@@ -7,13 +7,27 @@ import type { GitHubContext } from "./context.js";
 export function normalizeActor(actor: string): string {
   return actor
     .trim()
+    .replace(/^@/u, "")
     .toLowerCase()
     .replace(/\[bot\]$/u, "");
 }
 
 export function isAllowedActor(actor: string, allowlist: readonly string[]): boolean {
+  const raw = actor.trim().replace(/^@/u, "").toLowerCase();
   const normalized = normalizeActor(actor);
-  return allowlist.some((entry) => entry === "*" || normalizeActor(entry) === normalized);
+  return allowlist.some((entry) => {
+    const pattern = entry.trim().replace(/^@/u, "").toLowerCase();
+    if (pattern === "*") return true;
+    if (pattern === "*[bot]") return raw.endsWith("[bot]");
+    return normalizeActor(pattern) === normalized;
+  });
+}
+
+export function areContextActorsAllowed(
+  context: GitHubContext,
+  allowlist: readonly string[],
+): boolean {
+  return getActorsToCheck(context).every((actor) => isAllowedActor(actor, allowlist));
 }
 
 /**

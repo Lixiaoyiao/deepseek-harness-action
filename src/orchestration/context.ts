@@ -8,12 +8,14 @@ import { isWorkflowRunContext, type GitHubContext } from "../github/context.js";
 import type { GitHubClient } from "../github/client.js";
 import {
   fetchPullRequestSnapshot,
+  type CommentActorFilter,
   type EntitySnapshot,
   type PullRequestSnapshot,
 } from "../github/fetch.js";
 import type { ActionInputs } from "../inputs.js";
 import { ActionConfigurationError, OperationContextError, PolicyDeniedError } from "../errors.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
+import { validateRefName } from "../security/refs.js";
 
 export function runUrl(context: GitHubContext): string {
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
@@ -42,6 +44,14 @@ export function taskIdentity(
         allowedTools: inputs.allowedTools,
         disallowedTools: inputs.disallowedTools,
         validationIntegrity: inputs.validationIntegrity,
+        ...(command.operation === "task" && inputs.taskOutputSchema !== undefined
+          ? { taskOutputSchema: inputs.taskOutputSchema }
+          : {}),
+        ...(inputs.baseBranch === "" ? {} : { baseBranch: inputs.baseBranch }),
+        ...(inputs.branchPrefix === "dsh/" ? {} : { branchPrefix: inputs.branchPrefix }),
+        ...(inputs.branchNameTemplate === ""
+          ? {}
+          : { branchNameTemplate: inputs.branchNameTemplate }),
         toolConfig: inputs.toolConfig,
         // This identity can influence public branch names and PR markers. Bind
         // it to the redacted audit surface, never the secret-bearing effective
@@ -64,6 +74,16 @@ export function issueTaskIdentity(
     .digest("hex");
 }
 
+/** Resolve maintainer configuration against the trusted repository metadata. */
+export function resolveBaseBranch(
+  context: GitHubContext,
+  configuredBaseBranch: string,
+): string | undefined {
+  const branch =
+    configuredBaseBranch === "" ? context.repository.defaultBranch : configuredBaseBranch;
+  return branch === undefined ? undefined : validateRefName(branch);
+}
+
 export function boundedText(value: string, maximumBytes: number): string {
   const raw = Buffer.from(value, "utf8");
   if (raw.byteLength <= maximumBytes) return value;
@@ -80,17 +100,22 @@ export function assertOperationContext(
   command: RoutedCommand,
   context: GitHubContext,
   snapshot: EntitySnapshot | undefined,
+  baseBranch: string | undefined = context.repository.defaultBranch,
 ): void {
   const assertTrustedWriteTarget = (): void => {
-    const defaultBranch = context.repository.defaultBranch;
-    if (defaultBranch === undefined) {
+    if (baseBranch === undefined) {
       throw new PolicyDeniedError(
-        "Cannot authorize a trusted write without the default branch identity",
+        "Cannot authorize a trusted write without the base branch identity",
       );
     }
-    if (snapshot?.kind === "pull_request" && snapshot.headRef === defaultBranch) {
+    const protectedBranches = new Set(
+      [context.repository.defaultBranch, baseBranch].filter(
+        (branch): branch is string => branch !== undefined,
+      ),
+    );
+    if (snapshot?.kind === "pull_request" && protectedBranches.has(snapshot.headRef)) {
       throw new PolicyDeniedError(
-        "Refusing to update the repository default branch from a pull-request write",
+        "Refusing to update the repository default branch or configured base branch from a pull-request write",
       );
     }
   };
@@ -186,14 +211,15 @@ function sanitizedSnapshot(snapshot: EntitySnapshot): unknown {
 export async function resolvePullRequest(
   client: GitHubClient,
   context: GitHubContext,
+  actorFilter: CommentActorFilter = {},
 ): Promise<PullRequestSnapshot | undefined> {
   if (context.kind === "entity" && context.isPullRequest) {
-    return await fetchPullRequestSnapshot(client, context, context.entityNumber);
+    return await fetchPullRequestSnapshot(client, context, context.entityNumber, actorFilter);
   }
   if (isWorkflowRunContext(context)) {
     const pullNumber = context.workflowRun.pullRequestNumbers[0];
     if (pullNumber !== undefined) {
-      return await fetchPullRequestSnapshot(client, context, pullNumber);
+      return await fetchPullRequestSnapshot(client, context, pullNumber, actorFilter);
     }
   }
   return undefined;

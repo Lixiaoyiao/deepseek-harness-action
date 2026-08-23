@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RunOutcome } from "../src/result.js";
 
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   setOutput: vi.fn(),
   setFailed: vi.fn(),
   warning: vi.fn(),
+  exit: vi.fn(),
   addHeading: vi.fn(),
   addRaw: vi.fn(),
   summaryWrite: vi.fn(),
@@ -38,7 +39,17 @@ vi.mock("@actions/core", () => {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  process.exitCode = undefined;
+  vi.spyOn(process, "exit").mockImplementation((code) => {
+    mocks.exit(code);
+    return undefined as never;
+  });
   mocks.summaryWrite.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  process.exitCode = undefined;
 });
 
 describe("action entrypoint finalization", () => {
@@ -63,6 +74,7 @@ describe("action entrypoint finalization", () => {
     mocks.runAction.mockResolvedValue(failure);
 
     await import("../src/index.js");
+    expect(mocks.exit).toHaveBeenCalledWith(0);
     expect(mocks.runAction.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
     expect(mocks.setFailed).toHaveBeenCalledOnce();
 

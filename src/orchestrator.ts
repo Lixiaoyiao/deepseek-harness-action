@@ -11,7 +11,7 @@ import { finalizeWorkflowRunRoute, routeCommand, type RoutedCommand } from "./co
 import { finishDiagnosis } from "./commands/diagnose.js";
 import { finishReview } from "./commands/review.js";
 import { publishTaskAnswer } from "./commands/task.js";
-import { AgentDeadlineError, runAgentLoop } from "./agent/loop.js";
+import { AgentDeadlineError, runAgentLoop, type AgentToolReceipt } from "./agent/loop.js";
 import { DshAbortedError } from "./dsh/errors.js";
 import { PolicyDeniedError } from "./errors.js";
 import { createGitHubClient } from "./github/client.js";
@@ -22,19 +22,30 @@ import { checkActorPermissions } from "./github/permissions.js";
 import { StickyProgressReporter } from "./github/progress.js";
 import { revalidatePullRequestHead } from "./write/pr.js";
 import { materializeRepositoryAtSha } from "./github/repository.js";
-import { createWorkspaceSnapshot, type WorkspaceSnapshot } from "./write/workspace.js";
+import {
+  createWorkspaceSnapshot,
+  fingerprintWorkspace,
+  type WorkspaceSnapshot,
+} from "./write/workspace.js";
 import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
 import { buildPermissionAudit, type PermissionAudit } from "./permissions/profile.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
+import {
+  GitHubToolFlushError,
+  GitHubToolProvider,
+  type GitHubToolBinding,
+  type GitHubToolFlushReceipt,
+} from "./tools/github.js";
 import { ToolRouter } from "./tools/router.js";
 import { loadInputs, type ActionInputs } from "./inputs.js";
 import { throwIfCancelled } from "./lifecycle/cancellation.js";
 import { PHASE_TIMEOUTS, phaseTimeoutMs, settleWithin } from "./lifecycle/deadline.js";
 import {
   describeActionFailure,
+  describeCancellationFailure,
   type ActionFailure,
   type ActionPhase,
   type AgentRunSummary,
@@ -57,11 +68,17 @@ import {
   buildContextPacket,
   deferProgressUntilWriteValidation,
   requireWorkspace,
+  resolveBaseBranch,
   resolvePullRequest,
   runUrl,
   taskIdentity,
 } from "./orchestration/context.js";
 import { executeWrite, type WriteOutcome } from "./orchestration/write.js";
+import {
+  assertValidationSucceeded,
+  assertWriteValidationConfigured,
+  runValidationCommandsInDocker,
+} from "./write/validate.js";
 
 export {
   assertOperationContext,
@@ -80,7 +97,9 @@ interface RunState {
   permission?: PermissionAudit;
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
+  validationPassed?: boolean;
   progressFailure?: ProgressFailureFinalization;
+  partialWrite?: WriteOutcome;
 }
 
 interface ProgressFailureFinalization {
@@ -88,6 +107,100 @@ interface ProgressFailureFinalization {
   readonly deadlineMs: number;
   status: "pending" | "succeeded" | "failed";
   promise: Promise<void>;
+}
+
+function githubToolBinding(
+  context: ReturnType<typeof parseGitHubContext>,
+  snapshot: EntitySnapshot | undefined,
+): GitHubToolBinding | undefined {
+  const repository = {
+    repositoryId: context.repository.id,
+    owner: context.repository.owner,
+    repo: context.repository.repo,
+  } as const;
+  if (context.kind === "entity" && snapshot?.kind === "issue") {
+    return {
+      ...repository,
+      target: "issue",
+      entityNumber: snapshot.number,
+      state: snapshot.state,
+      updatedAt: snapshot.updatedAt,
+      contentFingerprint: snapshot.contentFingerprint,
+    };
+  }
+  if (context.kind === "entity" && snapshot?.kind === "pull_request") {
+    if (snapshot.headRepositoryId === null) return undefined;
+    return {
+      ...repository,
+      target: "pull_request",
+      entityNumber: snapshot.number,
+      headSha: snapshot.headSha,
+      headRef: snapshot.headRef,
+      headRepositoryId: snapshot.headRepositoryId,
+      baseSha: snapshot.baseSha,
+      baseRef: snapshot.baseRef,
+      baseRepositoryId: snapshot.baseRepositoryId,
+    };
+  }
+  if (context.kind === "automation" && context.workflowRun !== undefined) {
+    return { ...repository, target: "workflow_run", headSha: context.workflowRun.headSha };
+  }
+  return undefined;
+}
+
+function mergeGitHubFlushReceipts(
+  receipts: readonly AgentToolReceipt[],
+  flushes: readonly GitHubToolFlushReceipt[],
+): readonly AgentToolReceipt[] {
+  const byCallId = new Map(flushes.map((flush) => [flush.result.callId, flush]));
+  return receipts.map((receipt) => {
+    const flush = byCallId.get(receipt.callId);
+    if (flush === undefined) return receipt;
+    const output =
+      typeof flush.result.output === "object" && flush.result.output !== null
+        ? (flush.result.output as Record<string, unknown>)
+        : {};
+    const effect = output.effect;
+    return {
+      ...receipt,
+      ok: flush.result.ok,
+      durationMs: receipt.durationMs + flush.durationMs,
+      ...(effect === "created" ||
+      effect === "updated" ||
+      effect === "unchanged" ||
+      effect === "read" ||
+      effect === "scheduled"
+        ? { effect }
+        : {}),
+      ...(!flush.result.ok ? { error: true } : {}),
+      ...(typeof output.target === "string" && Buffer.byteLength(output.target, "utf8") <= 160
+        ? { target: output.target }
+        : {}),
+      ...(typeof output.attempts === "number" &&
+      Number.isInteger(output.attempts) &&
+      output.attempts >= 0 &&
+      output.attempts <= 2
+        ? { attempts: output.attempts }
+        : {}),
+      ...(typeof output.reconciled === "boolean" ? { reconciled: output.reconciled } : {}),
+      ...(output.externalEffect === "possible" || output.externalEffect === "confirmed"
+        ? { externalEffect: output.externalEffect }
+        : {}),
+    };
+  });
+}
+
+function githubFlushHasExternalEffect(receipts: readonly GitHubToolFlushReceipt[]): boolean {
+  return receipts.some(({ result }) => {
+    if (typeof result.output !== "object" || result.output === null) return false;
+    const output = result.output as Record<string, unknown>;
+    return (
+      output.effect === "created" ||
+      output.effect === "updated" ||
+      output.externalEffect === "possible" ||
+      output.externalEffect === "confirmed"
+    );
+  });
 }
 
 function progressFailureStatus(
@@ -103,13 +216,72 @@ export interface RunActionOptions {
   readonly signal?: AbortSignal;
 }
 
+interface RunDeadline {
+  readonly deadlineMs: number;
+  readonly signal: AbortSignal;
+  dispose(): void;
+}
+
+function createRunDeadline(
+  startedAt: number,
+  timeoutMinutes: number,
+  parentSignal?: AbortSignal,
+): RunDeadline {
+  const deadlineMs = startedAt + timeoutMinutes * 60_000;
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new AgentDeadlineError());
+  const remainingMs = deadlineMs - Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (remainingMs <= 0) abort();
+  else {
+    timer = setTimeout(abort, remainingMs);
+    timer.unref();
+  }
+  return {
+    deadlineMs,
+    signal:
+      parentSignal === undefined
+        ? controller.signal
+        : AbortSignal.any([parentSignal, controller.signal]),
+    dispose: () => {
+      if (timer !== undefined) clearTimeout(timer);
+    },
+  };
+}
+
+function failureFromSignal(error: unknown, signal?: AbortSignal): unknown {
+  if (signal?.aborted !== true || !(signal.reason instanceof Error)) return error;
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if (current === signal.reason || current.name === "AbortError") return signal.reason;
+    current = current.cause;
+  }
+  return error;
+}
+
+function isCancellationError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if (
+      current instanceof DshAbortedError ||
+      current.message === "DSH execution was aborted" ||
+      ("code" in current && current.code === "DSH_ABORTED")
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 function startProgressFailure(
   state: RunState,
   error: unknown,
+  failureOverride?: ActionFailure,
 ): ProgressFailureFinalization | undefined {
   const progress = state.progress;
   if (progress === undefined) return undefined;
-  const failure = describeActionFailure(error, state.phase);
+  const failure = failureOverride ?? describeActionFailure(error, state.phase);
   const existing = state.progressFailure;
   if (
     existing !== undefined &&
@@ -137,8 +309,12 @@ function startProgressFailure(
   return attempt;
 }
 
-async function finishProgressFailure(state: RunState, error: unknown): Promise<void> {
-  const attempt = state.progressFailure ?? startProgressFailure(state, error);
+async function finishProgressFailure(
+  state: RunState,
+  error: unknown,
+  failureOverride?: ActionFailure,
+): Promise<void> {
+  const attempt = state.progressFailure ?? startProgressFailure(state, error, failureOverride);
   if (attempt === undefined || attempt.status === "succeeded") return;
   if (attempt.status === "failed") {
     core.warning(
@@ -200,11 +376,11 @@ function successfulValidation(
 async function runActionInternal(
   state: RunState,
   startedAt: number,
-  options: RunActionOptions,
+  inputs: ActionInputs,
+  signal: AbortSignal,
+  deadlineMs: number,
 ): Promise<RunOutcome> {
-  throwIfCancelled(options.signal);
-  state.phase = "configuration";
-  const inputs = loadInputs();
+  throwIfCancelled(signal);
   state.validationCommandCount = inputs.testCommands.length;
   core.setSecret(inputs.githubToken);
   core.setSecret(inputs.deepseekApiKey);
@@ -215,6 +391,7 @@ async function runActionInternal(
   state.phase = "routing";
   const payload = await readEventPayload(process.env.GITHUB_EVENT_PATH);
   const context = parseGitHubContext(process.env, payload);
+  const baseBranch = resolveBaseBranch(context, inputs.baseBranch);
   const currentRunUrl = runUrl(context);
   state.runUrl = currentRunUrl;
   let command = routeCommand(context, inputs);
@@ -228,7 +405,10 @@ async function runActionInternal(
     return {
       ...outcomeContext(state, startedAt),
       conclusion: "neutral",
-      summary: "No matching @dsh command or automatic event",
+      summary:
+        inputs.triggerPhrase === "@dsh"
+          ? "No matching @dsh command or automatic event"
+          : "No matching configured command or automatic event",
       findingsCount: 0,
     };
   }
@@ -246,12 +426,18 @@ async function runActionInternal(
     };
   }
 
-  const client = createGitHubClient(inputs.githubToken);
-  throwIfCancelled(options.signal);
+  const client = createGitHubClient(inputs.githubToken, signal);
+  throwIfCancelled(signal);
   state.phase = "authorization";
-  const permissions = await checkActorPermissions(client, context);
+  const permissions = await checkActorPermissions(client, context, inputs.allowedBots);
+  throwIfCancelled(signal);
   state.phase = "context";
-  const pullRequest = await resolvePullRequest(client, context);
+  const commentActorFilter = {
+    include: inputs.includeCommentsByActor,
+    exclude: inputs.excludeCommentsByActor,
+  };
+  const pullRequest = await resolvePullRequest(client, context, commentActorFilter);
+  throwIfCancelled(signal);
   command = finalizeWorkflowRunRoute(context, command, pullRequest !== undefined);
   state.operation = command.operation;
   let snapshot: EntitySnapshot | undefined = pullRequest;
@@ -261,9 +447,11 @@ async function runActionInternal(
       context,
       context.entityNumber,
       context.isPullRequest,
+      commentActorFilter,
     );
+    throwIfCancelled(signal);
   }
-  assertOperationContext(command, context, snapshot);
+  assertOperationContext(command, context, snapshot, baseBranch);
 
   state.phase = "authorization";
   const policy = evaluatePolicy({
@@ -287,13 +475,17 @@ async function runActionInternal(
   const initializeProgress = (): StickyProgressReporter | undefined => {
     if (!inputs.progressComment || issueNumber === undefined) return undefined;
     state.progress ??= new StickyProgressReporter({
-      client,
+      // Terminal publication deliberately receives its own short signal after
+      // SIGTERM. Do not bind this dedicated Controller client to the already
+      // aborted run signal; the reporter supplies a bounded signal and an
+      // abort race for every non-terminal and terminal request.
+      client: createGitHubClient(inputs.githubToken),
       target: { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
       expectedAuthorId: inputs.botUserId,
       operation: command.operation,
       policy,
       runUrl: currentRunUrl,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      signal,
     });
     return state.progress;
   };
@@ -302,7 +494,7 @@ async function runActionInternal(
       "context",
       "Permission checks passed. Preparing a bounded, immutable context snapshot.",
     );
-    throwIfCancelled(options.signal);
+    throwIfCancelled(signal);
   }
 
   state.phase = "context";
@@ -318,17 +510,17 @@ async function runActionInternal(
     ) {
       tempRoot = await mkdtemp(join(tmpdir(), "dsh-action-workspace-"));
       const immutableSource = join(tempRoot, "source");
-      const baseSha =
-        snapshot?.kind === "pull_request"
-          ? snapshot.headSha
-          : await import("./write/github.js").then(({ getBranchHead }) =>
-              getBranchHead(
-                client,
-                context.repository.owner,
-                context.repository.repo,
-                context.repository.defaultBranch ?? "main",
-              ),
-            );
+      const baseSha = await (async (): Promise<string> => {
+        // Pull-request review/fix always stays bound to the immutable PR head.
+        if (snapshot?.kind === "pull_request") return snapshot.headSha;
+        if (baseBranch === undefined) {
+          throw new PolicyDeniedError("Cannot bind repository content without a base branch");
+        }
+        return await import("./write/github.js").then(({ getBranchHead }) =>
+          getBranchHead(client, context.repository.owner, context.repository.repo, baseBranch),
+        );
+      })();
+      throwIfCancelled(signal);
       boundWriteSha = baseSha;
       await materializeRepositoryAtSha(
         client,
@@ -337,20 +529,26 @@ async function runActionInternal(
         baseSha,
         immutableSource,
       );
+      throwIfCancelled(signal);
       agentWorkspace = join(tempRoot, "repository");
       workspaceCopy = await createWorkspaceSnapshot(
         { kind: "materialized-tree", root: immutableSource },
         agentWorkspace,
       );
+      throwIfCancelled(signal);
     } else {
       tempRoot = await mkdtemp(join(tmpdir(), "dsh-action-empty-"));
       agentWorkspace = tempRoot;
     }
     const packet = await buildContextPacket(client, context, command, snapshot, inputs);
+    throwIfCancelled(signal);
+    const trustedGitHubBinding = githubToolBinding(context, snapshot);
     const resolvedTools = resolveEffectiveTools(inputs.allowedTools, inputs.toolConfig, policy, {
       permissionProfile: inputs.permissionProfile,
       disallowedTools: inputs.disallowedTools,
       isolation: inputs.isolation,
+      ...(trustedGitHubBinding === undefined ? {} : { githubBinding: trustedGitHubBinding }),
+      allowWrite: inputs.allowWrite,
     });
     const deniedTools = new Set(resolvedTools.permission.disallowedTools);
     const extensionAllowedTools = resolvedTools.permission.requestedTools.filter(
@@ -389,12 +587,28 @@ async function runActionInternal(
             containerImage: inputs.containerImage,
             redact,
           });
+    const githubToolProvider =
+      tools.github.length === 0 || trustedGitHubBinding === undefined
+        ? undefined
+        : new GitHubToolProvider({
+            ids: tools.github,
+            binding: trustedGitHubBinding,
+            policy,
+            allowWrite: inputs.allowWrite,
+            expectedAuthorId: inputs.botUserId,
+            client,
+          });
+    const controllerProviders = [commandToolProvider, githubToolProvider].filter(
+      (provider): provider is CommandToolProvider | GitHubToolProvider => provider !== undefined,
+    );
     const toolProvider =
-      commandToolProvider === undefined ? undefined : new ToolRouter([commandToolProvider]);
+      controllerProviders.length === 0 ? undefined : new ToolRouter(controllerProviders);
     const agentTools = {
       ...tools,
       manifests: [
-        ...tools.manifests.filter(({ provider }) => provider !== "command"),
+        ...tools.manifests.filter(
+          ({ provider }) => provider !== "command" && provider !== "github",
+        ),
         ...(toolProvider?.manifest() ?? []),
       ],
     };
@@ -406,7 +620,118 @@ async function runActionInternal(
     });
     state.permission = permission;
     const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
-    const deadlineMs = startedAt + inputs.timeoutMinutes * 60_000;
+    const githubMutationTools = tools.github.filter((id) => id !== "github.checks.read");
+    let githubValidationFingerprint: string | undefined;
+    let githubValidationBudget: ValidationDeadline | undefined;
+    const ensureGitHubMutationValidation = async (): Promise<void> => {
+      if (githubMutationTools.length === 0) return;
+      if (workspaceCopy === undefined) {
+        throw new PolicyDeniedError(
+          "GitHub mutation tools require an immutable Controller workspace snapshot",
+        );
+      }
+      const validationWorkspace = workspaceCopy;
+      assertWriteValidationConfigured(inputs.runTests, inputs.testCommands);
+      const before = await fingerprintWorkspace(validationWorkspace.workerRoot);
+      if (before === githubValidationFingerprint) return;
+      state.phase = "validation";
+      if (githubValidationBudget === undefined) {
+        const phaseMs = phaseTimeoutMs(deadlineMs, PHASE_TIMEOUTS.validationMs, Date.now);
+        if (phaseMs <= 0) throw new AgentDeadlineError();
+        githubValidationBudget = {
+          deadlineMs: Date.now() + phaseMs,
+          signal,
+        };
+      }
+      const validationBudget = githubValidationBudget;
+      const changes = await withinSharedValidationDeadline(
+        async () => inspectWorkspaceChanges(validationWorkspace),
+        validationBudget,
+      );
+      let integrity = await withinSharedValidationDeadline(
+        async () =>
+          inspectValidationIntegrity({
+            snapshot: validationWorkspace,
+            changes,
+            commands: inputs.testCommands,
+            mode: inputs.validationIntegrity,
+          }),
+        validationBudget,
+      );
+      integrity = await withinSharedValidationDeadline(
+        async () =>
+          enforceValidationIntegrity({
+            snapshot: validationWorkspace,
+            commands: inputs.testCommands,
+            audit: integrity,
+            baselineReplay: {
+              containerImage: inputs.containerImage,
+              timeoutMs: remainingSharedValidationMs(validationBudget),
+              signal,
+            },
+          }),
+        validationBudget,
+      );
+      state.validationIntegrity = integrity;
+      const validationResults = await withinSharedValidationDeadline(
+        async () =>
+          runValidationCommandsInDocker(
+            validationWorkspace.workerRoot,
+            inputs.testCommands,
+            inputs.containerImage,
+            remainingSharedValidationMs(validationBudget),
+            undefined,
+            signal,
+          ),
+        validationBudget,
+      );
+      assertValidationSucceeded(validationResults);
+      state.validationPassed = true;
+      const after = await fingerprintWorkspace(validationWorkspace.workerRoot);
+      if (after !== before) {
+        throw new PolicyDeniedError(
+          "Workspace changed while validating deferred GitHub mutations; refusing mutation",
+        );
+      }
+      githubValidationFingerprint = after;
+    };
+    const githubFlushReceipts: GitHubToolFlushReceipt[] = [];
+    const recordGitHubFlushReceipts = (receipts: readonly GitHubToolFlushReceipt[]): void => {
+      githubFlushReceipts.push(...receipts);
+      if (githubFlushHasExternalEffect(receipts)) {
+        state.partialWrite ??= { writeStatus: "partial-success" };
+      }
+      if (state.agent?.toolReceipts !== undefined) {
+        state.agent = {
+          ...state.agent,
+          toolReceipts: mergeGitHubFlushReceipts(state.agent.toolReceipts, githubFlushReceipts),
+        };
+      }
+    };
+    const flushGitHubMutations = async (remainingMs: number): Promise<void> => {
+      if (githubToolProvider?.hasPendingMutations() !== true) return;
+      await ensureGitHubMutationValidation();
+      state.phase = "write";
+      try {
+        recordGitHubFlushReceipts(
+          await githubToolProvider.flush({
+            workspacePath: agentWorkspace,
+            timeoutMs: Math.min(remainingMs, deadlineMs - Date.now()),
+            signal,
+          }),
+        );
+      } catch (error: unknown) {
+        if (error instanceof GitHubToolFlushError) {
+          recordGitHubFlushReceipts(error.receipts);
+        }
+        throw error;
+      }
+    };
+
+    // Mutation requests are deferred until finalization, but validate the exact
+    // immutable baseline before the first Agent turn so no model-controlled
+    // path can introduce a pre-validation GitHub side effect.
+    if (githubMutationTools.length > 0) await ensureGitHubMutationValidation();
 
     state.phase = "agent";
     const loop = await runAgentLoop(
@@ -422,7 +747,7 @@ async function runActionInternal(
       inputs,
       {
         deadlineMs,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        signal,
         ...(toolProvider === undefined ? {} : { toolProvider }),
         redact,
         onTurn: async (turn, maxTurns) => {
@@ -495,13 +820,13 @@ async function runActionInternal(
         finalize: async (agentResult, remainingMs): Promise<FinalizedOperation> => {
           let validationBudget: ValidationDeadline | undefined;
           const remainingControllerMs = (): number => {
-            throwIfCancelled(options.signal);
+            throwIfCancelled(signal);
             const remaining = Math.min(remainingMs, deadlineMs - Date.now());
             if (remaining <= 0) throw new AgentDeadlineError();
             return remaining;
           };
           const controllerValidationBudget = (): ValidationDeadline => {
-            throwIfCancelled(options.signal);
+            throwIfCancelled(signal);
             if (validationBudget === undefined) {
               const phaseMs = Math.min(
                 remainingControllerMs(),
@@ -509,7 +834,7 @@ async function runActionInternal(
               );
               validationBudget = {
                 deadlineMs: Date.now() + phaseMs,
-                ...(options.signal === undefined ? {} : { signal: options.signal }),
+                signal,
               };
             }
             return validationBudget;
@@ -603,6 +928,7 @@ async function runActionInternal(
           if (command.operation === "task") {
             if ((changes?.all.length ?? 0) === 0) {
               remainingControllerMs();
+              await flushGitHubMutations(remainingControllerMs());
               state.phase = "publication";
               const commentId =
                 issueNumber === undefined
@@ -651,7 +977,7 @@ async function runActionInternal(
                   baselineReplay: {
                     containerImage: inputs.containerImage,
                     timeoutMs: remainingValidationMs(),
-                    ...(options.signal === undefined ? {} : { signal: options.signal }),
+                    signal,
                   },
                 }),
               );
@@ -678,20 +1004,37 @@ async function runActionInternal(
             (phase) => {
               state.phase = phase;
             },
-            options.signal,
+            signal,
           );
+          state.partialWrite = { ...write, writeStatus: "partial-success" };
+          // executeWrite has completed the existing Controller validation and
+          // Validation Integrity gates for this exact workspace revision.
+          if (
+            snapshot?.kind === "pull_request" &&
+            write.commitSha !== undefined &&
+            githubToolProvider !== undefined
+          ) {
+            githubToolProvider.advancePullHead(write.commitSha, snapshot.headRef);
+          }
+          githubValidationFingerprint = await fingerprintWorkspace(agentWorkspace);
+          await flushGitHubMutations(remainingControllerMs());
+          delete state.partialWrite;
           return { kind: "write", write };
         },
       },
     );
     const agentResult = loop.agent;
+    const taskOutput =
+      command.operation === "task" && agentResult.output.taskOutput !== undefined
+        ? { taskOutput: agentResult.output.taskOutput }
+        : {};
     state.agent = {
       durationMs: agentResult.durationMs,
       isolation: agentResult.isolationReport,
       turns: loop.stats.turns,
       toolCalls: loop.stats.toolCalls,
       validationRetries: loop.stats.validationRetries,
-      toolReceipts: loop.stats.toolReceipts,
+      toolReceipts: mergeGitHubFlushReceipts(loop.stats.toolReceipts, githubFlushReceipts),
       ...(agentResult.toolReceipts === undefined
         ? {}
         : { dshToolReceipts: agentResult.toolReceipts }),
@@ -709,6 +1052,7 @@ async function runActionInternal(
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
         validation: { status: "not-applicable", commandCount: 0 },
+        ...taskOutput,
       };
     }
     if (finalized.kind === "review") {
@@ -720,6 +1064,7 @@ async function runActionInternal(
         findingsCount: finalized.publication.selected,
         publication: finalized.publication,
         validation: { status: "not-applicable", commandCount: 0 },
+        ...taskOutput,
       };
     }
     if (finalized.kind === "diagnose" || finalized.kind === "answer") {
@@ -729,19 +1074,23 @@ async function runActionInternal(
         operation: command.operation,
         summary: agentResult.output.summary,
         findingsCount: agentResult.output.findings.length,
-        validation: {
-          status: "not-applicable",
-          commandCount: 0,
-          ...(state.validationIntegrity === undefined
-            ? {}
-            : { integrity: state.validationIntegrity }),
-        },
+        validation:
+          finalized.kind === "answer" && githubMutationTools.length > 0
+            ? successfulValidation(inputs, state.validationIntegrity)
+            : {
+                status: "not-applicable",
+                commandCount: 0,
+                ...(state.validationIntegrity === undefined
+                  ? {}
+                  : { integrity: state.validationIntegrity }),
+              },
         ...(finalized.kind !== "answer" || !finalized.noChanges
           ? {}
           : { writeStatus: "no-changes" as const, changedPaths: [] }),
         ...(finalized.kind !== "answer" || finalized.commentId === undefined
           ? {}
           : { commentId: finalized.commentId }),
+        ...taskOutput,
       };
     }
     const write = finalized.write;
@@ -764,6 +1113,7 @@ async function runActionInternal(
       summary: agentResult.output.summary,
       findingsCount: agentResult.output.findings.length,
       validation: successfulValidation(inputs, state.validationIntegrity),
+      ...taskOutput,
       ...write,
     };
   } catch (error: unknown) {
@@ -771,7 +1121,11 @@ async function runActionInternal(
     // Begin terminal publication before temporary-directory cleanup. For
     // signal-driven Agent cancellation an even earlier abort listener starts
     // the same idempotent attempt while nested runtime cleanup is still active.
-    startProgressFailure(state, error);
+    startProgressFailure(
+      state,
+      error,
+      isCancellationError(error) ? describeCancellationFailure(state.phase) : undefined,
+    );
     throw error;
   } finally {
     if (tempRoot !== undefined) {
@@ -795,28 +1149,40 @@ async function runActionInternal(
 export async function runAction(options: RunActionOptions = {}): Promise<RunOutcome> {
   const startedAt = Date.now();
   const state: RunState = { phase: "configuration" };
+  let deadline: RunDeadline | undefined;
   const beginCancellationFinalization = (): void => {
     if (state.progress === undefined || state.phase === "publication" || state.phase === "write") {
       return;
     }
-    const cancellation =
-      options.signal?.reason instanceof Error ? options.signal.reason : new DshAbortedError();
-    startProgressFailure(state, cancellation);
+    // A cancellation signal is routing information, not an authority to pick
+    // the public failure identity. Use the explicit result factory so a
+    // foreign-realm or split bundle class cannot become an
+    // ACTION_RUNTIME_FAILED provisional terminal state.
+    startProgressFailure(state, new DshAbortedError(), describeCancellationFailure(state.phase));
   };
   options.signal?.addEventListener("abort", beginCancellationFinalization, { once: true });
   if (options.signal?.aborted === true) beginCancellationFinalization();
   try {
-    return await runActionInternal(state, startedAt, options);
+    throwIfCancelled(options.signal);
+    const inputs = loadInputs();
+    deadline = createRunDeadline(startedAt, inputs.timeoutMinutes, options.signal);
+    return await runActionInternal(state, startedAt, inputs, deadline.signal, deadline.deadlineMs);
   } catch (error: unknown) {
     // Abort-aware boundaries throw their own DshAbortedError. Never replace an
     // independent validation/security/write failure merely because a signal
     // happened to arrive before this catch ran.
-    const failure = describeActionFailure(error, state.phase);
-    await finishProgressFailure(state, error);
+    const effectiveError = failureFromSignal(error, deadline?.signal);
+    const failure = isCancellationError(effectiveError)
+      ? describeCancellationFailure(state.phase)
+      : describeActionFailure(effectiveError, state.phase);
+    await finishProgressFailure(state, effectiveError, failure);
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
-            status: "failed",
+            status:
+              failure.phase === "validation" || state.validationPassed !== true
+                ? "failed"
+                : "passed",
             commandCount: state.validationCommandCount ?? 0,
             ...(state.validationIntegrity === undefined
               ? {}
@@ -830,9 +1196,11 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
       summary: failure.title,
       findingsCount: 0,
       ...(validation === undefined ? {} : { validation }),
+      ...(state.partialWrite ?? {}),
       error: failure,
     };
   } finally {
+    deadline?.dispose();
     options.signal?.removeEventListener("abort", beginCancellationFinalization);
   }
 }

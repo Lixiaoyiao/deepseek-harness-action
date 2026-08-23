@@ -14,6 +14,7 @@ import {
   type ToolDenial,
 } from "../permissions/profile.js";
 import { executeCommandTool } from "./executor.js";
+import { githubToolManifest, resolveGitHubTools, type GitHubToolBinding } from "./github.js";
 import {
   autonomyToolSchema,
   commandToolId,
@@ -21,6 +22,8 @@ import {
   type AutonomyToolId,
   type CommandToolDefinition,
   type CommandToolId,
+  githubToolSchema,
+  type GitHubToolId,
   type NativeToolId,
   type ToolConfiguration,
   type WorkspaceToolId,
@@ -45,6 +48,8 @@ export interface ResolveEffectiveToolsOptions {
   readonly permissionProfile?: PermissionProfile;
   readonly disallowedTools?: readonly AllowedToolId[];
   readonly isolation?: "docker" | "none";
+  readonly githubBinding?: GitHubToolBinding;
+  readonly allowWrite?: boolean;
 }
 
 export interface EffectiveTools {
@@ -52,6 +57,7 @@ export interface EffectiveTools {
   readonly workspace: readonly WorkspaceToolId[];
   readonly manifests: readonly AgentToolManifest[];
   readonly commands: readonly CommandToolDefinition[];
+  readonly github: readonly GitHubToolId[];
   readonly permission: PermissionResolution;
   readonly permissionDenials: readonly ToolDenial[];
   readonly extensions?: EffectiveExtensionPlan;
@@ -141,6 +147,21 @@ export function resolveEffectiveTools(
         "The Controller trust policy denied this command's execution, write, or network grant",
     });
   }
+  const requestedGitHub = new Set(
+    [...requested].filter((id): id is GitHubToolId => githubToolSchema.safeParse(id).success),
+  );
+  const disallowedGitHub = new Set(
+    [...disallowed].filter((id): id is GitHubToolId => githubToolSchema.safeParse(id).success),
+  );
+  const githubResolution = resolveGitHubTools(
+    requestedGitHub,
+    disallowedGitHub,
+    policy,
+    options.githubBinding,
+    options.allowWrite ?? false,
+  );
+  permissionDenials.push(...githubResolution.denials);
+  const github = githubResolution.ids;
   const manifests: AgentToolManifest[] = [
     ...native.map((id) => ({
       id,
@@ -172,8 +193,9 @@ export function resolveEffectiveTools(
       ],
       inputSchema: { type: "object", additionalProperties: false },
     })),
+    ...github.map((id) => githubToolManifest(id)),
   ];
-  return { native, workspace, manifests, commands, permission, permissionDenials };
+  return { native, workspace, manifests, commands, github, permission, permissionDenials };
 }
 
 export interface CommandToolProviderOptions {

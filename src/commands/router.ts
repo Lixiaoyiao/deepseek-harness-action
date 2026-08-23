@@ -1,6 +1,8 @@
 import type { ActionInputs } from "../inputs.js";
+import { areContextActorsAllowed, normalizeActor } from "../github/actors.js";
 import type { GitHubContext } from "../github/context.js";
 import { isAutomaticReviewAction } from "../github/events.js";
+import { removeMarkdownImages } from "../security/redaction.js";
 import { parseCommand, type Operation, type RequestedAccess } from "./parse.js";
 
 export interface CommandSource {
@@ -59,13 +61,60 @@ function mentionBody(context: GitHubContext): string | undefined {
   return undefined;
 }
 
+function payloadStringProperty(
+  payload: Readonly<Record<string, unknown>>,
+  objectName: "label" | "assignee",
+  propertyName: "name" | "login",
+): string | undefined {
+  const value = payload[objectName];
+  if (typeof value !== "object" || value === null || !(propertyName in value)) return undefined;
+  const property = (value as Record<string, unknown>)[propertyName];
+  return typeof property === "string" ? property : undefined;
+}
+
+function configuredEntityTrigger(
+  context: GitHubContext,
+  inputs: ActionInputs,
+): RoutedCommand | null {
+  if (context.kind !== "entity") return null;
+  const label = payloadStringProperty(context.payload, "label", "name");
+  const labelMatches =
+    inputs.labelTrigger !== "" &&
+    context.eventAction === "labeled" &&
+    label?.trim().toLowerCase() === inputs.labelTrigger.toLowerCase();
+  const assignee = payloadStringProperty(context.payload, "assignee", "login");
+  const assigneeMatches =
+    inputs.assigneeTrigger !== "" &&
+    context.eventAction === "assigned" &&
+    assignee !== undefined &&
+    normalizeActor(assignee) === normalizeActor(inputs.assigneeTrigger);
+  if (!labelMatches && !assigneeMatches) return null;
+  return context.isPullRequest
+    ? {
+        operation: "review",
+        source: "automatic-event",
+        instructions: removeMarkdownImages(inputs.prompt),
+        requestedAccess: "read",
+      }
+    : {
+        operation: "task",
+        source: "automatic-event",
+        instructions: removeMarkdownImages(inputs.prompt),
+        requestedAccess: inputs.taskAccess,
+      };
+}
+
 /** Route only trusted action input or the triggering comment/review body. */
 export function routeCommand(context: GitHubContext, inputs: ActionInputs): RoutedCommand | null {
+  // This is a maintainer-defined routing filter only. Authorization remains a
+  // separate Controller decision after GitHub permission and fork checks.
+  if (!areContextActorsAllowed(context, inputs.allowedActors)) return null;
+
   if (inputs.command !== "auto") {
     return {
       operation: inputs.command,
       source: "explicit-input",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess:
         inputs.command === "task"
           ? inputs.taskAccess
@@ -77,9 +126,18 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
 
   const body = mentionBody(context);
   if (body !== undefined) {
-    const parsed = parseCommand(body);
-    if (parsed !== null) return { ...parsed, source: "mention" };
+    const parsed = parseCommand(body, inputs.triggerPhrase);
+    if (parsed !== null) {
+      return {
+        ...parsed,
+        instructions: removeMarkdownImages(parsed.instructions),
+        source: "mention",
+      };
+    }
   }
+
+  const entityTrigger = configuredEntityTrigger(context, inputs);
+  if (entityTrigger !== null) return entityTrigger;
 
   if (
     context.eventName === "pull_request" &&
@@ -89,7 +147,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: "review",
       source: "automatic-event",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: "read",
     };
   }
@@ -98,7 +156,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: inputs.allowWrite ? "fix" : "diagnose",
       source: "automatic-event",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: inputs.allowWrite ? "write" : "read",
     };
   }
@@ -107,7 +165,7 @@ export function routeCommand(context: GitHubContext, inputs: ActionInputs): Rout
     return {
       operation: "task",
       source: "explicit-prompt",
-      instructions: inputs.prompt,
+      instructions: removeMarkdownImages(inputs.prompt),
       requestedAccess: inputs.taskAccess,
     };
   }
