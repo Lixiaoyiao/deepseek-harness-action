@@ -1457,10 +1457,10 @@ jobs:
               (.prompt | contains($trigger)) and
               ((.prompt | contains($history)) | not) and
               (.prompt | contains("[image removed]")) and
-              (.prompt as $prompt | [$inline,$reference,$source,$html,$raw] | all(. as $url;
+              (.prompt as $prompt | [$inline,$reference,$source,$html,$raw] | map(. as $url |
                 ($prompt | contains($url) | not) and
                 ($prompt | contains(($url | split("/") | last)) | not)
-              )))
+              ) | all))
           ' "$audit" >/dev/null
           tool_comments="$(gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100")"
           jq -e '
