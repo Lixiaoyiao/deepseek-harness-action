@@ -1129,9 +1129,11 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
     if (state.progress === undefined || state.phase === "publication" || state.phase === "write") {
       return;
     }
-    const cancellation =
-      options.signal?.reason instanceof Error ? options.signal.reason : new DshAbortedError();
-    startProgressFailure(state, cancellation);
+    // A cancellation signal is routing information, not an authority to pick
+    // the public failure identity. Construct the stable local error here so a
+    // foreign-realm or composed AbortSignal reason cannot become an
+    // ACTION_RUNTIME_FAILED provisional terminal state.
+    startProgressFailure(state, new DshAbortedError());
   };
   options.signal?.addEventListener("abort", beginCancellationFinalization, { once: true });
   if (options.signal?.aborted === true) beginCancellationFinalization();

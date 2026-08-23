@@ -244,6 +244,25 @@ describe("orchestrator cancellation finalization", () => {
     expect(mocks.createGitHubClient).toHaveBeenNthCalledWith(2, "token");
   });
 
+  it("keeps a stable cancellation identity when the signal reason is foreign", async () => {
+    const controller = new AbortController();
+    mocks.runAgentLoop.mockImplementation(() => {
+      controller.abort(new Error("DSH execution was aborted"));
+      return Promise.reject(new DshAbortedError());
+    });
+
+    const outcome = await runAction({ signal: controller.signal });
+
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      error: { code: "DSH_ABORTED", phase: "agent" },
+    });
+    expect(mocks.progressFail).toHaveBeenCalledOnce();
+    expect(mocks.progressFail).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "DSH_ABORTED", phase: "agent" }),
+    );
+  });
+
   it("preserves cancellation when terminal comment publication fails", async () => {
     const controller = new AbortController();
     mocks.progressFail.mockRejectedValueOnce(new Error("GitHub unavailable"));
