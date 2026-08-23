@@ -1243,28 +1243,52 @@ jobs:
           [[ "$history_id" =~ ^[1-9][0-9]*$ ]]
           echo "history_id=$history_id" >> "$GITHUB_OUTPUT"
 
+          base_branch="dsh-e2e/checks-base-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           branch="dsh-e2e/checks-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           fixture_path=".github/dsh-e2e-fixtures/checks-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
-          fixture_content="DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          base_fixture_content="DSH E2E checks base $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          fixture_content="DSH E2E checks head $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          [[ "$base_branch" =~ ^dsh-e2e/checks-base-[1-9][0-9]*-[1-9][0-9]*$ ]]
           [[ "$branch" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
           [[ "$fixture_path" =~ ^\.github/dsh-e2e-fixtures/checks-[1-9][0-9]*-[1-9][0-9]*\.txt$ ]]
+          echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "fixture_path=$fixture_path" >> "$GITHUB_OUTPUT"
+          if gh api "repos/$REPOSITORY/git/ref/heads/$base_branch" >/dev/null 2>&1; then
+            echo "The isolated checks base branch already exists" >&2
+            exit 1
+          fi
           if gh api "repos/$REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
             echo "The isolated checks branch already exists" >&2
             exit 1
           fi
+
+          base_blob_sha="$(jq -cn --arg content "$base_fixture_content" '{content:$content,encoding:"utf-8"}' \
+            | gh api --method POST "repos/$REPOSITORY/git/blobs" --input - --jq .sha)"
+          base_tree_sha="$(jq -cn --arg path "$fixture_path" --arg sha "$base_blob_sha" \
+            '{tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}' \
+            | gh api --method POST "repos/$REPOSITORY/git/trees" --input - --jq .sha)"
+          base_commit_message="DSH E2E checks base $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          base_sha="$(jq -cn --arg message "$base_commit_message" --arg tree "$base_tree_sha" --arg parent "$CANDIDATE_SHA" \
+            '{message:$message,tree:$tree,parents:[$parent]}' \
+            | gh api --method POST "repos/$REPOSITORY/git/commits" --input - --jq .sha)"
+          [[ "$base_blob_sha" =~ ^[a-f0-9]{40}$ && "$base_tree_sha" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$base_sha" =~ ^[a-f0-9]{40}$ ]]
+          echo "base_tree_sha=$base_tree_sha" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/$REPOSITORY/git/refs" -f ref="refs/heads/$base_branch" -f sha="$base_sha" >/dev/null
+          [[ "$(gh api "repos/$REPOSITORY/git/ref/heads/$base_branch" --jq .object.sha)" == "$base_sha" ]]
+
           blob_sha="$(jq -cn --arg content "$fixture_content" '{content:$content,encoding:"utf-8"}' \
             | gh api --method POST "repos/$REPOSITORY/git/blobs" --input - --jq .sha)"
-          base_tree_sha="$(gh api "repos/$REPOSITORY/git/commits/$CANDIDATE_SHA" --jq .tree.sha)"
           tree_sha="$(jq -cn --arg base "$base_tree_sha" --arg path "$fixture_path" --arg sha "$blob_sha" \
             '{base_tree:$base,tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}' \
             | gh api --method POST "repos/$REPOSITORY/git/trees" --input - --jq .sha)"
           commit_message="DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
-          head_sha="$(jq -cn --arg message "$commit_message" --arg tree "$tree_sha" --arg parent "$CANDIDATE_SHA" \
+          head_sha="$(jq -cn --arg message "$commit_message" --arg tree "$tree_sha" --arg parent "$base_sha" \
             '{message:$message,tree:$tree,parents:[$parent]}' \
             | gh api --method POST "repos/$REPOSITORY/git/commits" --input - --jq .sha)"
-          [[ "$blob_sha" =~ ^[a-f0-9]{40}$ && "$base_tree_sha" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$blob_sha" =~ ^[a-f0-9]{40}$ ]]
           [[ "$tree_sha" =~ ^[a-f0-9]{40}$ && "$head_sha" =~ ^[a-f0-9]{40}$ ]]
           echo "tree_sha=$tree_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
@@ -1274,17 +1298,15 @@ jobs:
           pr_title="DSH E2E checks $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           pr_body="$(printf '%s\n\n%s' "$marker" "Temporary draft PR owned by the trusted GitHub integration harness.")"
           pr_json="$(gh api --method POST "repos/$REPOSITORY/pulls" \
-            -f title="$pr_title" -f head="$branch" -f base="$DEFAULT_BRANCH" -f body="$pr_body" -F draft=true)"
+            -f title="$pr_title" -f head="$branch" -f base="$base_branch" -f body="$pr_body" -F draft=true)"
           pr_number="$(jq -r .number <<<"$pr_json")"
           pr_id="$(jq -r .id <<<"$pr_json")"
-          default_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
-          [[ "$default_sha" =~ ^[a-f0-9]{40}$ ]]
           echo "$pr_json" > "$RUNNER_TEMP/dsh-e2e-integration-pr.json"
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "pr_id=$pr_id" >> "$GITHUB_OUTPUT"
           jq -e --argjson number "$pr_number" --argjson id "$pr_id" --arg repo "${REPOSITORY,,}" \
-            --arg branch "$branch" --arg base "$DEFAULT_BRANCH" --arg sha "$head_sha" \
-            --arg base_sha "$default_sha" --arg title "$pr_title" --arg body "$pr_body" '
+            --arg branch "$branch" --arg base "$base_branch" --arg sha "$head_sha" \
+            --arg base_sha "$base_sha" --arg title "$pr_title" --arg body "$pr_body" '
             .number == $number and .id == $id and .state == "open" and .draft == true and
             (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
             (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $base_sha and
@@ -1554,6 +1576,9 @@ jobs:
           ISSUE_LABEL: ${{ steps.integration_entities.outputs.label }}
           ISSUE_NUMBER: ${{ steps.integration_entities.outputs.issue_number }}
           ISSUE_ID: ${{ steps.integration_entities.outputs.issue_id }}
+          CHECKS_BASE_BRANCH: ${{ steps.integration_entities.outputs.base_branch }}
+          CHECKS_BASE_TREE: ${{ steps.integration_entities.outputs.base_tree_sha }}
+          CHECKS_BASE_SHA: ${{ steps.integration_entities.outputs.base_sha }}
           CHECKS_BRANCH: ${{ steps.integration_entities.outputs.branch }}
           CHECKS_TREE: ${{ steps.integration_entities.outputs.tree_sha }}
           CHECKS_HEAD: ${{ steps.integration_entities.outputs.head_sha }}
@@ -1616,6 +1641,8 @@ jobs:
             set -euo pipefail
             [[ "$CHECKS_PR" =~ ^[1-9][0-9]*$ ]]
             [[ -z "$CHECKS_PR_ID" || "$CHECKS_PR_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$CHECKS_BASE_BRANCH" =~ ^dsh-e2e/checks-base-[1-9][0-9]*-[1-9][0-9]*$ ]]
+            [[ "$CHECKS_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
             [[ "$CHECKS_BRANCH" =~ ^dsh-e2e/checks-[1-9][0-9]*-[1-9][0-9]*$ ]]
             pr_json="$(gh api "repos/$REPOSITORY/pulls/$CHECKS_PR")"
             actual_pr_id="$(jq -r .id <<<"$pr_json")"
@@ -1624,11 +1651,9 @@ jobs:
             [[ -z "$CHECKS_PR_ID" || "$CHECKS_PR_ID" == "$actual_pr_id" ]]
             if [[ -z "$expected_head" ]]; then expected_head="$(jq -r .head.sha <<<"$pr_json")"; fi
             [[ "$expected_head" =~ ^[a-f0-9]{40}$ ]]
-            default_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
-            [[ "$default_sha" =~ ^[a-f0-9]{40}$ ]]
             jq -e --argjson number "$CHECKS_PR" --arg repo "${REPOSITORY,,}" \
-              --arg branch "$CHECKS_BRANCH" --arg base "$DEFAULT_BRANCH" --arg sha "$expected_head" \
-              --arg base_sha "$default_sha" --arg title "$pr_title" --arg mutated "$mutated_pr_title" --arg body "$pr_body" '
+              --arg branch "$CHECKS_BRANCH" --arg base "$CHECKS_BASE_BRANCH" --arg sha "$expected_head" \
+              --arg base_sha "$CHECKS_BASE_SHA" --arg title "$pr_title" --arg mutated "$mutated_pr_title" --arg body "$pr_body" '
               .number == $number and .state == "open" and .draft == true and
               (.head.repo.full_name | ascii_downcase) == $repo and .head.ref == $branch and .head.sha == $sha and
               (.base.repo.full_name | ascii_downcase) == $repo and .base.ref == $base and .base.sha == $base_sha and
@@ -1655,19 +1680,45 @@ jobs:
             [[ -z "$CHECKS_HEAD" || "$ref_sha" == "$CHECKS_HEAD" ]]
             commit_json="$(gh api "repos/$REPOSITORY/git/commits/$ref_sha")"
             [[ "$(jq -r '.parents | length' <<<"$commit_json")" -eq 1 ]]
-            [[ "$(jq -r '.parents[0].sha' <<<"$commit_json")" == "$CANDIDATE_SHA" ]]
+            [[ "$CHECKS_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$(jq -r '.parents[0].sha' <<<"$commit_json")" == "$CHECKS_BASE_SHA" ]]
             [[ "$CHECKS_TREE" =~ ^[a-f0-9]{40}$ && "$(jq -r .tree.sha <<<"$commit_json")" == "$CHECKS_TREE" ]]
             [[ "$(jq -r .message <<<"$commit_json")" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
-            compare_json="$(gh api "repos/$REPOSITORY/compare/$CANDIDATE_SHA...$ref_sha")"
+            compare_json="$(gh api "repos/$REPOSITORY/compare/$CHECKS_BASE_SHA...$ref_sha")"
             blob_sha="$(jq -r --arg path "$FIXTURE_PATH" '
-              if (.files | length == 1) and .files[0].filename == $path and .files[0].status == "added"
+              if (.files | length == 1) and .files[0].filename == $path and .files[0].status == "modified"
               then .files[0].sha else empty end
             ' <<<"$compare_json")"
             [[ "$blob_sha" =~ ^[a-f0-9]{40}$ ]]
             content="$(gh api "repos/$REPOSITORY/git/blobs/$blob_sha" --jq .content | tr -d '\n' | base64 --decode)"
-            [[ "$content" == "DSH E2E checks fixture $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
+            [[ "$content" == "DSH E2E checks head $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
             gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"
             if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BRANCH" >/dev/null 2>&1; then return 1; fi
+          )
+
+          cleanup_base_branch() (
+            set -euo pipefail
+            [[ "$CHECKS_BASE_BRANCH" =~ ^dsh-e2e/checks-base-[1-9][0-9]*-[1-9][0-9]*$ ]]
+            [[ "$FIXTURE_PATH" =~ ^\.github/dsh-e2e-fixtures/checks-[1-9][0-9]*-[1-9][0-9]*\.txt$ ]]
+            ref_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BASE_BRANCH" --jq .object.sha 2>/dev/null)" || return 0
+            [[ "$ref_sha" =~ ^[a-f0-9]{40}$ ]]
+            [[ -z "$CHECKS_BASE_SHA" || "$ref_sha" == "$CHECKS_BASE_SHA" ]]
+            commit_json="$(gh api "repos/$REPOSITORY/git/commits/$ref_sha")"
+            [[ "$(jq -r '.parents | length' <<<"$commit_json")" -eq 1 ]]
+            [[ "$(jq -r '.parents[0].sha' <<<"$commit_json")" == "$CANDIDATE_SHA" ]]
+            [[ "$CHECKS_BASE_TREE" =~ ^[a-f0-9]{40}$ && "$(jq -r .tree.sha <<<"$commit_json")" == "$CHECKS_BASE_TREE" ]]
+            [[ "$(jq -r .message <<<"$commit_json")" == "DSH E2E checks base $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
+            tree_json="$(gh api "repos/$REPOSITORY/git/trees/$CHECKS_BASE_TREE?recursive=1")"
+            base_blob_sha="$(jq -r --arg path "$FIXTURE_PATH" '
+              if .truncated == false and (.tree | length == 1) and
+                .tree[0].path == $path and .tree[0].mode == "100644" and .tree[0].type == "blob"
+              then .tree[0].sha else empty end
+            ' <<<"$tree_json")"
+            [[ "$base_blob_sha" =~ ^[a-f0-9]{40}$ ]]
+            content="$(gh api "repos/$REPOSITORY/git/blobs/$base_blob_sha" --jq .content | tr -d '\n' | base64 --decode)"
+            [[ "$content" == "DSH E2E checks base $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
+            gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BASE_BRANCH"
+            if gh api "repos/$REPOSITORY/git/ref/heads/$CHECKS_BASE_BRANCH" >/dev/null 2>&1; then return 1; fi
           )
 
           if [[ -n "$ISSUE_NUMBER" || -n "$ISSUE_ID" ]]; then
@@ -1681,6 +1732,9 @@ jobs:
           fi
           if [[ -n "$CHECKS_BRANCH" || -n "$CHECKS_HEAD" || -n "$FIXTURE_PATH" ]]; then
             cleanup_branch; status=$?; if [[ "$status" -ne 0 ]]; then record_failure branch; fi
+          fi
+          if [[ -n "$CHECKS_BASE_BRANCH" || -n "$CHECKS_BASE_SHA" || -n "$FIXTURE_PATH" ]]; then
+            cleanup_base_branch; status=$?; if [[ "$status" -ne 0 ]]; then record_failure base-branch; fi
           fi
 
           bash .github/e2e/assert-candidate-binding.sh || record_failure candidate-binding

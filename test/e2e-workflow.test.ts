@@ -138,20 +138,26 @@ describe("trusted core E2E workflow", () => {
     expect(integration).not.toContain("secrets.DEEPSEEK_API_KEY");
   });
 
-  it("creates an exact one-file fixture commit for main-safe checks coverage", () => {
+  it("creates an exact one-file minimal base and head for checks coverage", () => {
     const creation = stepBlock(workflow, "Create isolated Issue and draft PR fixtures");
 
     for (const contract of [
       ".github/dsh-e2e-fixtures/checks-",
-      'git/commits/$CANDIDATE_SHA" --jq .tree.sha',
+      "dsh-e2e/checks-base-",
+      '{tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}',
       "base_tree:$base",
       "parents:[$parent]",
+      'echo "base_tree_sha=$base_tree_sha"',
+      'echo "base_sha=$base_sha"',
       'echo "tree_sha=$tree_sha"',
       'echo "head_sha=$head_sha"',
+      '-f base="$base_branch"',
       '--arg sha "$head_sha"',
     ]) {
       expect(creation).toContain(contract);
     }
+    expect(creation).toContain('--arg parent "$CANDIDATE_SHA"');
+    expect(creation).toContain('--arg parent "$base_sha"');
     expect(creation).not.toContain('-f sha="$CANDIDATE_SHA" >/dev/null');
   });
 
@@ -191,6 +197,7 @@ describe("trusted core E2E workflow", () => {
     expect(cleanup).toContain("cleanup_label() (");
     expect(cleanup).toContain("cleanup_pull() (");
     expect(cleanup).toContain("cleanup_branch() (");
+    expect(cleanup).toContain("cleanup_base_branch() (");
     expect(cleanup).toContain("cleanup_failures=$((cleanup_failures + 1))");
     expect(cleanup).toContain('[[ "$cleanup_failures" -eq 0 ]]');
     expect(cleanup).toContain(".parents[0].sha");
@@ -199,6 +206,9 @@ describe("trusted core E2E workflow", () => {
     expect(cleanup).toContain("git/blobs/$blob_sha");
     expect(cleanup).toContain(
       'gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"',
+    );
+    expect(cleanup).toContain(
+      'gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BASE_BRANCH"',
     );
     expect(cleanup).not.toContain("matching-refs");
   });
