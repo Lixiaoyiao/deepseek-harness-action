@@ -1167,7 +1167,10 @@ jobs:
           node-version: 24
 
       - name: Install exact candidate runtime without lifecycle scripts
-        run: npm ci --prefix candidate-action --omit=dev --ignore-scripts --no-audit --no-fund
+        shell: bash
+        run: |
+          npm ci --prefix candidate-action --omit=dev --ignore-scripts --no-audit --no-fund
+          test -f "$GITHUB_WORKSPACE/candidate-action/node_modules/@deepseek-ai/dsh/lib/bin.js"
 
       - name: Prepare deterministic GitHub integration harness
         id: integration_baseline
@@ -1399,6 +1402,7 @@ jobs:
           run_candidate label issues "$RUNNER_TEMP/dsh-e2e-label-event.json" label \
             'INPUT_COMMAND=auto' 'INPUT_LABEL-TRIGGER=dsh-e2e-label' \
             "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_TASK-ACCESS=read' 'INPUT_ISOLATION=none' \
+            "INPUT_DSH-EXECUTABLE=$GITHUB_WORKSPACE/candidate-action/node_modules/@deepseek-ai/dsh/lib/bin.js" \
             'INPUT_PROMPT=Return the deterministic label task result.' \
             "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
           label_result="$(read_output label result-json)"
@@ -1410,6 +1414,7 @@ jobs:
           run_candidate assignee issues "$RUNNER_TEMP/dsh-e2e-assignee-event.json" assignee \
             'INPUT_COMMAND=auto' 'INPUT_ASSIGNEE-TRIGGER=dsh-e2e-assignee' \
             "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_TASK-ACCESS=read' 'INPUT_ISOLATION=none' \
+            "INPUT_DSH-EXECUTABLE=$GITHUB_WORKSPACE/candidate-action/node_modules/@deepseek-ai/dsh/lib/bin.js" \
             'INPUT_PROMPT=Return the deterministic assignee task result.' \
             "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
           assignee_result="$(read_output assignee result-json)"
@@ -1517,7 +1522,9 @@ jobs:
 
           run_candidate checks pull_request "$RUNNER_TEMP/dsh-e2e-checks-event.json" checks \
             'INPUT_COMMAND=diagnose' 'INPUT_PERMISSION-PROFILE=custom' \
-            'INPUT_ALLOWED-TOOLS=["github.checks.read"]' 'INPUT_ISOLATION=none' 'INPUT_MAX-TURNS=2'
+            'INPUT_ALLOWED-TOOLS=["github.checks.read"]' 'INPUT_ISOLATION=none' \
+            "INPUT_DSH-EXECUTABLE=$GITHUB_WORKSPACE/candidate-action/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+            'INPUT_MAX-TURNS=2'
           checks_result="$(read_output checks result-json)"
           jq -c '{stage:"checks",conclusion,status,operation,trust:.policy.trust,toolReceipts:.loop.toolReceipts}' <<<"$checks_result"
           jq -e '

@@ -100,6 +100,9 @@ describe("trusted core E2E workflow", () => {
     expect(install).toContain(
       "npm ci --prefix candidate-action --omit=dev --ignore-scripts --no-audit --no-fund",
     );
+    expect(install).toContain(
+      'test -f "$GITHUB_WORKSPACE/candidate-action/node_modules/@deepseek-ai/dsh/lib/bin.js"',
+    );
 
     for (const contract of [
       "INPUT_LABEL-TRIGGER=dsh-e2e-label",
@@ -127,6 +130,11 @@ describe("trusted core E2E workflow", () => {
       expect(integration).toContain(contract);
     }
     expect(integration.match(/'INPUT_ISOLATION=none'/gu)).toHaveLength(3);
+    expect(
+      integration.match(
+        /INPUT_DSH-EXECUTABLE=\$GITHUB_WORKSPACE\/candidate-action\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js/gu,
+      ),
+    ).toHaveLength(3);
     expect(integration).not.toContain("secrets.DEEPSEEK_API_KEY");
   });
 
