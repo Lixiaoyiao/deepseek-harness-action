@@ -998,7 +998,11 @@ jobs:
             fi
             sleep 1
           done
-          [[ "$finalized" == "true" ]]
+          if [[ "$finalized" != "true" ]]; then
+            echo "Candidate cancellation log tail (bounded to 12 KiB):" >&2
+            tail -c 12000 "$RUNNER_TEMP/dsh-e2e-cancel.log" >&2 || true
+            exit 1
+          fi
           mapfile -t final_ids < <(
             gh api "repos/$REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[].id'
           )
