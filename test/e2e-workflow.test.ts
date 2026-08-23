@@ -88,9 +88,17 @@ describe("trusted core E2E workflow", () => {
   });
 
   it("exercises v0.6 GitHub integration through deterministic exact-DSH runs", () => {
+    const install = stepBlock(
+      workflow,
+      "Install exact candidate runtime without lifecycle scripts",
+    );
     const integration = stepBlock(
       workflow,
       "Exercise routes, filters, structured output, and typed GitHub tools",
+    );
+
+    expect(install).toContain(
+      "npm ci --prefix candidate-action --omit=dev --ignore-scripts --no-audit --no-fund",
     );
 
     for (const contract of [
