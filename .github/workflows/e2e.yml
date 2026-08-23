@@ -1166,6 +1166,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install exact candidate runtime without lifecycle scripts
+        run: npm ci --prefix candidate-action --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Prepare deterministic GitHub integration harness
         id: integration_baseline
         shell: bash
