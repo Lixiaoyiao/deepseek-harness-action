@@ -54,6 +54,31 @@ describe("immutable repository materialization", () => {
     }
   });
 
+  it("validates and materializes multi-megabyte base64 without recursive RegExp overflow", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dsh-materialize-large-"));
+    roots.push(root);
+    const output = join(root, "repository");
+    const content = "source-map-data".repeat(256 * 1024);
+    const client = api(
+      [
+        {
+          path: "dist/index.js.map",
+          type: "blob",
+          mode: "100644",
+          sha: blobSha,
+          size: Buffer.byteLength(content),
+        },
+      ],
+      content,
+    );
+
+    const result = await materializeRepositoryAtSha(client, "o", "r", commitSha, output);
+    expect(result.bytes).toBe(Buffer.byteLength(content));
+    expect(await stat(join(output, "dist", "index.js.map"))).toMatchObject({
+      size: Buffer.byteLength(content),
+    });
+  });
+
   it.each([
     ["path escape", { path: "../secret", type: "blob", mode: "100644", sha: blobSha, size: 8 }],
     ["symlink mode", { path: "link", type: "blob", mode: "120000", sha: blobSha, size: 8 }],

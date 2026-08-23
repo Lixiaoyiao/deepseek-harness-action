@@ -30,10 +30,19 @@ function safePath(path: string): string {
 
 function strictBase64(value: string, path: string): Buffer {
   const normalized = value.replaceAll("\r", "").replaceAll("\n", "");
-  if (
-    normalized.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(normalized)
-  ) {
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const bodyLength = normalized.length - padding;
+  let valid = normalized.length % 4 === 0;
+  for (let index = 0; valid && index < bodyLength; index += 1) {
+    const code = normalized.charCodeAt(index);
+    valid =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f;
+  }
+  if (!valid) {
     throw new Error(`GitHub blob is not valid base64: ${path}`);
   }
   const decoded = Buffer.from(normalized, "base64");
