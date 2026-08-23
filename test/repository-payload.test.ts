@@ -79,6 +79,48 @@ describe("immutable repository materialization", () => {
     });
   });
 
+  it("materializes blobs with a fixed concurrency bound", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dsh-materialize-concurrent-"));
+    roots.push(root);
+    const output = join(root, "repository");
+    const entries = Array.from({ length: 16 }, (_, index) => ({
+      path: `file-${String(index)}.txt`,
+      type: "blob",
+      mode: "100644",
+      sha: blobSha,
+      size: 8,
+    }));
+    const client = api(entries);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let active = 0;
+    let maximum = 0;
+    vi.mocked(client.rest.git.getBlob).mockImplementation(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active -= 1;
+      return {
+        data: {
+          sha: blobSha,
+          encoding: "base64",
+          content: Buffer.from("content\n").toString("base64"),
+        },
+      } as never;
+    });
+
+    const running = materializeRepositoryAtSha(client, "o", "r", commitSha, output);
+    await vi.waitFor(() => expect(client.rest.git.getBlob).toHaveBeenCalledTimes(8));
+    expect(maximum).toBe(8);
+    release?.();
+
+    await expect(running).resolves.toMatchObject({ files: 16, bytes: 128 });
+    expect(client.rest.git.getBlob).toHaveBeenCalledTimes(16);
+    expect(maximum).toBe(8);
+  });
+
   it.each([
     ["path escape", { path: "../secret", type: "blob", mode: "100644", sha: blobSha, size: 8 }],
     ["symlink mode", { path: "link", type: "blob", mode: "120000", sha: blobSha, size: 8 }],

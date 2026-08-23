@@ -6,6 +6,7 @@ import { validateCommitSha } from "../security/refs.js";
 
 const MAX_FILES = 50_000;
 const MAX_BYTES = 1024 * 1024 * 1024;
+const MATERIALIZATION_CONCURRENCY = 8;
 const MATERIALIZABLE_MODES = new Set(["100644", "100755"]);
 
 interface MaterializableBlob {
@@ -136,27 +137,47 @@ export async function materializeRepositoryAtSha(
   if (tree.data.truncated) throw new Error("GitHub tree response was truncated");
   const blobs = validateBlobs(tree.data.tree);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  let bytes = 0;
-  for (const entry of blobs) {
-    const { path, size } = entry;
-    bytes += size;
-    const blob = await client.rest.git.getBlob({ owner, repo, file_sha: entry.sha });
-    if (validateCommitSha(blob.data.sha) !== entry.sha) {
-      throw new Error(`GitHub returned a different blob SHA: ${path}`);
+  const bytes = blobs.reduce((total, entry) => total + entry.size, 0);
+  const rootPath = resolve(root);
+  let nextIndex = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    while (failure === undefined) {
+      const entry = blobs[nextIndex];
+      nextIndex += 1;
+      if (entry === undefined) return;
+      try {
+        const { path, size } = entry;
+        const blob = await client.rest.git.getBlob({ owner, repo, file_sha: entry.sha });
+        if (validateCommitSha(blob.data.sha) !== entry.sha) {
+          throw new Error(`GitHub returned a different blob SHA: ${path}`);
+        }
+        if (blob.data.encoding !== "base64") {
+          throw new Error(`Unsupported blob encoding: ${path}`);
+        }
+        const content = strictBase64(blob.data.content, path);
+        if (content.byteLength !== size) {
+          throw new Error(`GitHub blob size changed while materializing: ${path}`);
+        }
+        const target = resolve(root, ...path.split("/"));
+        if (target !== rootPath && !target.startsWith(rootPath + sep)) {
+          throw new Error("Git tree path escaped materialization root");
+        }
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, content, { flag: "wx" });
+        await chmod(target, entry.mode === "100755" ? 0o755 : 0o644);
+      } catch (error: unknown) {
+        failure ??= error;
+      }
     }
-    if (blob.data.encoding !== "base64") throw new Error(`Unsupported blob encoding: ${path}`);
-    const content = strictBase64(blob.data.content, path);
-    if (content.byteLength !== size) {
-      throw new Error(`GitHub blob size changed while materializing: ${path}`);
-    }
-    const target = resolve(root, ...path.split("/"));
-    const rootPath = resolve(root);
-    if (target !== rootPath && !target.startsWith(rootPath + sep)) {
-      throw new Error("Git tree path escaped materialization root");
-    }
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, content, { flag: "wx" });
-    await chmod(target, entry.mode === "100755" ? 0o755 : 0o644);
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(MATERIALIZATION_CONCURRENCY, blobs.length) }, worker),
+  );
+  if (failure !== undefined) {
+    throw failure instanceof Error
+      ? failure
+      : new Error("Repository materialization failed", { cause: failure });
   }
   return { root, sha: commitSha, files: blobs.length, bytes };
 }
