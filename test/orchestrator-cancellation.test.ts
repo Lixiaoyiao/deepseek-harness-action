@@ -248,7 +248,7 @@ describe("orchestrator cancellation finalization", () => {
     const controller = new AbortController();
     mocks.runAgentLoop.mockImplementation(() => {
       controller.abort(new Error("DSH execution was aborted"));
-      return Promise.reject(new DshAbortedError());
+      return Promise.reject(new Error("DSH execution was aborted"));
     });
 
     const outcome = await runAction({ signal: controller.signal });

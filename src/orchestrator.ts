@@ -259,6 +259,21 @@ function failureFromSignal(error: unknown, signal?: AbortSignal): unknown {
   return error;
 }
 
+function isCancellationError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if (
+      current instanceof DshAbortedError ||
+      current.message === "DSH execution was aborted" ||
+      ("code" in current && current.code === "DSH_ABORTED")
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 function startProgressFailure(
   state: RunState,
   error: unknown,
@@ -294,8 +309,12 @@ function startProgressFailure(
   return attempt;
 }
 
-async function finishProgressFailure(state: RunState, error: unknown): Promise<void> {
-  const attempt = state.progressFailure ?? startProgressFailure(state, error);
+async function finishProgressFailure(
+  state: RunState,
+  error: unknown,
+  failureOverride?: ActionFailure,
+): Promise<void> {
+  const attempt = state.progressFailure ?? startProgressFailure(state, error, failureOverride);
   if (attempt === undefined || attempt.status === "succeeded") return;
   if (attempt.status === "failed") {
     core.warning(
@@ -1102,7 +1121,11 @@ async function runActionInternal(
     // Begin terminal publication before temporary-directory cleanup. For
     // signal-driven Agent cancellation an even earlier abort listener starts
     // the same idempotent attempt while nested runtime cleanup is still active.
-    startProgressFailure(state, error);
+    startProgressFailure(
+      state,
+      error,
+      isCancellationError(error) ? describeCancellationFailure(state.phase) : undefined,
+    );
     throw error;
   } finally {
     if (tempRoot !== undefined) {
@@ -1149,8 +1172,10 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
     // independent validation/security/write failure merely because a signal
     // happened to arrive before this catch ran.
     const effectiveError = failureFromSignal(error, deadline?.signal);
-    const failure = describeActionFailure(effectiveError, state.phase);
-    await finishProgressFailure(state, effectiveError);
+    const failure = isCancellationError(effectiveError)
+      ? describeCancellationFailure(state.phase)
+      : describeActionFailure(effectiveError, state.phase);
+    await finishProgressFailure(state, effectiveError, failure);
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
