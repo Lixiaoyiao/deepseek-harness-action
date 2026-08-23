@@ -1392,6 +1392,7 @@ jobs:
             "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
           label_result="$(read_output label result-json)"
           label_task="$(read_output label task-output)"
+          jq -c '{stage:"label",conclusion,status,operation,trust:.policy.trust,taskOutput}' <<<"$label_result"
           jq -e '.conclusion == "success" and .operation == "task" and .policy.trust == "trusted-read" and .taskOutput == {route:"label",accepted:true}' <<<"$label_result" >/dev/null
           jq -e '. == {route:"label",accepted:true}' <<<"$label_task" >/dev/null
 
@@ -1401,6 +1402,7 @@ jobs:
             'INPUT_PROMPT=Return the deterministic assignee task result.' \
             "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=1'
           assignee_result="$(read_output assignee result-json)"
+          jq -c '{stage:"assignee",conclusion,status,operation,trust:.policy.trust,taskOutput}' <<<"$assignee_result"
           jq -e '.conclusion == "success" and .operation == "task" and .taskOutput == {route:"assignee",accepted:true}' <<<"$assignee_result" >/dev/null
 
           run_candidate denied issues "$RUNNER_TEMP/dsh-e2e-label-event.json" label \
@@ -1408,6 +1410,7 @@ jobs:
             'INPUT_ALLOWED-ACTORS=dsh-e2e-no-match' 'INPUT_TASK-ACCESS=read' \
             'INPUT_PROMPT=This route must remain neutral.' 'INPUT_MAX-TURNS=1'
           denied_result="$(read_output denied result-json)"
+          jq -c '{stage:"denied",conclusion,status,operation,trust:.policy.trust}' <<<"$denied_result"
           jq -e '.conclusion == "neutral" and .status == "neutral" and .operation == null' <<<"$denied_result" >/dev/null
           jq -s -e '[.[] | select(.route == "label")] | length == 1' "$audit" >/dev/null
 
@@ -1423,6 +1426,7 @@ jobs:
             "INPUT_TASK-OUTPUT-SCHEMA=$task_schema" 'INPUT_MAX-TURNS=5'
           github_result="$(read_output github result-json)"
           github_task="$(read_output github task-output)"
+          jq -c '{stage:"github",conclusion,status,operation,trust:.policy.trust,validation,write,taskOutput,toolReceipts:.loop.toolReceipts}' <<<"$github_result"
           jq -e '
             .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
             .validation.status == "passed" and .validation.commandCount == 1 and
@@ -1485,6 +1489,7 @@ jobs:
             'INPUT_VALIDATION-INTEGRITY=strict' \
             'INPUT_TEST-COMMANDS=[["node","-e","process.exit(0)"]]' 'INPUT_MAX-TURNS=2'
           metadata_result="$(read_output metadata result-json)"
+          jq -c '{stage:"metadata",conclusion,status,operation,trust:.policy.trust,validation,write,toolReceipts:.loop.toolReceipts}' <<<"$metadata_result"
           jq -e '
             .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
             .validation.status == "passed" and .write.status == "no-changes" and
@@ -1503,6 +1508,7 @@ jobs:
             'INPUT_COMMAND=diagnose' 'INPUT_PERMISSION-PROFILE=custom' \
             'INPUT_ALLOWED-TOOLS=["github.checks.read"]' 'INPUT_MAX-TURNS=2'
           checks_result="$(read_output checks result-json)"
+          jq -c '{stage:"checks",conclusion,status,operation,trust:.policy.trust,toolReceipts:.loop.toolReceipts}' <<<"$checks_result"
           jq -e '
             .conclusion == "success" and .operation == "diagnose" and .policy.trust == "trusted-read" and
             (.loop.toolReceipts | any(.id == "github.checks.read" and .ok == true and .effect == "read"))
