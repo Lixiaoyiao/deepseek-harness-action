@@ -40,6 +40,10 @@ versioning for published action releases.
   also preserves the exact v0.5.3 task identity and reconciliation key. The
   audited DSH family stays exactly `0.1.1-rc.2`; the standalone installer
   remains unchanged.
+- The overall `timeout-minutes` deadline now starts before Controller GitHub
+  permission, context, and immutable repository materialization requests. The
+  same abort signal reaches every Octokit request, so a stalled pre-agent API
+  request fails closed instead of outliving the configured Action deadline.
 
 ### Deferred and out of scope
 

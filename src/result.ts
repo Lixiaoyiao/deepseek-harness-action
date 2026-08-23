@@ -201,8 +201,8 @@ function classifiedFailure(
 export function describeActionFailure(error: unknown, phase: ActionPhase): ActionFailure {
   if (error instanceof AgentDeadlineError) {
     return classifiedFailure(error, phase, {
-      title: "Agent loop timed out",
-      guidance: "Increase timeout-minutes or reduce the task and validation scope.",
+      title: "Action execution timed out",
+      guidance: "Increase timeout-minutes or reduce the context, task, and validation scope.",
     });
   }
   if (error instanceof AgentNoProgressError && error.cause instanceof ValidationIntegrityError) {
