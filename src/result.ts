@@ -257,6 +257,19 @@ export function describeActionFailure(error: unknown, phase: ActionPhase): Actio
   };
 }
 
+/** Build the provisional SIGINT/SIGTERM identity without cross-bundle instanceof checks. */
+export function describeCancellationFailure(phase: ActionPhase): ActionFailure {
+  return {
+    code: "DSH_ABORTED",
+    category: "runtime",
+    phase,
+    title: "DeepSeek Harness was cancelled",
+    message: "DSH execution was aborted",
+    guidance: "Check whether a newer workflow run cancelled this one, then rerun if needed.",
+    retryable: true,
+  };
+}
+
 function structuredResult(
   outcome: RunOutcome,
   receipts: PublicReceiptPayload,

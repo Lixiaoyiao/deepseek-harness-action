@@ -45,6 +45,7 @@ import { throwIfCancelled } from "./lifecycle/cancellation.js";
 import { PHASE_TIMEOUTS, phaseTimeoutMs, settleWithin } from "./lifecycle/deadline.js";
 import {
   describeActionFailure,
+  describeCancellationFailure,
   type ActionFailure,
   type ActionPhase,
   type AgentRunSummary,
@@ -261,10 +262,11 @@ function failureFromSignal(error: unknown, signal?: AbortSignal): unknown {
 function startProgressFailure(
   state: RunState,
   error: unknown,
+  failureOverride?: ActionFailure,
 ): ProgressFailureFinalization | undefined {
   const progress = state.progress;
   if (progress === undefined) return undefined;
-  const failure = describeActionFailure(error, state.phase);
+  const failure = failureOverride ?? describeActionFailure(error, state.phase);
   const existing = state.progressFailure;
   if (
     existing !== undefined &&
@@ -1130,10 +1132,10 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
       return;
     }
     // A cancellation signal is routing information, not an authority to pick
-    // the public failure identity. Construct the stable local error here so a
-    // foreign-realm or composed AbortSignal reason cannot become an
+    // the public failure identity. Use the explicit result factory so a
+    // foreign-realm or split bundle class cannot become an
     // ACTION_RUNTIME_FAILED provisional terminal state.
-    startProgressFailure(state, new DshAbortedError());
+    startProgressFailure(state, new DshAbortedError(), describeCancellationFailure(state.phase));
   };
   options.signal?.addEventListener("abort", beginCancellationFinalization, { once: true });
   if (options.signal?.aborted === true) beginCancellationFinalization();
