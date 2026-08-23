@@ -118,6 +118,7 @@ describe("trusted core E2E workflow", () => {
     ]) {
       expect(integration).toContain(contract);
     }
+    expect(integration.match(/'INPUT_ISOLATION=none'/gu)).toHaveLength(3);
     expect(integration).not.toContain("secrets.DEEPSEEK_API_KEY");
   });
 
