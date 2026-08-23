@@ -51,3 +51,7 @@ async function main(): Promise<void> {
 }
 
 await main();
+// The Controller has awaited publication, outputs, summaries, and cleanup.
+// Exit explicitly so an abandoned HTTP socket or third-party runtime handle
+// cannot keep a completed Action alive beyond timeout-minutes.
+process.exit(process.exitCode ?? 0);
