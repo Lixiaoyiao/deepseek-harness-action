@@ -454,7 +454,11 @@ async function runActionInternal(
   const initializeProgress = (): StickyProgressReporter | undefined => {
     if (!inputs.progressComment || issueNumber === undefined) return undefined;
     state.progress ??= new StickyProgressReporter({
-      client,
+      // Terminal publication deliberately receives its own short signal after
+      // SIGTERM. Do not bind this dedicated Controller client to the already
+      // aborted run signal; the reporter supplies a bounded signal and an
+      // abort race for every non-terminal and terminal request.
+      client: createGitHubClient(inputs.githubToken),
       target: { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
       expectedAuthorId: inputs.botUserId,
       operation: command.operation,
