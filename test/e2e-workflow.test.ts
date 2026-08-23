@@ -203,6 +203,8 @@ describe("trusted core E2E workflow", () => {
     expect(cleanup).toContain(".parents[0].sha");
     expect(cleanup).toContain(".tree.sha");
     expect(cleanup).toContain(".files | length == 1");
+    expect(cleanup).toContain('path == ".github/dsh-e2e-fixtures"');
+    expect(cleanup).toContain(".tree | length == 3");
     expect(cleanup).toContain("git/blobs/$blob_sha");
     expect(cleanup).toContain(
       'gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$CHECKS_BRANCH"',

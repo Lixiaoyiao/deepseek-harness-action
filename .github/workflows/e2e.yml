@@ -1710,9 +1710,11 @@ jobs:
             [[ "$(jq -r .message <<<"$commit_json")" == "DSH E2E checks base $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" ]]
             tree_json="$(gh api "repos/$REPOSITORY/git/trees/$CHECKS_BASE_TREE?recursive=1")"
             base_blob_sha="$(jq -r --arg path "$FIXTURE_PATH" '
-              if .truncated == false and (.tree | length == 1) and
-                .tree[0].path == $path and .tree[0].mode == "100644" and .tree[0].type == "blob"
-              then .tree[0].sha else empty end
+              if .truncated == false and (.tree | length == 3) and
+                ([.tree[] | select(.path == ".github" and .mode == "040000" and .type == "tree")] | length == 1) and
+                ([.tree[] | select(.path == ".github/dsh-e2e-fixtures" and .mode == "040000" and .type == "tree")] | length == 1) and
+                ([.tree[] | select(.path == $path and .mode == "100644" and .type == "blob")] | length == 1)
+              then (.tree[] | select(.path == $path)).sha else empty end
             ' <<<"$tree_json")"
             [[ "$base_blob_sha" =~ ^[a-f0-9]{40}$ ]]
             content="$(gh api "repos/$REPOSITORY/git/blobs/$base_blob_sha" --jq .content | tr -d '\n' | base64 --decode)"
