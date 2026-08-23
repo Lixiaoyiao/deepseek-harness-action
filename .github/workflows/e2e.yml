@@ -999,6 +999,10 @@ jobs:
             sleep 1
           done
           if [[ "$finalized" != "true" ]]; then
+            echo "Observed cancellation comment (body bounded to 4 KiB):" >&2
+            jq -c '{id,userId:.user.id,body:(.body[0:4096])}' <<<"$final_comment" >&2 || true
+            echo "Candidate cancellation outputs tail (bounded to 12 KiB):" >&2
+            tail -c 12000 "$RUNNER_TEMP/dsh-e2e-cancel-output" >&2 || true
             echo "Candidate cancellation log tail (bounded to 12 KiB):" >&2
             tail -c 12000 "$RUNNER_TEMP/dsh-e2e-cancel.log" >&2 || true
             exit 1
