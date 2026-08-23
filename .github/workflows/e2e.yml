@@ -1411,7 +1411,7 @@ jobs:
             'INPUT_PROMPT=This route must remain neutral.' 'INPUT_MAX-TURNS=1'
           denied_result="$(read_output denied result-json)"
           jq -c '{stage:"denied",conclusion,status,operation,trust:.policy.trust}' <<<"$denied_result"
-          jq -e '.conclusion == "neutral" and .status == "neutral" and .operation == null' <<<"$denied_result" >/dev/null
+          jq -e '.conclusion == "neutral" and .status == "neutral" and .operation == "none"' <<<"$denied_result" >/dev/null
           jq -s -e '[.[] | select(.route == "label")] | length == 1' "$audit" >/dev/null
 
           run_candidate github issue_comment "$RUNNER_TEMP/dsh-e2e-github-event.json" github \
