@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { copyFile, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,27 +37,20 @@ import {
   configuredStdioSecrets,
 } from "../extensions/plan.js";
 import type { EffectiveExtensionPlan, ExtensionAudit } from "../extensions/plan.js";
-import {
-  nativeRuntimeToolNames,
-  prepareControlledProfile,
-  resolveInstalledPluginModuleSpecifiers,
-  type ControlledProfilePaths,
-} from "../extensions/profile.js";
 import type { NativeToolId } from "../tools/schema.js";
 import { DSH_VERSION } from "../release.js";
 import {
   assertContainerImageReference,
   assertPinnedContainerImage,
-  CONTAINER_AUDIT,
-  CONTAINER_LAUNCHER,
-  CONTAINER_POLICY_PLUGIN,
-  CONTAINER_PROFILE_ROOT,
-  CONTAINER_STATE,
-  CONTAINER_WORKSPACE,
-  CONTAINER_WORKSPACE_PLUGIN,
   dockerInstallerSpec,
   dockerWorkerSpec,
 } from "./docker-policy.js";
+import type {
+  DshComposition,
+  PreparedDockerDshComposition,
+  PreparedLocalDshComposition,
+} from "./composition.js";
+import { ControlledComposition } from "./controlled-composition.js";
 import {
   assertExtensionInstallBaseline,
   auditFreshExtensionInstallation,
@@ -98,8 +91,6 @@ export type { DshToolReceipt } from "./receipts.js";
 const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/u;
 export const SUPPORTED_DSH_VERSIONS = [DSH_VERSION] as const;
 const MAX_STDERR_BYTES = 2 * 1024 * 1024;
-const CONTROLLED_PROFILE_SCHEMA_VERSION = 1;
-
 export type DshTrust = "untrusted" | "trusted-read" | "trusted-write";
 export type DshIsolation = "docker" | "none";
 
@@ -166,6 +157,8 @@ export interface DshRunDependencies {
   readonly platform?: NodeJS.Platform;
   readonly now?: () => number;
   readonly runtime?: DshRuntime;
+  /** Internal composition seam. The Action default remains ControlledComposition. */
+  readonly composition?: DshComposition;
   readonly warning?: (message: string) => void;
 }
 
@@ -388,24 +381,6 @@ function workerWorkspaceWrite(request: DshRunRequest): boolean {
   );
 }
 
-async function writeToolPolicy(runtime: DshRuntime, request: DshRunRequest): Promise<string> {
-  const enabled = new Set(effectiveNativeTools(request));
-  const rows: string[] = [];
-  for (const [tool, row] of [
-    ["workspace.read", "tool-fs"],
-    ["workspace.search", "tool-fs-search"],
-    ["workspace.edit", "tool-str-replace-editor"],
-  ] as const) {
-    if (!enabled.has(tool)) rows.push(`- id: ${row}\n  disabled: true`);
-  }
-  const path = join(runtime.root, `tool-policy-${randomUUID()}.patch.yml`);
-  await writeFile(path, rows.length === 0 ? "[]\n" : `${rows.join("\n\n")}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  return path;
-}
-
 function controllerSecrets(
   request: DshRunRequest,
   environment: NodeJS.ProcessEnv,
@@ -567,15 +542,15 @@ export async function runDsh(
     return await realpath(requestedWorkspace);
   });
 
+  const composition = dependencies.composition ?? new ControlledComposition();
   const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory();
-  const patchName =
-    request.trust === "trusted-write"
-      ? "trusted-write.patch.yml"
-      : request.trust === "trusted-read" && request.isolation === "docker"
-        ? "trusted-read.patch.yml"
-        : "strict-untrusted.patch.yml";
-  const patchPath = join(assets, patchName);
-  await runSetup(async () => assertFile(patchPath, "DSH patch profile"));
+  const { patchPath } = await runSetup(async () =>
+    composition.prepareBasePatch({
+      assetsDirectory: assets,
+      trust: request.trust,
+      isolation: request.isolation,
+    }),
+  );
 
   const prompt = buildDshPrompt({
     operation: request.operation,
@@ -613,7 +588,8 @@ export async function runDsh(
   let proxy: DeepSeekProxyHandle | undefined;
   let internalNetwork: string | undefined;
   let internalNetworkGateway: string | undefined;
-  let controlledProfile: ControlledProfilePaths | undefined;
+  let preparedDockerComposition: PreparedDockerDshComposition | undefined;
+  let preparedLocalComposition: PreparedLocalDshComposition | undefined;
   let turnReceipts: readonly DshToolReceipt[] = [];
   let executeForCleanup:
     ((spec: DshProcessSpec, limits: DshProcessLimits) => Promise<DshProcessResult>) | undefined;
@@ -624,6 +600,7 @@ export async function runDsh(
       );
     }
     bindDshRuntime(runtime, {
+      compositionId: composition.id,
       dshVersion: request.dshVersion,
       containerImage: request.containerImage,
       isolation: request.isolation,
@@ -632,10 +609,10 @@ export async function runDsh(
       ...(webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
       ...(dshExecutableIdentity === undefined ? {} : { dshExecutableIdentity }),
       extensionConfigurationDigest: extensions.configurationDigest,
-      nativeRuntimeTools: nativeRuntimeToolNames(effectiveTools),
+      nativeRuntimeTools: composition.runtimeToolNames(effectiveTools),
       workspaceWrite: workerWorkspaceWrite(request),
       network: extensions.network,
-      profileSchemaVersion: CONTROLLED_PROFILE_SCHEMA_VERSION,
+      profileSchemaVersion: composition.profileSchemaVersion,
     });
     if (runtime.installedVersion !== undefined && runtime.installedVersion !== request.dshVersion) {
       throw new DshConfigurationError("A reused DSH runtime cannot change dshVersion");
@@ -704,16 +681,7 @@ export async function runDsh(
       await runSetup(async () => captureExtensionInstallBaseline(runtime, extensions));
     }
 
-    const policyPluginPath = join(assets, "action-policy.mjs");
-    const workspacePluginPath = join(assets, "action-workspace.mjs");
-    const launcherPath = join(assets, "action-launcher.mjs");
-    await runSetup(async () => {
-      await Promise.all([
-        assertFile(policyPluginPath, "DSH Action policy plugin"),
-        assertFile(workspacePluginPath, "DSH Action workspace plugin"),
-        assertFile(launcherPath, "DSH Action launcher"),
-      ]);
-    });
+    await runSetup(async () => composition.validateRuntimeAssets({ assetsDirectory: assets }));
     if (docker) {
       await runSetup(async () => rm(join(localDshHome, ".env"), { force: true }));
       manifestBase ??= await runSetup(async () => {
@@ -723,29 +691,19 @@ export async function runDsh(
         return parsed;
       });
       const profileManifest = manifestBase;
-      const profileOptions = {
-        dshHome: localDshHome,
-        plan: extensions,
-        nativeTools: effectiveNativeTools(request),
-        workspaceWrite: workerWorkspaceWrite(request),
-        expectedOperation: request.operation,
-        task: prompt,
-        workerWorkspacePath: CONTAINER_WORKSPACE,
-        policyPluginPath: CONTAINER_POLICY_PLUGIN,
-        workspacePluginPath: CONTAINER_WORKSPACE_PLUGIN,
-        workerStatePath: CONTAINER_STATE,
-        workerAuditPath: CONTAINER_AUDIT,
-        manifestBase: profileManifest,
-        ...(runtime.verifiedPluginModuleSpecifiers === undefined
-          ? {}
-          : { pluginModuleSpecifiers: runtime.verifiedPluginModuleSpecifiers }),
-      } as const;
-      controlledProfile = await runSetup(async () => prepareControlledProfile(profileOptions));
-      if (resolve(controlledProfile.profileDir) !== resolve(packageRoot)) {
-        throw new DshConfigurationError(
-          "Controlled Profile and extension installation must share one package root",
-        );
-      }
+      preparedDockerComposition = await runSetup(async () =>
+        composition.prepareDocker({
+          isolation: "docker",
+          assetsDirectory: assets,
+          runtime,
+          plan: extensions,
+          nativeTools: effectiveTools,
+          workspaceWrite: workerWorkspaceWrite(request),
+          expectedOperation: request.operation,
+          task: prompt,
+          manifestBase: profileManifest,
+        }),
+      );
       if (runtime.installedExtensionDigest === undefined) {
         if (Object.keys(extensions.packageDependencies).length > 0) {
           assertExtensionInstallBaseline(runtime, extensions);
@@ -766,39 +724,17 @@ export async function runDsh(
       } else if (Object.keys(extensions.packageDependencies).length > 0) {
         await runSetup(async () => auditReusedExtensionInstallation(runtime, extensions));
       }
-      if (extensions.plugins.length > 0) {
-        let pluginModuleSpecifiers = runtime.verifiedPluginModuleSpecifiers;
-        if (pluginModuleSpecifiers === undefined) {
-          try {
-            pluginModuleSpecifiers = await runSetup(async () =>
-              resolveInstalledPluginModuleSpecifiers({
-                packageRoot,
-                workerProfilePath: CONTAINER_PROFILE_ROOT,
-                plan: extensions,
-              }),
-            );
-          } catch (error: unknown) {
-            throw new DshConfigurationError(
-              "Installed direct Plugin entry failed Controller containment validation",
-              { cause: error },
-            );
-          }
-          runtime.verifiedPluginModuleSpecifiers = pluginModuleSpecifiers;
-        }
-        if (profileOptions.pluginModuleSpecifiers === undefined) {
-          controlledProfile = await runSetup(async () =>
-            prepareControlledProfile({
-              ...profileOptions,
-              pluginModuleSpecifiers,
-            }),
-          );
-        }
-      }
+      const preparedBeforeFinalization = preparedDockerComposition;
+      preparedDockerComposition = await preparedBeforeFinalization.finalizeAfterInstall(runSetup);
       // Keep the launcher inside the populated package root so its bare imports
       // resolve against the locked runtime. A separate child bind mount below
       // the read-only package bind cannot create its mountpoint under Linux runc.
       await runSetup(async () => {
-        await copyFile(launcherPath, join(packageRoot, basename(CONTAINER_LAUNCHER)));
+        const prepared = preparedDockerComposition;
+        if (prepared === undefined) {
+          throw new DshConfigurationError("DSH composition was not prepared for Docker isolation");
+        }
+        await copyFile(prepared.launcherSourcePath, prepared.launcherDestinationPath);
       });
       if (!extensions.network) {
         internalNetwork = `dsh-action-internal-${randomUUID()}`;
@@ -844,43 +780,66 @@ export async function runDsh(
       realDeepSeekApiKey: request.apiKey,
     });
     assertSecretAbsent(workerEnvironment, request.apiKey, "real DeepSeek API key");
-    const toolPolicyPath = docker
-      ? undefined
-      : await runSetup(async () => writeToolPolicy(runtime, request));
+    if (!docker) {
+      preparedLocalComposition = await runSetup(async () =>
+        composition.prepareLocal({
+          isolation: "none",
+          assetsDirectory: assets,
+          runtime,
+          nativeTools: effectiveTools,
+        }),
+      );
+    }
     const { auditOffset, invocationCountsBefore } = await runSetup(async () => ({
       auditOffset:
-        controlledProfile === undefined ? 0 : await fileSize(controlledProfile.auditPath),
+        preparedDockerComposition === undefined
+          ? 0
+          : await fileSize(preparedDockerComposition.auditPath),
       invocationCountsBefore:
-        controlledProfile === undefined
+        preparedDockerComposition === undefined
           ? emptyInvocationCounts()
-          : await readInvocationCounts(controlledProfile.statePath, controlledProfile.rules),
+          : await readInvocationCounts(
+              preparedDockerComposition.statePath,
+              preparedDockerComposition.rules,
+            ),
     }));
 
-    const spec = docker
-      ? dockerWorkerSpec({
-          containerImage: request.containerImage,
-          ...(request.dshExecutable === undefined ? {} : { dshExecutable: request.dshExecutable }),
-          workspace,
-          dshHome: localDshHome,
-          packageRoot,
-          policyPluginPath,
-          workspacePluginPath,
-          networkName: internalNetwork ?? "bridge",
-          hostGateway: internalNetworkGateway ?? "host-gateway",
-          prompt,
-          environment,
-          workerEnvironment,
-          proxy,
-          workspaceWrite: workerWorkspaceWrite(request),
-        })
-      : localSpec(
-          dshExecutableIdentity,
-          workspace,
-          patchPath,
-          toolPolicyPath ?? patchPath,
-          prompt,
-          workerEnvironment,
-        );
+    let spec: DshProcessSpec;
+    if (docker) {
+      const prepared = preparedDockerComposition;
+      if (prepared === undefined) {
+        throw new DshConfigurationError("DSH composition was not prepared for Docker isolation");
+      }
+      spec = dockerWorkerSpec({
+        containerImage: request.containerImage,
+        ...(request.dshExecutable === undefined ? {} : { dshExecutable: request.dshExecutable }),
+        workspace,
+        dshHome: localDshHome,
+        packageRoot,
+        policyPluginPath: prepared.policyPluginPath,
+        workspacePluginPath: prepared.workspacePluginPath,
+        networkName: internalNetwork ?? "bridge",
+        hostGateway: internalNetworkGateway ?? "host-gateway",
+        prompt,
+        environment,
+        workerEnvironment,
+        proxy,
+        workspaceWrite: workerWorkspaceWrite(request),
+      });
+    } else {
+      const prepared = preparedLocalComposition;
+      if (prepared === undefined) {
+        throw new DshConfigurationError("DSH composition was not prepared for host isolation");
+      }
+      spec = localSpec(
+        dshExecutableIdentity,
+        workspace,
+        patchPath,
+        prepared.toolPolicyPath,
+        prompt,
+        workerEnvironment,
+      );
+    }
     assertWorkerLaunchHasNoControllerCredentials(spec, secrets);
 
     const remainingMs = phaseTimeoutMs(
@@ -925,8 +884,8 @@ export async function runDsh(
       }
     }
 
-    if (controlledProfile !== undefined) {
-      const profileForAudit = controlledProfile;
+    if (preparedDockerComposition !== undefined) {
+      const profileForAudit = preparedDockerComposition;
       try {
         turnReceipts = await runSetup(async () => {
           const receipts = await readToolReceipts(profileForAudit.auditPath, auditOffset);

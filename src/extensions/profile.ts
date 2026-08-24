@@ -2,6 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { DshPolicyRule } from "../dsh/composition.js";
 import type { DshOperation } from "../dsh/schema.js";
 import type { NativeToolId } from "../tools/schema.js";
 import { mcpPublicToolName } from "./plan.js";
@@ -9,17 +10,7 @@ import type { EffectiveExtensionPlan, ExtensionToolGrant } from "./plan.js";
 
 export const CONTROLLED_PROFILE_NAME = "github-action" as const;
 export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] as const;
-
-export interface DshPolicyRule {
-  readonly id: string;
-  readonly runtimeName: string;
-  readonly provider: "builtin" | "mcp" | "plugin";
-  readonly groupId: string;
-  readonly timeoutMs: number;
-  readonly maxOutputBytes: number;
-  readonly maxCalls: number;
-  readonly groupMaxCalls: number;
-}
+export type { DshPolicyRule } from "../dsh/composition.js";
 
 export interface ControlledProfilePaths {
   readonly profileDir: string;

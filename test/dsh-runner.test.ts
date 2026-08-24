@@ -13,6 +13,11 @@ import {
   DshTimeoutError,
 } from "../src/dsh/errors.js";
 import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "../src/dsh/proxy.js";
+import type {
+  DshComposition,
+  PreparedDockerDshComposition,
+  RunDshCompositionPreparation,
+} from "../src/dsh/composition.js";
 import {
   assertExtensionPackagesDoNotShadowRuntime,
   assertInstalledRuntimeInventoryUnchanged,
@@ -335,6 +340,181 @@ describe("runDsh", () => {
     expect(captured?.env).not.toHaveProperty("GITHUB_TOKEN");
     expect(captured?.env.DEEPSEEK_API_KEY).toBe("ephemeral-worker-token");
     expect(proxy.closeMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses the DshComposition boundary for launch artifacts and runtime identity", async () => {
+    const fixture = await fixtures();
+    const runtime = await createDshRuntime(fixture.root);
+    const proxy = fakeProxy();
+    const customPatchPath = join(fixture.root, "composition.patch.yml");
+    const customToolPolicyPath = join(fixture.root, "composition-tool-policy.patch.yml");
+    await writeFile(customPatchPath, "[]\n");
+    await writeFile(customToolPolicyPath, "[]\n");
+    const prepareBasePatch = vi.fn(() => Promise.resolve({ patchPath: customPatchPath }));
+    const prepare = vi.fn(() =>
+      Promise.resolve({ isolation: "none" as const, toolPolicyPath: customToolPolicyPath }),
+    );
+    const runtimeToolNames = vi.fn(() => ["read"]);
+    const composition = {
+      id: "test-composition",
+      profileSchemaVersion: 7,
+      runtimeToolNames,
+      prepareBasePatch,
+      validateRuntimeAssets: vi.fn(() => Promise.resolve()),
+      prepareLocal: prepare,
+      prepareDocker: vi.fn(() => Promise.reject(new Error("unexpected Docker preparation"))),
+    } satisfies DshComposition;
+    let captured: DshProcessSpec | undefined;
+
+    try {
+      await runDsh(
+        request({ workspacePath: fixture.workspace, dshExecutable: fixture.executable }),
+        {
+          assetsDirectory: fixture.assets,
+          environment: { PATH: process.env.PATH },
+          runtime,
+          composition,
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess: (spec) => {
+            captured = spec;
+            return Promise.resolve({
+              stdout: JSON.stringify({
+                protocolVersion: 1,
+                operation: "review",
+                state: "final",
+                summary: "Composed.",
+                findings: [],
+              }),
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            });
+          },
+        },
+      );
+
+      expect(prepareBasePatch).toHaveBeenCalledWith({
+        assetsDirectory: fixture.assets,
+        trust: "trusted-read",
+        isolation: "none",
+      });
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolation: "none",
+          assetsDirectory: fixture.assets,
+          runtime,
+          nativeTools: [],
+        }),
+      );
+      expect(captured?.args).toContain(customPatchPath);
+      expect(captured?.args).toContain(customToolPolicyPath);
+      expect(runtimeToolNames).toHaveBeenCalledWith([]);
+      expect(runtime.binding?.binding).toMatchObject({
+        compositionId: "test-composition",
+        profileSchemaVersion: 7,
+        nativeRuntimeTools: ["read"],
+      });
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
+  });
+
+  it("uses prepared Docker composition paths and its post-install finalizer", async () => {
+    const fixture = await fixtures();
+    const runtime = await createDshRuntime(fixture.root);
+    const proxy = fakeProxy();
+    const customPatchPath = join(fixture.root, "custom-docker.patch.yml");
+    const customPolicyPath = join(fixture.root, "custom-policy.mjs");
+    const customWorkspacePath = join(fixture.root, "custom-workspace.mjs");
+    const customLauncherSource = join(fixture.root, "custom-entry.mjs");
+    const customLauncherDestination = join(runtime.packageRoot, "action-launcher.mjs");
+    await Promise.all([
+      writeFile(customPatchPath, "[]\n"),
+      writeFile(customPolicyPath, "export default class CustomPolicy {}\n"),
+      writeFile(customWorkspacePath, "export default class CustomWorkspace {}\n"),
+      writeFile(customLauncherSource, "export default async function customEntry() {}\n"),
+    ]);
+    const postInstallPreparation = vi.fn();
+    const finalizeAfterInstall = vi.fn(
+      (runPreparation: RunDshCompositionPreparation): Promise<PreparedDockerDshComposition> =>
+        runPreparation(() => {
+          postInstallPreparation();
+          return Promise.resolve(prepared);
+        }),
+    );
+    const prepared: PreparedDockerDshComposition = {
+      isolation: "docker",
+      policyPluginPath: customPolicyPath,
+      workspacePluginPath: customWorkspacePath,
+      launcherSourcePath: customLauncherSource,
+      launcherDestinationPath: customLauncherDestination,
+      statePath: join(runtime.dshHome, "action-state", "custom-counts.json"),
+      auditPath: join(runtime.dshHome, "action-state", "custom-receipts.jsonl"),
+      rules: [],
+      finalizeAfterInstall,
+    };
+    const prepareDocker = vi.fn(() => Promise.resolve(prepared));
+    const composition = {
+      id: "test-docker-composition",
+      profileSchemaVersion: 9,
+      runtimeToolNames: vi.fn(() => ["glob", "grep", "read", "read_image"]),
+      prepareBasePatch: vi.fn(() => Promise.resolve({ patchPath: customPatchPath })),
+      validateRuntimeAssets: vi.fn(() => Promise.resolve()),
+      prepareLocal: vi.fn(() => Promise.reject(new Error("unexpected local preparation"))),
+      prepareDocker,
+    } satisfies DshComposition;
+    let captured: DshProcessSpec | undefined;
+
+    try {
+      await runDsh(request({ isolation: "docker", workspacePath: fixture.workspace }), {
+        assetsDirectory: fixture.assets,
+        environment: { PATH: process.env.PATH },
+        runtime,
+        composition,
+        startProxy: () => Promise.resolve(proxy),
+        executeProcess: (spec) => {
+          const inspect = networkInspectResult(spec);
+          if (inspect !== undefined) return Promise.resolve(inspect);
+          const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
+          if (isDsh) captured = spec;
+          return Promise.resolve({
+            stdout: isDsh
+              ? JSON.stringify({
+                  protocolVersion: 1,
+                  operation: "review",
+                  state: "final",
+                  summary: "Docker composition used.",
+                  findings: [],
+                })
+              : "",
+            stderr: "",
+            exitCode: 0,
+            signal: null,
+          });
+        },
+      });
+
+      expect(prepareDocker).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolation: "docker",
+          assetsDirectory: fixture.assets,
+          runtime,
+          nativeTools: ["workspace.read", "workspace.search"],
+        }),
+      );
+      expect(finalizeAfterInstall).toHaveBeenCalledOnce();
+      expect(postInstallPreparation).toHaveBeenCalledOnce();
+      expect(captured?.args).toContain(`${runtime.packageRoot}:${CONTAINER_PACKAGE_ROOT}:ro`);
+      expect(captured?.args).toContain(`${customPolicyPath}:/opt/dsh-action/action-policy.mjs:ro`);
+      expect(captured?.args).toContain(
+        `${customWorkspacePath}:/opt/dsh-action/action-workspace.mjs:ro`,
+      );
+      await expect(readFile(customLauncherDestination, "utf8")).resolves.toBe(
+        "export default async function customEntry() {}\n",
+      );
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
   });
 
   it.each(["none", "docker"] as const)(

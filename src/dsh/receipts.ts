@@ -1,6 +1,6 @@
 import { open, readFile, stat } from "node:fs/promises";
 
-import type { DshPolicyRule } from "../extensions/profile.js";
+import type { DshPolicyRule } from "./composition.js";
 import { DshConfigurationError } from "./errors.js";
 
 export const MAX_DSH_RECEIPT_LOG_BYTES = 16 * 1024 * 1024;
