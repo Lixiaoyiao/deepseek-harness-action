@@ -15,6 +15,7 @@ import {
 } from "../packages/create-deepseek-harness-action/src/installer.mjs";
 
 const execFileAsync = promisify(execFile);
+const INSTALLER_VERSION = "0.1.1";
 const RELEASE_SHA = "1234567890abcdef1234567890abcdef12345678";
 const RELEASE_TOKEN = "__DSH_ACTION_RELEASE_SHA__";
 const packageRoot = new URL("../packages/create-deepseek-harness-action/", import.meta.url);
@@ -82,13 +83,13 @@ afterAll(async () => {
 });
 
 describe("create-deepseek-harness-action release build", () => {
-  it("declares the independent 0.1.0 npm create package", async () => {
+  it("declares the independent 0.1.1 npm create package", async () => {
     const manifest: unknown = JSON.parse(
       await readFile(new URL("package.json", packageRoot), "utf8"),
     );
     expect(manifest).toMatchObject({
       name: "create-deepseek-harness-action",
-      version: "0.1.0",
+      version: INSTALLER_VERSION,
       private: false,
       type: "module",
       bin: { "create-deepseek-harness-action": "./dist/cli.mjs" },
@@ -115,16 +116,28 @@ describe("create-deepseek-harness-action release build", () => {
         RELEASE_TOKEN,
       );
     }
+    await expect(readFile(join(builtPackage, "installer.mjs"), "utf8")).resolves.toContain(
+      "/blob/v0.6.0/docs/setup.md",
+    );
 
-    const invalidOutput = join(suiteDirectory, "invalid-build");
-    const environment = { ...process.env };
-    delete environment.DSH_ACTION_RELEASE_SHA;
-    await expect(
-      execFileAsync(process.execPath, [buildScript, "--output", invalidOutput], {
-        env: environment,
-        windowsHide: true,
-      }),
-    ).rejects.toThrow(/DSH_ACTION_RELEASE_SHA/u);
+    for (const [index, invalidReleaseSha] of [
+      undefined,
+      "v0.6.0",
+      "1234",
+      "A".repeat(40),
+      "g".repeat(40),
+    ].entries()) {
+      const environment = { ...process.env };
+      if (invalidReleaseSha === undefined) delete environment.DSH_ACTION_RELEASE_SHA;
+      else environment.DSH_ACTION_RELEASE_SHA = invalidReleaseSha;
+      await expect(
+        execFileAsync(
+          process.execPath,
+          [buildScript, "--output", join(suiteDirectory, `invalid-build-${String(index)}`)],
+          { env: environment, windowsHide: true },
+        ),
+      ).rejects.toThrow(/DSH_ACTION_RELEASE_SHA/u);
+    }
 
     for (const unsafeOutput of [packageRootPath, process.cwd(), parsePath(process.cwd()).root]) {
       await expect(
@@ -157,9 +170,9 @@ describe("create-deepseek-harness-action release build", () => {
 
     expect(packResult).toHaveLength(1);
     expect(packResult[0]).toMatchObject({
-      filename: "create-deepseek-harness-action-0.1.0.tgz",
+      filename: `create-deepseek-harness-action-${INSTALLER_VERSION}.tgz`,
       name: "create-deepseek-harness-action",
-      version: "0.1.0",
+      version: INSTALLER_VERSION,
     });
     await expect(
       readFile(join(packDirectory, packResult[0]?.filename ?? "")),
@@ -348,6 +361,20 @@ describe("generated workflow contracts", () => {
     expect(() => {
       parse(commands);
     }).not.toThrow();
+    const reviewDocument = parse(review) as { permissions?: Record<string, string> };
+    const commandsDocument = parse(commands) as { permissions?: Record<string, string> };
+
+    expect(reviewDocument.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "write",
+    });
+    expect(commandsDocument.permissions).toEqual({
+      actions: "read",
+      checks: "read",
+      contents: "write",
+      issues: "write",
+      "pull-requests": "write",
+    });
 
     expect(review).toContain("pull_request_target:");
     expect(review).not.toMatch(/^\s+pull_request:\s*$/mu);
@@ -378,7 +405,9 @@ describe("generated workflow contracts", () => {
     expect(commands).toContain('run-tests: "true"');
     expect(commands).toContain("validation-integrity: strict");
     expect(commands).toContain("process.exit(1)");
-    expect(commands).toContain("container-image: docker.io/library/node:24.18.0-bookworm@sha256:");
+    expect(commands).toMatch(
+      /^\s+container-image: docker\.io\/library\/node:24\.18\.0-bookworm@sha256:[0-9a-f]{64}$/mu,
+    );
 
     for (const contents of [review, commands]) {
       expect(
@@ -386,8 +415,15 @@ describe("generated workflow contracts", () => {
       ).toHaveLength(1);
       expect(contents).not.toContain(RELEASE_TOKEN);
       expect(contents).not.toContain("github-token:");
+      expect(contents).not.toContain("id-token:");
+      expect(contents).not.toContain("secrets: inherit");
+      expect(contents).not.toContain("GITHUB_TOKEN");
+      expect(contents).not.toContain("GH_TOKEN");
       expect(contents).not.toMatch(/^\s+env:\s*$/mu);
       expect(contents).toContain("deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}");
+      expect(
+        contents.match(/uses: actions\/checkout@11d5960a326750d5838078e36cf38b85af677262/gu),
+      ).toHaveLength(1);
     }
   });
 });

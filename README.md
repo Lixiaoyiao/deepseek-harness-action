@@ -58,7 +58,7 @@ For CI or another non-interactive environment, pass the mode explicitly so the i
 npm create deepseek-harness-action@latest -- --mode both
 ```
 
-The installer creates `.github/workflows/` when needed and refuses to overwrite an existing target workflow. It does not add secrets, commit or push changes, or open a pull request. The generated workflows pin the Action to the immutable v0.5.2 release commit.
+The installer creates `.github/workflows/` when needed and refuses to overwrite an existing target workflow. It does not add secrets, commit or push changes, or open a pull request. Installer v0.1.1 generates workflows pinned to the immutable v0.6.0 release commit.
 
 After installation, add `DEEPSEEK_API_KEY` under **Settings → Secrets and variables → Actions**. Open or update a non-draft pull request to trigger Review. For Coding Commands, put an `@dsh` command on the first line of an Issue or pull request comment. See [Setup](docs/setup.md) for the complete onboarding and security guide.
 

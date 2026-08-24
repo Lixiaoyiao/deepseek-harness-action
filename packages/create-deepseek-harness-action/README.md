@@ -17,3 +17,7 @@ npm create deepseek-harness-action@latest -- --mode both
 Valid modes are `review`, `commands`, and `both`. The installer creates only
 workflow files. It does not add secrets, commit, push, or open a pull request.
 Existing workflow files are never overwritten.
+
+Version `0.1.1` is built only after the formal Action release exists. Its
+generated workflows pin the immutable v0.6.0 release commit, not a floating
+tag or branch.
