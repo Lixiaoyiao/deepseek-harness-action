@@ -4,7 +4,12 @@ import { z } from "zod";
 
 import type { AgentToolManifest } from "../agent/contracts.js";
 import type { ExtensionAudit } from "../extensions/plan.js";
-import { autonomyToolSchema, type AllowedToolId, type AutonomyToolId } from "../tools/schema.js";
+import {
+  autonomyToolSchema,
+  type AllowedToolId,
+  type AutonomyToolId,
+  type ToolPolicyOwner,
+} from "../tools/schema.js";
 
 export const permissionProfileSchema = z.enum(["strict", "standard", "custom"]);
 export type PermissionProfile = z.infer<typeof permissionProfileSchema>;
@@ -26,6 +31,31 @@ export interface ToolDenial {
   readonly id: AllowedToolId;
   readonly reason: string;
 }
+
+interface ToolPolicyAuditBase {
+  readonly schemaVersion: 1;
+  readonly policyOwner: ToolPolicyOwner;
+  /** Canonical capabilities requested by the workflow/profile before policy intersection. */
+  readonly requestedTools: readonly AllowedToolId[];
+  readonly deniedTools: readonly ToolDenial[];
+}
+
+/** Controller-owned policy: this is the exact model-visible grant, not runtime telemetry. */
+export interface ControllerToolPolicyAudit extends ToolPolicyAuditBase {
+  readonly policyOwner: "controller";
+  readonly effectiveTools: readonly string[];
+  readonly observedTools?: never;
+}
+
+/** Reserved audit shape for a future DSH-owned composition; no such mode exists today. */
+export interface DshToolPolicyAudit extends ToolPolicyAuditBase {
+  readonly policyOwner: "dsh";
+  /** Names actually observed by the DSH runtime; telemetry, not a Controller grant. */
+  readonly observedTools: readonly string[];
+  readonly effectiveTools?: never;
+}
+
+export type ToolPolicyAudit = ControllerToolPolicyAudit | DshToolPolicyAudit;
 
 export interface PermissionResolution {
   readonly profile: PermissionProfile;
@@ -153,4 +183,23 @@ export function buildPermissionAudit(options: {
     .update(JSON.stringify(auditWithoutDigest), "utf8")
     .digest("hex");
   return { ...auditWithoutDigest, digest };
+}
+
+/** Project the legacy permission audit into the current Controller-owned policy semantics. */
+export function buildControllerToolPolicyAudit(
+  permission: PermissionAudit,
+  policyOwner: ToolPolicyOwner,
+): ControllerToolPolicyAudit {
+  if (policyOwner !== "controller") {
+    throw new Error(
+      "A DSH-owned policy must report observed tools, not Controller-effective tools",
+    );
+  }
+  return {
+    schemaVersion: 1,
+    policyOwner: "controller",
+    requestedTools: permission.requestedTools,
+    effectiveTools: permission.effectiveTools,
+    deniedTools: permission.deniedTools,
+  };
 }

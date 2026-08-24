@@ -58,6 +58,8 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(
       /tool-receipts:[\s\S]*?bounded controller\/DSH receipt arrays and truncation metadata/u,
     );
+    expect(metadata).toMatch(/effective-tools:[\s\S]*?granted by the Controller/u);
+    expect(metadata).toMatch(/result-json:[\s\S]*?tool-policy ownership audit/u);
     expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
     expect(metadata).toMatch(/task-output:[\s\S]*?Controller schema validation/u);
     expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);

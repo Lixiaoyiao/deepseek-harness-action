@@ -13,7 +13,7 @@ import {
 } from "./errors.js";
 import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
 import type { ExtensionAudit } from "./extensions/plan.js";
-import type { PermissionAudit } from "./permissions/profile.js";
+import type { PermissionAudit, ToolPolicyAudit } from "./permissions/profile.js";
 import type { PublicationResult } from "./review/publisher.js";
 import { stripTrackingMarkers } from "./review/tracking.js";
 import type { SecurityPolicy } from "./security/policy.js";
@@ -76,6 +76,7 @@ export interface RunOutcome {
   readonly runUrl?: string;
   readonly policy?: SecurityPolicy;
   readonly permission?: PermissionAudit;
+  readonly toolPolicy?: ToolPolicyAudit;
   readonly agent?: AgentRunSummary;
   readonly publication?: PublicationResult;
   readonly validation?: ValidationSummary;
@@ -307,6 +308,7 @@ function structuredResult(
           },
         }),
     ...(outcome.permission === undefined ? {} : { permissions: outcome.permission }),
+    ...(outcome.toolPolicy === undefined ? {} : { toolPolicy: outcome.toolPolicy }),
     ...(outcome.agent === undefined
       ? {}
       : {
@@ -476,8 +478,17 @@ function boundedInlineList(values: readonly string[]): string {
   return `${shown.join(", ")}${hidden === 0 ? "" : ` (+${String(hidden)} more)`}`;
 }
 
-function permissionSummaryLines(permission: PermissionAudit | undefined): readonly string[] {
+function permissionSummaryLines(
+  permission: PermissionAudit | undefined,
+  toolPolicy: ToolPolicyAudit | undefined,
+): readonly string[] {
   const profile = permission?.profile ?? "not resolved";
+  const policyOwner =
+    toolPolicy?.policyOwner === "controller"
+      ? "Controller"
+      : toolPolicy?.policyOwner === "dsh"
+        ? "DSH"
+        : "not resolved";
   const network = permission?.network ?? "none";
   const workspaceWrite = permission?.workspaceWrite === true ? "enabled" : "disabled";
   const trustedExtensions =
@@ -490,12 +501,16 @@ function permissionSummaryLines(permission: PermissionAudit | undefined): readon
     "### Effective Agent permissions",
     "",
     `**Profile:** ${inlineCode(profile)}`,
-    `**Effective tools:** ${boundedInlineList(permission?.effectiveTools ?? [])}`,
+    `**Tool policy owner:** ${inlineCode(policyOwner)}`,
+    `**Requested tools:** ${boundedInlineList(toolPolicy?.requestedTools ?? permission?.requestedTools ?? [])}`,
+    toolPolicy?.policyOwner === "dsh"
+      ? `**Observed tools:** ${boundedInlineList(toolPolicy.observedTools)}`
+      : `**Effective tools:** ${boundedInlineList(toolPolicy?.effectiveTools ?? permission?.effectiveTools ?? [])}`,
     `**Network:** ${inlineCode(network)}`,
     `**Workspace write:** ${inlineCode(workspaceWrite)}`,
     `**Trusted extensions:** ${boundedInlineList(trustedExtensions)}`,
   ];
-  const denials = permission?.deniedTools ?? [];
+  const denials = toolPolicy?.deniedTools ?? permission?.deniedTools ?? [];
   if (denials.length === 0) {
     lines.push("**Denials:** none");
     return lines;
@@ -547,7 +562,7 @@ export function formatStepSummary(outcome: RunOutcome): string {
     `**Duration:** ${(outcome.durationMs / 1_000).toFixed(1)}s`,
     "",
     safeMarkdown(outcome.summary),
-    ...permissionSummaryLines(outcome.permission),
+    ...permissionSummaryLines(outcome.permission, outcome.toolPolicy),
     ...validationSummaryLines(outcome.validation),
   ];
   if (outcome.error !== undefined) {

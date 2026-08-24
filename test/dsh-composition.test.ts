@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { DshComposition } from "../src/dsh/composition.js";
-import { ControlledComposition } from "../src/dsh/controlled-composition.js";
+import {
+  ControlledComposition,
+  PRODUCTION_DSH_COMPOSITION,
+} from "../src/dsh/controlled-composition.js";
 import { createDshRuntime, disposeDshRuntime } from "../src/dsh/runtime.js";
 import { resolveExtensionPlan } from "../src/extensions/plan.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
@@ -60,7 +63,7 @@ describe("ControlledComposition", () => {
   it("owns the existing trust patches and host ToolRuntime policy", async () => {
     const fixture = await controlledAssets();
     const runtime = await createDshRuntime(fixture.root);
-    const composition: DshComposition = new ControlledComposition();
+    const composition: DshComposition = PRODUCTION_DSH_COMPOSITION.create();
 
     try {
       await expect(
@@ -95,6 +98,8 @@ describe("ControlledComposition", () => {
         "- id: tool-fs\n  disabled: true\n\n- id: tool-fs-search\n  disabled: true\n\n- id: tool-str-replace-editor\n  disabled: true\n",
       );
       expect(composition.id).toBe("github-action-controlled");
+      expect(PRODUCTION_DSH_COMPOSITION.toolPolicyOwner).toBe(composition.toolPolicyOwner);
+      expect(composition.toolPolicyOwner).toBe("controller");
       expect(composition.profileSchemaVersion).toBe(1);
       expect(composition.runtimeToolNames(["workspace.read", "workspace.search"])).toEqual([
         "glob",

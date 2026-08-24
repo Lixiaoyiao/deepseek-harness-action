@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentToolCall, AgentToolManifest, ToolProvider } from "../src/agent/contracts.js";
+import {
+  buildControllerToolPolicyAudit,
+  buildPermissionAudit,
+} from "../src/permissions/profile.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import { executeCommandTool, type CommandToolProcessRunner } from "../src/tools/executor.js";
 import { CommandToolProvider, resolveEffectiveTools } from "../src/tools/registry.js";
@@ -181,6 +185,42 @@ describe("maintainer-defined command tools", () => {
         },
       ]),
     );
+    const permission = buildPermissionAudit({
+      resolution: effective.permission,
+      manifests: effective.manifests,
+      additionalDenials: effective.permissionDenials,
+    });
+    expect(permission.effectiveTools).toEqual(["workspace.read", "workspace.search"]);
+    expect(buildControllerToolPolicyAudit(permission, "controller")).toMatchObject({
+      policyOwner: "controller",
+      requestedTools: [
+        "native.bash",
+        "native.subagent",
+        "native.web-search",
+        "workspace.edit",
+        "workspace.read",
+        "workspace.search",
+      ],
+      effectiveTools: ["workspace.read", "workspace.search"],
+      deniedTools: [
+        {
+          id: "native.bash",
+          reason: "Bash requires trusted-write repository-code execution in Docker",
+        },
+        {
+          id: "native.subagent",
+          reason: "Subagent delegation requires trusted-write policy in Docker",
+        },
+        {
+          id: "native.web-search",
+          reason: "Web search requires a trusted same-repository actor and Docker",
+        },
+        {
+          id: "workspace.edit",
+          reason: "Workspace editing requires trusted-write policy with Docker isolation",
+        },
+      ],
+    });
   });
 
   it("runs exact argv in a named read-only container and force-cleans timeouts", async () => {

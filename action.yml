@@ -179,7 +179,7 @@ outputs:
   permission-profile:
     description: "Resolved Agent permission profile: strict, standard, custom, or none"
   effective-tools:
-    description: "JSON array of exact tools granted after preset, deny, trust, and extension policy intersection"
+    description: "Backward-compatible JSON array of exact canonical tools granted by the Controller after preset, deny, trust, and extension policy intersection"
   network-access:
     description: "Effective worker network: host-gateway, mediated-web, bridge, or none before permission resolution"
   workspace-write:
@@ -201,7 +201,7 @@ outputs:
   task-output:
     description: "JSON-encoded maintainer-defined task output after Controller schema validation; empty when not configured or unavailable"
   result-json:
-    description: "Versioned JSON envelope containing status, result, policy, permissions, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
+    description: "Versioned JSON envelope containing status, result, policy, permissions, tool-policy ownership audit, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
 
 runs:
   using: "node24"

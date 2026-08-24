@@ -21,6 +21,7 @@ import type {
   DshBasePatch,
   DshBasePatchOptions,
   DshComposition,
+  DshCompositionSelection,
   DshRuntimeAssetsOptions,
   PrepareDockerDshCompositionOptions,
   PreparedDockerDshComposition,
@@ -78,6 +79,7 @@ function controlledAssets(assetsDirectory: string): {
 /** The sole current DSH composition: the existing github-action controlled behavior. */
 export class ControlledComposition implements DshComposition {
   public readonly id = "github-action-controlled";
+  public readonly toolPolicyOwner = "controller";
   public readonly profileSchemaVersion = CONTROLLED_PROFILE_SCHEMA_VERSION;
   private validatedAssetsDirectory: string | undefined;
 
@@ -199,3 +201,9 @@ export class ControlledComposition implements DshComposition {
     );
   }
 }
+
+/** The sole production selection. Adding another owner requires an explicit audit path. */
+export const PRODUCTION_DSH_COMPOSITION = {
+  toolPolicyOwner: "controller",
+  create: () => new ControlledComposition(),
+} satisfies DshCompositionSelection<"controller">;

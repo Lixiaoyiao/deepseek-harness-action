@@ -211,6 +211,11 @@ jobs:
             .schemaVersion == 1 and .conclusion == "success" and .operation == "task" and
             .policy.trust == "trusted-read" and .permissions.profile == "strict" and
             .permissions.effectiveTools == ["workspace.read","workspace.search"] and
+            .toolPolicy.policyOwner == "controller" and
+            .toolPolicy.requestedTools == ["workspace.edit","workspace.read","workspace.search"] and
+            .toolPolicy.effectiveTools == .permissions.effectiveTools and
+            (.toolPolicy.deniedTools | any(.id == "workspace.edit")) and
+            (.toolPolicy | has("observedTools") | not) and
             .permissions.workspaceWrite == false and
             .isolation.backend == "docker" and .isolation.processIsolated == true and
             .isolation.workspaceAccess == "read-only" and
@@ -269,6 +274,11 @@ jobs:
           jq -e '
             .conclusion == "success" and .permissions.profile == "custom" and
             .permissions.effectiveTools == ["mcp.fixture.echo","workspace.read","workspace.search"] and
+            .toolPolicy.policyOwner == "controller" and
+            .toolPolicy.requestedTools == ["mcp.fixture.echo","mcp.fixture.hidden","workspace.read","workspace.search"] and
+            .toolPolicy.effectiveTools == .permissions.effectiveTools and
+            (.toolPolicy.deniedTools | any(.id == "mcp.fixture.hidden")) and
+            (.toolPolicy | has("observedTools") | not) and
             .permissions.network == "bridge" and
             (.permissions.deniedTools | any(.id == "mcp.fixture.hidden")) and
             (.permissions.trustedExtensions | any(.id == "fixture" and .kind == "mcp" and .network == true)) and

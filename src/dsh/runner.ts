@@ -50,7 +50,7 @@ import type {
   PreparedDockerDshComposition,
   PreparedLocalDshComposition,
 } from "./composition.js";
-import { ControlledComposition } from "./controlled-composition.js";
+import { PRODUCTION_DSH_COMPOSITION } from "./controlled-composition.js";
 import {
   assertExtensionInstallBaseline,
   auditFreshExtensionInstallation,
@@ -542,7 +542,7 @@ export async function runDsh(
     return await realpath(requestedWorkspace);
   });
 
-  const composition = dependencies.composition ?? new ControlledComposition();
+  const composition = dependencies.composition ?? PRODUCTION_DSH_COMPOSITION.create();
   const assets = dependencies.assetsDirectory ?? defaultAssetsDirectory();
   const { patchPath } = await runSetup(async () =>
     composition.prepareBasePatch({
