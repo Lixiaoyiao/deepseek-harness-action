@@ -15,6 +15,9 @@ define a second plugin system:
 - The Action Controller validates trusted workflow inputs, computes the
   effective grants, generates the `github-action` Profile and Cordis patch, and
   installs one positive ToolRuntime policy adapter.
+- The DSH runner reaches that construction through the internal
+  `DshComposition` boundary. `ControlledComposition` is the sole current
+  implementation; this boundary does not add another Profile or run mode.
 - The v0.3 placeholder `ExtensionProvider` seam has been removed. MCP and
   plugin tools are not routed through a parallel Action plugin registry.
 

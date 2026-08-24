@@ -18,6 +18,7 @@ const EXTENSION_DIGEST = "a".repeat(64);
 
 function binding(overrides: Partial<DshRuntimeBinding> = {}): DshRuntimeBinding {
   return {
+    compositionId: "github-action-controlled",
     dshVersion: DSH_VERSION,
     containerImage: `docker.io/library/node@sha256:${"1".repeat(64)}`,
     isolation: "docker",
@@ -113,6 +114,7 @@ describe("run-scoped DSH runtime", () => {
       Partial<DshRuntimeBinding>,
       Partial<DshRuntimeBinding>,
     ][] = [
+      ["compositionId", {}, { compositionId: "another-composition" }],
       ["dshVersion", {}, { dshVersion: "0.1.0-rc.9" }],
       ["containerImage", {}, { containerImage: `example.invalid/node@sha256:${"2".repeat(64)}` }],
       [
@@ -165,6 +167,7 @@ describe("run-scoped DSH runtime", () => {
 
   it("rejects malformed first-use bindings before fixing the runtime", () => {
     const malformed: readonly Partial<DshRuntimeBinding>[] = [
+      { compositionId: "" },
       { dshVersion: "" },
       { containerImage: " " },
       { isolation: "invalid" as DshRuntimeBinding["isolation"] },

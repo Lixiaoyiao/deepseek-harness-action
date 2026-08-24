@@ -11,6 +11,7 @@ export const DSH_RUNTIME_PROFILE_NAME = "github-action" as const;
 
 /** Controller-owned inputs that must remain fixed while a runtime is reused. */
 export interface DshRuntimeBinding {
+  readonly compositionId: string;
   readonly dshVersion: string;
   readonly containerImage: string;
   readonly isolation: DshRuntimeIsolation;
@@ -111,6 +112,7 @@ function normalizedBaseUrl(value: string, field: string): string {
 }
 
 function normalizedBinding(binding: DshRuntimeBinding): DshRuntimeBinding {
+  const compositionId = nonEmptyString(binding.compositionId, "compositionId");
   const dshVersion = nonEmptyString(binding.dshVersion, "dshVersion");
   const containerImage = nonEmptyString(binding.containerImage, "containerImage");
   const isolation: unknown = binding.isolation;
@@ -173,6 +175,7 @@ function normalizedBinding(binding: DshRuntimeBinding): DshRuntimeBinding {
     );
   }
   return Object.freeze({
+    compositionId,
     dshVersion,
     containerImage,
     isolation,
@@ -190,6 +193,7 @@ function normalizedBinding(binding: DshRuntimeBinding): DshRuntimeBinding {
 
 function bindingJson(binding: DshRuntimeBinding): JsonObject {
   return {
+    compositionId: binding.compositionId,
     dshVersion: binding.dshVersion,
     containerImage: binding.containerImage,
     isolation: binding.isolation,
@@ -222,6 +226,7 @@ function changedBindingFields(
   requested: DshRuntimeBinding,
 ): readonly string[] {
   const comparisons: readonly [keyof DshRuntimeBinding, boolean][] = [
+    ["compositionId", previous.compositionId !== requested.compositionId],
     ["dshVersion", previous.dshVersion !== requested.dshVersion],
     ["containerImage", previous.containerImage !== requested.containerImage],
     ["isolation", previous.isolation !== requested.isolation],
