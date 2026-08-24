@@ -26,7 +26,7 @@ For CI or another non-interactive environment, pass the mode explicitly. The ins
 npm create deepseek-harness-action@latest -- --mode both
 ```
 
-The installer creates `.github/workflows/` when necessary and refuses to overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`, commit or push changes, or open a pull request. The generated workflows pin the Action to the immutable v0.5.2 release commit.
+The installer creates `.github/workflows/` when necessary and refuses to overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`, commit or push changes, or open a pull request. Installer v0.1.1 generates workflows pinned to the immutable v0.6.0 release commit.
 
 After the installer succeeds:
 

@@ -22,6 +22,7 @@ const [
   installerManifestText,
   installerLockText,
   installerBuild,
+  installerRuntime,
   installerReview,
   installerCommands,
 ] = await Promise.all([
@@ -33,6 +34,7 @@ const [
   read("packages/create-deepseek-harness-action/package.json"),
   read("packages/create-deepseek-harness-action/package-lock.json"),
   read("packages/create-deepseek-harness-action/scripts/build.mjs"),
+  read("packages/create-deepseek-harness-action/src/installer.mjs"),
   read("packages/create-deepseek-harness-action/src/templates/dsh-review.yml"),
   read("packages/create-deepseek-harness-action/src/templates/dsh-commands.yml"),
 ]);
@@ -40,6 +42,7 @@ const manifest = JSON.parse(manifestText);
 const lock = JSON.parse(lockText);
 const installerManifest = JSON.parse(installerManifestText);
 const installerLock = JSON.parse(installerLockText);
+const installerVersion = "0.1.1";
 const directDependencies = {
   ...(manifest.dependencies ?? {}),
   ...(manifest.devDependencies ?? {}),
@@ -124,7 +127,7 @@ assert.equal(
   "create-deepseek-harness-action",
   "installer npm package name drifted",
 );
-assert.equal(installerManifest.version, "0.1.0", "installer version must start at 0.1.0");
+assert.equal(installerManifest.version, installerVersion, "installer version drifted");
 assert.equal(installerManifest.private, false, "installer must remain publishable");
 assert.equal(
   installerManifest.bin?.["create-deepseek-harness-action"],
@@ -142,8 +145,16 @@ assert.deepEqual(
   { access: "public", registry: "https://registry.npmjs.org/" },
   "installer must publish publicly through the official npm registry",
 );
-assert.equal(installerLock.version, "0.1.0", "installer lock version drifted");
-assert.equal(installerLock.packages?.[""]?.version, "0.1.0", "installer root lock version drifted");
+assert.equal(installerLock.version, installerVersion, "installer lock version drifted");
+assert.equal(
+  installerLock.packages?.[""]?.version,
+  installerVersion,
+  "installer root lock version drifted",
+);
+assert.ok(
+  installerRuntime.includes("/blob/v0.6.0/docs/setup.md"),
+  "installer documentation must bind to the v0.6.0 release",
+);
 
 const installerReleaseToken = "__DSH_ACTION_RELEASE_SHA__";
 assert.ok(

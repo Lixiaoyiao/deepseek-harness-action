@@ -58,7 +58,7 @@ npm create deepseek-harness-action@latest
 npm create deepseek-harness-action@latest -- --mode both
 ```
 
-安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。它不会添加 Secret、commit 或 push 改动，也不会创建 PR。生成的 workflow 会把 Action 固定到 v0.5.2 的不可变 release commit。
+安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。它不会添加 Secret、commit 或 push 改动，也不会创建 PR。安装器 v0.1.1 生成的 workflow 会把 Action 固定到 v0.6.0 的不可变 release commit。
 
 安装完成后，在 **Settings → Secrets and variables → Actions** 中添加 `DEEPSEEK_API_KEY`。打开或更新一个非 draft PR 即可触发 Review；使用 Coding Commands 时，把 `@dsh` 命令写在 Issue 或 PR 评论的第一行。完整 onboarding 与安全说明见[安装指南](docs/setup.zh-CN.md)。
 

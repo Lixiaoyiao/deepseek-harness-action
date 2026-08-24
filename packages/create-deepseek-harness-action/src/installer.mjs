@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 const DOCUMENTATION_URL =
-  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/v0.5.2/docs/setup.md";
+  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/v0.6.0/docs/setup.md";
 const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
 const MODES = new Set(["review", "commands", "both"]);
 const WORKFLOWS = Object.freeze({

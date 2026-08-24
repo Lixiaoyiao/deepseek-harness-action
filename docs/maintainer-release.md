@@ -60,7 +60,7 @@ For an Action version bump, update every release surface together:
 6. Any release-specific verification fixture or documentation.
 
 The standalone `create-deepseek-harness-action` package has its own semantic
-version. For v0.5.2 its version is `0.1.0`; do not change it to the Action
+version. Its v0.6.0 companion release is `0.1.1`; do not change it to the Action
 version. Keep its package manifest, npm lock/workspace metadata, CLI tests, and
 pack-time release-SHA contract aligned.
 
@@ -203,22 +203,28 @@ If the smoke fails after publication, keep the tag immutable. Diagnose the failu
 
 ## Publish the npm create package
 
-Publish `create-deepseek-harness-action` only after the formal tag, GitHub
-Release, and release canary all resolve to `release_sha`. A Git commit cannot
-safely contain its own not-yet-known object ID, so the source package uses one
-controlled build token. The npm tarball is built in a disposable checkout of
-the exact tagged commit and injects the real SHA at pack time. Never commit a
-guessed candidate SHA, move the release tag, or publish a tarball containing the
-token or a floating Action tag.
+Publish `create-deepseek-harness-action` only after the formal Action tag,
+GitHub Release, and release canary all resolve to `release_sha`. A Git commit
+cannot safely contain its own not-yet-known object ID, so the source package
+uses one controlled build token. When an installer patch follows the Action
+release, keep two identities: `release_sha` is the immutable Action commit
+written into generated workflows, while `installer_source_sha` is the reviewed
+commit containing the installer manifest, tests, and documentation. Create an
+immutable `create-deepseek-harness-action-vX.Y.Z` source tag after CI succeeds
+on that exact installer commit. Never move either tag or publish a tarball from
+an unreviewed working tree, with an unresolved token, or with a floating Action
+reference.
 
-First verify the published release identity again and create a detached staging
-checkout. The tag-resolution loop accepts either an annotated or lightweight
-tag and must end at the already qualified commit:
+First verify the published Action release identity and the installer source tag,
+then create a detached staging checkout. Each tag-resolution loop accepts an
+annotated or lightweight tag and must end at its expected commit:
 
 ```bash
 release_tag="vX.Y.Z"
+installer_tag="create-deepseek-harness-action-v0.1.1"
 sha_pattern='^[0-9a-f]{40}$'
 [[ "$release_sha" =~ $sha_pattern ]]
+[[ "$installer_source_sha" =~ $sha_pattern ]]
 
 release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag")"
 jq -e --arg tag "$release_tag" '
@@ -236,8 +242,19 @@ for _ in 1 2 3 4 5; do
 done
 [[ "$object_type" == "commit" && "$object_sha" == "$release_sha" ]]
 
+installer_ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$installer_tag")"
+installer_object_sha="$(jq -r '.object.sha' <<<"$installer_ref_json")"
+installer_object_type="$(jq -r '.object.type' <<<"$installer_ref_json")"
+for _ in 1 2 3 4 5; do
+  [[ "$installer_object_type" != "tag" ]] && break
+  installer_tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$installer_object_sha")"
+  installer_object_sha="$(jq -r '.object.sha' <<<"$installer_tag_json")"
+  installer_object_type="$(jq -r '.object.type' <<<"$installer_tag_json")"
+done
+[[ "$installer_object_type" == "commit" && "$installer_object_sha" == "$installer_source_sha" ]]
+
 installer_stage="$(mktemp -d)"
-git worktree add --detach "$installer_stage/source" "$release_sha"
+git worktree add --detach "$installer_stage/source" "$installer_source_sha"
 mkdir "$installer_stage/pack" "$installer_stage/unpacked" "$installer_stage/smoke"
 ```
 
@@ -257,8 +274,8 @@ tar -xzf "$tarball" -C "$installer_stage/unpacked"
 ```
 
 Inspect the packed artifact, not only the source tree. It must contain version
-`0.1.0`, expose the `create-deepseek-harness-action` executable, contain no
-unresolved release token or floating `v0.5.2` Action reference, and generate
+`0.1.1`, expose the `create-deepseek-harness-action` executable, contain no
+unresolved release token or floating `v0.6.0` Action reference, and generate
 exactly two workflows bound to `release_sha` in a non-interactive smoke run:
 
 ```bash
@@ -268,11 +285,11 @@ import { readFile } from "node:fs/promises";
 
 const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
 assert.equal(manifest.name, "create-deepseek-harness-action");
-assert.equal(manifest.version, "0.1.0");
+assert.equal(manifest.version, "0.1.1");
 assert.ok(manifest.bin?.["create-deepseek-harness-action"]);
 NODE
 
-! grep -R -E '__[A-Z0-9_]*RELEASE[A-Z0-9_]*__|deepseek-harness-action@v0\.5\.2' \
+! grep -R -E '__[A-Z0-9_]*RELEASE[A-Z0-9_]*__|Lixiaoyiao/deepseek-harness-action@(v[0-9]|main|latest)' \
   "$installer_stage/unpacked/package"
 
 (
@@ -284,7 +301,7 @@ NODE
 test "$(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml' | wc -l)" -eq 2
 while IFS= read -r workflow; do
   grep -F "uses: Lixiaoyiao/deepseek-harness-action@$release_sha" "$workflow"
-  ! grep -E 'deepseek-harness-action@(v0\.5\.2|main|latest)' "$workflow"
+  ! grep -E 'Lixiaoyiao/deepseek-harness-action@(v[0-9]|main|latest)' "$workflow"
 done < <(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml')
 ```
 
@@ -295,7 +312,7 @@ that would rerun packing with an unreviewed environment:
 ```bash
 npm whoami --registry=https://registry.npmjs.org/
 npm publish "$tarball" --access public --registry=https://registry.npmjs.org/
-npm view create-deepseek-harness-action@0.1.0 \
+npm view create-deepseek-harness-action@0.1.1 \
   name version dist-tags --json --registry=https://registry.npmjs.org/
 ```
 
@@ -305,4 +322,4 @@ generated workflow files still contain only `release_sha`, parse as YAML, and
 retain the required checkout, permission, Docker, validation, and credential
 boundaries. Then remove the disposable worktree and staging directory. npm
 versions and the release tag are immutable; a bad published installer must be
-fixed with a new installer patch version rather than replacing `0.1.0`.
+fixed with a new installer patch version rather than replacing `0.1.1`.

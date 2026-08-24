@@ -3,6 +3,17 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## Installer 0.1.1 - 2026-08-24
+
+- Updated the standalone `create-deepseek-harness-action` package so its
+  controlled pack step binds both generated workflows to the immutable v0.6.0
+  release commit. The npm package remains versioned independently from the
+  Action.
+- Preserved credential-free checkout, trusted-base fork review, minimum token
+  permissions, Docker isolation, explicit write opt-in, fail-closed validation,
+  strict Validation Integrity, and overwrite refusal. No Action runtime or
+  v0.6.0 tag content changed.
+
 ## [0.6.0] - 2026-08-23
 
 ### Added
