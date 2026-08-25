@@ -29,6 +29,7 @@ import {
 } from "./write/workspace.js";
 import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
+import { buildAuthorityAudit, type AuthorityAudit } from "./security/authority.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
 import { PRODUCTION_DSH_COMPOSITION } from "./dsh/controlled-composition.js";
@@ -102,6 +103,7 @@ interface RunState {
   validationCommandCount?: number;
   permission?: PermissionAudit;
   toolPolicy?: ToolPolicyAudit;
+  authority?: AuthorityAudit;
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
   validationPassed?: boolean;
@@ -365,6 +367,7 @@ function outcomeContext(state: RunState, startedAt: number) {
     ...(state.agent === undefined ? {} : { agent: state.agent }),
     ...(state.permission === undefined ? {} : { permission: state.permission }),
     ...(state.toolPolicy === undefined ? {} : { toolPolicy: state.toolPolicy }),
+    ...(state.authority === undefined ? {} : { authority: state.authority }),
     ...(state.progress?.commentId === undefined ? {} : { commentId: state.progress.commentId }),
   };
 }
@@ -745,6 +748,10 @@ async function runActionInternal(
     // path can introduce a pre-validation GitHub side effect.
     if (githubMutationTools.length > 0) await ensureGitHubMutationValidation();
 
+    // Extension authority is a configured-plan fact, not a runtime receipt.
+    // Publish it only once every pre-Agent Controller gate has accepted the
+    // plan and the Action is committed to entering the worker path.
+    state.authority = buildAuthorityAudit(extensions);
     state.phase = "agent";
     const loop = await runAgentLoop(
       {
@@ -1177,6 +1184,7 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
   try {
     throwIfCancelled(options.signal);
     const inputs = loadInputs();
+    state.authority = buildAuthorityAudit();
     deadline = createRunDeadline(startedAt, inputs.timeoutMinutes, options.signal);
     return await runActionInternal(state, startedAt, inputs, deadline.signal, deadline.deadlineMs);
   } catch (error: unknown) {

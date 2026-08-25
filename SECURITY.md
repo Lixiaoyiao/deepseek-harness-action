@@ -165,6 +165,24 @@ requested profile. Both `base-url` and `web-search-base-url` choose upstreams
 that receive the real key, so they are trusted credential-routing inputs, not
 untrusted request data.
 
+The additive `result-json.authority` audit records only authority sources that
+the Action explicitly knows, configures, or mediates. Its fixed Controller
+entries state that the real GitHub credential is withheld from the worker and
+that the real DeepSeek credential is withheld behind the run-scoped proxy. An
+`extension-credential` entry instead means that one effective MCP server or
+direct plugin is configured with credential-like workflow data for its worker
+extension configuration; it is not Controller authority. This is a configured
+plan fact, not a runtime receipt that extension startup completed or a
+credential was used. The audit contains no credential values, hashes, header
+values, argv/env values, URL path/query material, or credential counts.
+
+`knownSources` is not a complete authority inventory and does not prove that
+the worker has no other authority. Approved extension code is trusted worker
+code and may still act through its granted network path, runner ambient state,
+startup/background behavior, or other process capabilities outside the
+Action-known sources in this audit. The authority audit is observability data,
+not an authorization decision or tamper-proof security record.
+
 #### Maintainer-defined controller tools
 
 Command tools, introduced in v0.3, are fixed-argv controller capabilities. A
@@ -342,6 +360,13 @@ narrower: in addition to withheld HTTP URL path/query material, it includes only
 credential-like stdio argv fields, env/header entries, and plugin configuration
 values nested under credential-like keys. Ordinary configuration values such as
 `read` and `safe-json` are not registered as secrets or masked.
+
+The same existing credential-like detection is reused for the authority audit,
+but only after extension resolution. A configured MCP server or direct plugin
+that has no effective tool is not reported as worker authority. An effective
+owner produces at most one generic `extension-credential` source regardless of
+how many credential-like values it receives; the Action does not infer whether
+any value is a GitHub PAT, service token, API key, or another credential type.
 
 `plugin-config` accepts only an exact npm semver or a GitHub `git+https` source
 pinned to a 40-character commit. `latest`, ranges and floating Git refs are

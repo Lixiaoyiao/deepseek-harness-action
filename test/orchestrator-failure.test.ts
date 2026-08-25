@@ -173,6 +173,14 @@ describe("orchestrator DSH failure reporting", () => {
     expect(outcome).toMatchObject({
       conclusion: "failure",
       operation: "task",
+      authority: {
+        schemaVersion: 1,
+        scope: "action-known-sources",
+        knownSources: [
+          { kind: "controller-credential", service: "github" },
+          { kind: "controller-credential", service: "deepseek" },
+        ],
+      },
       error: {
         code: "POLICY_DENIED",
         category: "policy",
@@ -180,6 +188,9 @@ describe("orchestrator DSH failure reporting", () => {
         retryable: false,
       },
     });
+    expect(outcome.authority?.knownSources).not.toContainEqual(
+      expect.objectContaining({ kind: "extension-credential" }),
+    );
     expect(outcome.error?.code).not.toBe("CONTEXT_PREPARATION_FAILED");
     expect(JSON.parse(String(outputs["result-json"]))).toMatchObject({
       status: "denied",

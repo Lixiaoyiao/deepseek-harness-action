@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as ActionsCoreModule from "@actions/core";
@@ -22,6 +24,7 @@ import type * as WriteGitHubModule from "../src/write/github.js";
 import type * as WritePrModule from "../src/write/pr.js";
 import { deferProgressUntilWriteValidation, runAction } from "../src/orchestrator.js";
 import { issueContentFingerprint } from "../src/github/issue-identity.js";
+import { buildActionOutputs, formatStepSummary } from "../src/result.js";
 import { inputs } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -144,6 +147,8 @@ vi.mock("../src/write/pr.js", async (importOriginal) => ({
 }));
 
 const client = {};
+const controllerDeepSeekKey = "sk-deepseek-controller-byte-sequence";
+const controllerGitHubToken = "ghs_github-controller-byte-sequence";
 const headSha = "a".repeat(40);
 const issue: IssueSnapshot = {
   kind: "issue",
@@ -208,6 +213,8 @@ beforeEach(() => {
 
   mocks.loadInputs.mockReturnValue(
     inputs({
+      deepseekApiKey: controllerDeepSeekKey,
+      githubToken: controllerGitHubToken,
       command: "task",
       prompt: "Check the repository and make changes only if needed",
       taskAccess: "write",
@@ -371,7 +378,41 @@ describe("orchestrator task no-change publication", () => {
         effectiveTools: ["workspace.edit", "workspace.read", "workspace.search"],
         deniedTools: [],
       },
+      authority: {
+        schemaVersion: 1,
+        scope: "action-known-sources",
+        knownSources: [
+          {
+            kind: "controller-credential",
+            service: "github",
+            holder: "controller",
+            credentialExposure: "not-exposed-to-worker",
+          },
+          {
+            kind: "controller-credential",
+            service: "deepseek",
+            holder: "controller",
+            credentialExposure: "not-exposed-to-worker",
+            mediation: "run-scoped-proxy",
+          },
+        ],
+      },
     });
+    expect(mocks.setSecret).toHaveBeenCalledWith(controllerDeepSeekKey);
+    expect(mocks.setSecret).toHaveBeenCalledWith(controllerGitHubToken);
+    const outputs = buildActionOutputs(outcome);
+    const publicSurfaces = [
+      JSON.stringify(outcome),
+      String(outputs["result-json"]),
+      formatStepSummary(outcome),
+    ];
+    for (const secret of [controllerDeepSeekKey, controllerGitHubToken]) {
+      const hash = createHash("sha256").update(secret).digest("hex");
+      for (const surface of publicSurfaces) {
+        expect(surface).not.toContain(secret);
+        expect(surface).not.toContain(hash);
+      }
+    }
 
     expect(mocks.finishAutomationTask).not.toHaveBeenCalled();
     expect(mocks.finishFix).not.toHaveBeenCalled();

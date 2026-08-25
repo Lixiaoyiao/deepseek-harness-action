@@ -201,7 +201,7 @@ outputs:
   task-output:
     description: "JSON-encoded maintainer-defined task output after Controller schema validation; empty when not configured or unavailable"
   result-json:
-    description: "Versioned JSON envelope containing status, result, policy, permissions, tool-policy ownership audit, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
+    description: "Versioned JSON envelope containing status, result, policy, permissions, tool-policy ownership audit, known-authority audit, extension audit, tool receipts, timing, publication, validation integrity, write, and error details"
 
 runs:
   using: "node24"
