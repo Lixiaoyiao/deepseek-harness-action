@@ -186,6 +186,15 @@ jobs:
       - name: Install fixture dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Deterministic native ecosystem compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd candidate-action
+            ../node_modules/.bin/vitest run test/native-ecosystem.integration.test.ts
+          )
+
       - name: Strict Profile and official Bundle baseline
         id: strict
         uses: ./candidate-action
@@ -492,6 +501,45 @@ jobs:
           "$RUNNER_TEMP/dsh-e2e-snapshot.sh" "$prefix"
           bash .github/e2e/assert-candidate-binding.sh
           echo "main_sha=$(cat "$prefix.main")" >> "$GITHUB_OUTPUT"
+
+      - name: Native trusted-write workspace path
+        id: native_write
+        uses: ./candidate-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          dsh-mode: native
+          dsh-version: 0.1.1-rc.2
+          isolation: docker
+          command: task
+          task-access: write
+          allow-write: "true"
+          prompt: Inspect package.json and report its current package version. Do not modify any file and do not create a commit, branch, or pull request.
+          permission-profile: custom
+          allowed-tools: '["workspace.edit"]'
+          progress-comment: "false"
+          max-turns: "2"
+          timeout-minutes: "12"
+
+      - name: Assert native trusted-write authority
+        shell: bash
+        env:
+          RESULT_JSON: ${{ steps.native_write.outputs['result-json'] }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schemaVersion == 1 and .conclusion == "success" and .operation == "task" and
+            .policy.trust == "trusted-write" and
+            .dsh.mode == "native" and .dsh.composition == "dsh-native-headless" and
+            .permissions.effectiveTools == ["workspace.edit"] and
+            .permissions.workspaceWrite == true and
+            .toolPolicy.policyOwner == "dsh" and (.toolPolicy.observedTools | length > 0) and
+            (.toolPolicy | has("effectiveTools") | not) and
+            (.toolPolicy | has("requestedTools") | not) and
+            (.toolPolicy | has("deniedTools") | not) and
+            .isolation.backend == "docker" and .isolation.workspaceAccess == "read-write" and
+            .write.status == "no-changes"
+          ' <<<"$RESULT_JSON" >/dev/null
 
       - name: Validation Integrity blocks weakened entrypoint
         id: integrity
@@ -1614,13 +1662,65 @@ jobs:
             (.loop.toolReceipts | any(.id == "github.checks.read" and .ok == true and .effect == "read"))
           ' <<<"$checks_result" >/dev/null
 
+          run_candidate native_write issue_comment "$RUNNER_TEMP/dsh-e2e-github-event.json" native-write \
+            'INPUT_DSH-MODE=native' 'INPUT_COMMAND=auto' 'INPUT_TRIGGER-PHRASE=/deepseek' \
+            "INPUT_ALLOWED-ACTORS=$actor" 'INPUT_INCLUDE-COMMENTS-BY-ACTOR=*' \
+            "INPUT_EXCLUDE-COMMENTS-BY-ACTOR=$actor,github-actions[bot]" \
+            'INPUT_PERMISSION-PROFILE=custom' 'INPUT_ALLOWED-TOOLS=["workspace.edit"]' \
+            'INPUT_ALLOW-WRITE=true' 'INPUT_ISOLATION=docker' 'INPUT_MAX-TURNS=1'
+          native_write_result="$(read_output native_write result-json)"
+          jq -c '{stage:"native-write",conclusion,status,operation,trust:.policy.trust,dsh,permissions,toolPolicy,isolation,write}' <<<"$native_write_result"
+          jq -e '
+            .conclusion == "success" and .operation == "task" and .policy.trust == "trusted-write" and
+            .dsh.mode == "native" and .dsh.composition == "dsh-native-headless" and
+            .permissions.effectiveTools == ["workspace.edit"] and .permissions.workspaceWrite == true and
+            .toolPolicy.policyOwner == "dsh" and (.toolPolicy.observedTools | length > 0) and
+            (.toolPolicy | has("effectiveTools") | not) and
+            (.toolPolicy | has("requestedTools") | not) and
+            (.toolPolicy | has("deniedTools") | not) and
+            .isolation.backend == "docker" and .isolation.workspaceAccess == "read-write" and
+            .write.status == "no-changes" and
+            (.authority.knownSources | length == 2) and
+            (.authority.knownSources | all(
+              .kind == "controller-credential" and .holder == "controller" and
+              .credentialExposure == "not-exposed-to-worker"
+            ))
+          ' <<<"$native_write_result" >/dev/null
+
+          run_candidate native_checks pull_request "$RUNNER_TEMP/dsh-e2e-checks-event.json" native-checks \
+            'INPUT_DSH-MODE=native' 'INPUT_COMMAND=diagnose' 'INPUT_PERMISSION-PROFILE=custom' \
+            'INPUT_ALLOWED-TOOLS=["github.checks.read"]' 'INPUT_ISOLATION=docker' \
+            'INPUT_MAX-TURNS=2'
+          native_checks_result="$(read_output native_checks result-json)"
+          jq -c '{stage:"native-checks",conclusion,status,operation,trust:.policy.trust,dsh,permissions,toolPolicy,isolation,toolReceipts:.loop.toolReceipts}' <<<"$native_checks_result"
+          jq -e '
+            .conclusion == "success" and .operation == "diagnose" and .policy.trust == "trusted-read" and
+            .dsh.mode == "native" and .dsh.composition == "dsh-native-headless" and
+            .permissions.effectiveTools == ["github.checks.read"] and
+            .toolPolicy.policyOwner == "dsh" and (.toolPolicy.observedTools | length > 0) and
+            (.toolPolicy | has("effectiveTools") | not) and
+            (.toolPolicy | has("requestedTools") | not) and
+            (.toolPolicy | has("deniedTools") | not) and
+            .isolation.backend == "docker" and .isolation.workspaceAccess == "read-only" and
+            (.loop.toolReceipts | any(.id == "github.checks.read" and .ok == true and .effect == "read"))
+          ' <<<"$native_checks_result" >/dev/null
+
+          fixture_hash="$(printf '%s' "$fixture_key" | sha256sum | cut -d' ' -f1)"
+          for public_result in "$native_write_result" "$native_checks_result"; do
+            [[ "$public_result" != *"$fixture_key"* ]]
+            [[ "$public_result" != *"$fixture_hash"* ]]
+          done
+
           jq -s -e '
-            length == 11 and all(.authorizationMatches == true) and
+            ([.[] | select(.kind == "agent")] | length == 14) and
+            all(.authorizationMatches == true) and
             ([.[] | select(.route == "label")] | length == 1) and
             ([.[] | select(.route == "assignee")] | length == 1) and
             ([.[] | select(.route == "github")] | length == 5) and
             ([.[] | select(.route == "metadata")] | length == 2) and
-            ([.[] | select(.route == "checks")] | length == 2)
+            ([.[] | select(.route == "checks")] | length == 2) and
+            ([.[] | select(.route == "native-write" and .kind == "agent")] | length == 1) and
+            ([.[] | select(.route == "native-checks" and .kind == "agent")] | length == 2)
           ' "$audit" >/dev/null
 
       - name: Remove only verified integration fixtures
