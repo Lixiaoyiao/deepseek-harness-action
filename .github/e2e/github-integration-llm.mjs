@@ -85,7 +85,16 @@ function fixtureOutput(route, index) {
   if (route === "label" || route === "assignee" || route === "github") {
     return finalTask(route);
   }
-  if (route === "checks" && index === 1) {
+  if (route === "native-write") {
+    return {
+      protocolVersion: 1,
+      operation: "task",
+      state: "final",
+      summary: "Native trusted-write workspace qualification completed without changes.",
+      findings: [],
+    };
+  }
+  if ((route === "checks" || route === "native-checks") && index === 1) {
     return {
       protocolVersion: 1,
       operation: "diagnose",
@@ -99,7 +108,7 @@ function fixtureOutput(route, index) {
       },
     };
   }
-  if (route === "checks") {
+  if (route === "checks" || route === "native-checks") {
     return {
       protocolVersion: 1,
       operation: "diagnose",
@@ -156,9 +165,10 @@ const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/plain" }).end("ok\n");
     return;
   }
-  const match = /^\/(label|assignee|github|metadata|checks)\/(?:v1\/)?chat\/completions$/u.exec(
-    request.url ?? "",
-  );
+  const match =
+    /^\/(label|assignee|github|metadata|checks|native-write|native-checks)\/(?:v1\/)?chat\/completions$/u.exec(
+      request.url ?? "",
+    );
   if (request.method !== "POST" || match === null) {
     request.resume();
     response.writeHead(404).end();
@@ -167,19 +177,23 @@ const server = createServer((request, response) => {
   const route = match[1];
   readJson(request)
     .then(async (body) => {
-      const index = (calls.get(route) ?? 0) + 1;
-      calls.set(route, index);
+      const prompt = messageText(body);
+      const titleRequest =
+        route.startsWith("native-") && prompt.includes("Generate the session title");
+      const index = titleRequest ? 0 : (calls.get(route) ?? 0) + 1;
+      if (!titleRequest) calls.set(route, index);
       await appendFile(
         auditPath,
         `${JSON.stringify({
           route,
           index,
+          kind: titleRequest ? "title" : "agent",
           authorizationMatches: request.headers.authorization === `Bearer ${expectedKey}`,
-          prompt: messageText(body),
+          prompt,
         })}\n`,
         "utf8",
       );
-      sendSse(response, fixtureOutput(route, index));
+      sendSse(response, titleRequest ? "Native qualification" : fixtureOutput(route, index));
     })
     .catch((error) => {
       if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });

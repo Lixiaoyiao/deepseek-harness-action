@@ -14,35 +14,21 @@ import {
   type ToolDenial,
 } from "../permissions/profile.js";
 import { executeCommandTool } from "./executor.js";
+import { evaluateBuiltinCapabilities } from "./capabilities.js";
 import { githubToolManifest, resolveGitHubTools, type GitHubToolBinding } from "./github.js";
 import {
-  autonomyToolSchema,
   commandToolId,
   type AllowedToolId,
-  type AutonomyToolId,
   type CommandToolDefinition,
   type CommandToolId,
   githubToolSchema,
+  nativeToolSchema,
   type GitHubToolId,
   type NativeToolId,
   type ToolConfiguration,
+  workspaceToolSchema,
   type WorkspaceToolId,
 } from "./schema.js";
-
-const workspaceDescriptions: Readonly<Record<WorkspaceToolId, string>> = {
-  "workspace.read": "Read repository files inside the bound workspace.",
-  "workspace.search": "Search repository paths and file contents inside the bound workspace.",
-  "workspace.edit": "Edit files inside the disposable bound workspace.",
-};
-
-const autonomyDescriptions: Readonly<Record<AutonomyToolId, string>> = {
-  "native.bash":
-    "Run bounded foreground Bash commands inside the DSH workspace sandbox; escalation is never approved.",
-  "native.web-search":
-    "Search the web through the Controller-mediated DeepSeek Messages proxy without receiving the real API key.",
-  "native.subagent":
-    "Delegate bounded foreground work to one in-process DSH subagent with inherited tool restrictions.",
-};
 
 export interface ResolveEffectiveToolsOptions {
   readonly permissionProfile?: PermissionProfile;
@@ -77,57 +63,23 @@ export function resolveEffectiveTools(
   const requested = new Set<AllowedToolId>(permission.requestedTools);
   const disallowed = new Set<AllowedToolId>(permission.disallowedTools);
   const permissionDenials: ToolDenial[] = [...permission.deniedTools];
-  const deny = (id: AllowedToolId, reason: string): false => {
-    if (!disallowed.has(id)) permissionDenials.push({ id, reason });
-    return false;
-  };
   const isolation = options.isolation ?? "docker";
-  const nativeCandidates = [
-    ...(Object.keys(workspaceDescriptions) as WorkspaceToolId[]),
-    ...(Object.keys(autonomyDescriptions) as AutonomyToolId[]),
-  ] as const;
-  const native = nativeCandidates.filter((id): id is NativeToolId => {
-    if (!requested.has(id) || disallowed.has(id)) return false;
-    if (id === "workspace.edit") {
-      return (
-        (policy.capabilities.modifyWorkspace && isolation === "docker") ||
-        deny(id, "Workspace editing requires trusted-write policy with Docker isolation")
-      );
-    }
-    if (id === "workspace.read" || id === "workspace.search") {
-      return (
-        (policy.capabilities.readRepository &&
-          policy.trust !== "untrusted" &&
-          isolation === "docker") ||
-        deny(id, "Repository tools require a trusted actor and Docker isolation")
-      );
-    }
-    if (id === "native.bash") {
-      return (
-        (policy.capabilities.executeRepositoryCode &&
-          policy.capabilities.modifyWorkspace &&
-          isolation === "docker") ||
-        deny(id, "Bash requires trusted-write repository-code execution in Docker")
-      );
-    }
-    if (id === "native.web-search") {
-      return (
-        (policy.capabilities.accessNetwork &&
-          policy.trust !== "untrusted" &&
-          isolation === "docker") ||
-        deny(id, "Web search requires a trusted same-repository actor and Docker")
-      );
-    }
-    return (
-      (policy.capabilities.readRepository &&
-        policy.capabilities.modifyWorkspace &&
-        policy.trust === "trusted-write" &&
-        isolation === "docker") ||
-      deny(id, "Subagent delegation requires trusted-write policy in Docker")
-    );
+  const requestedBuiltin = new Set(
+    [...requested].filter((id): id is NativeToolId => nativeToolSchema.safeParse(id).success),
+  );
+  const disallowedBuiltin = new Set(
+    [...disallowed].filter((id): id is NativeToolId => nativeToolSchema.safeParse(id).success),
+  );
+  const builtin = evaluateBuiltinCapabilities({
+    requested: requestedBuiltin,
+    disallowed: disallowedBuiltin,
+    policy,
+    isolation,
   });
+  permissionDenials.push(...builtin.denials);
+  const native = builtin.contracts.map(({ manifest }) => manifest.id);
   const workspace = native.filter(
-    (id): id is WorkspaceToolId => !autonomyToolSchema.safeParse(id).success,
+    (id): id is WorkspaceToolId => workspaceToolSchema.safeParse(id).success,
   );
   const commands = policy.capabilities.executeRepositoryCode
     ? configuration.commands.filter(
@@ -163,25 +115,7 @@ export function resolveEffectiveTools(
   permissionDenials.push(...githubResolution.denials);
   const github = githubResolution.ids;
   const manifests: AgentToolManifest[] = [
-    ...native.map((id) => ({
-      id,
-      description:
-        id in workspaceDescriptions
-          ? workspaceDescriptions[id as WorkspaceToolId]
-          : autonomyDescriptions[id as AutonomyToolId],
-      provider: "builtin" as const,
-      permissions:
-        id === "workspace.edit"
-          ? (["write"] as const)
-          : id === "native.bash"
-            ? (["read", "execute"] as const)
-            : id === "native.web-search"
-              ? (["network"] as const)
-              : id === "native.subagent"
-                ? (["read", "execute"] as const)
-                : (["read"] as const),
-      inputSchema: { type: "object", additionalProperties: false },
-    })),
+    ...builtin.contracts.map(({ manifest }) => manifest),
     ...commands.map((command) => ({
       id: commandToolId(command.name),
       description: command.description,

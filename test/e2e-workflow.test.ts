@@ -91,6 +91,54 @@ describe("trusted core E2E workflow", () => {
     }
   });
 
+  it("qualifies the candidate native ecosystem, trusted-write workspace, and Controller GitHub path", async () => {
+    const ecosystem = stepBlock(workflow, "Deterministic native ecosystem compatibility");
+    const nativeWrite = stepBlock(workflow, "Native trusted-write workspace path");
+    const nativeWriteAssertion = stepBlock(workflow, "Assert native trusted-write authority");
+    const integration = stepBlock(
+      workflow,
+      "Exercise routes, filters, structured output, and typed GitHub tools",
+    );
+    const fixture = await readFile(
+      new URL("../.github/e2e/github-integration-llm.mjs", import.meta.url),
+      "utf8",
+    );
+
+    expect(ecosystem).toContain("cd candidate-action");
+    expect(ecosystem).toContain(
+      "../node_modules/.bin/vitest run test/native-ecosystem.integration.test.ts",
+    );
+    expect(nativeWrite).toContain("uses: ./candidate-action");
+    expect(nativeWrite).toContain("deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}");
+    expect(nativeWrite).toContain("dsh-mode: native");
+    expect(nativeWrite).toContain("task-access: write");
+    expect(nativeWrite).toContain(`allowed-tools: '["workspace.edit"]'`);
+    expect(nativeWriteAssertion).toContain('.policy.trust == "trusted-write"');
+    expect(nativeWriteAssertion).toContain('.isolation.workspaceAccess == "read-write"');
+    expect(nativeWriteAssertion).toContain('.toolPolicy.policyOwner == "dsh"');
+    for (const contract of [
+      "run_candidate native_write",
+      "run_candidate native_checks",
+      "INPUT_DSH-MODE=native",
+      'INPUT_ALLOWED-TOOLS=["workspace.edit"]',
+      'INPUT_ALLOWED-TOOLS=["github.checks.read"]',
+      '.dsh.composition == "dsh-native-headless"',
+      '.toolPolicy.policyOwner == "dsh"',
+      '(.toolPolicy | has("effectiveTools") | not)',
+      '.isolation.workspaceAccess == "read-write"',
+      '.permissions.effectiveTools == ["github.checks.read"]',
+      'fixture_hash="$(printf',
+      '[[ "$public_result" != *"$fixture_key"* ]]',
+      '[[ "$public_result" != *"$fixture_hash"* ]]',
+    ]) {
+      expect(integration).toContain(contract);
+    }
+    expect(fixture).toContain('route.startsWith("native-")');
+    expect(fixture).toContain('prompt.includes("Generate the session title")');
+    expect(fixture).toContain('route === "native-write"');
+    expect(fixture).toContain('route === "native-checks"');
+  });
+
   it("requires an authoritative blocked integrity result without a write envelope", () => {
     const assertion = stepBlock(workflow, "Assert integrity failure");
 

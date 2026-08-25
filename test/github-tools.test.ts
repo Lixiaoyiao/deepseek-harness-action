@@ -7,10 +7,14 @@ import type { GitHubClient } from "../src/github/client.js";
 import { issueContentFingerprint } from "../src/github/issue-identity.js";
 import { createOctokitGitHubToolBackend } from "../src/github/octokit-tool-backend.js";
 import {
+  GitHubAuthorityGateway,
   GitHubToolFlushError,
   GitHubToolProvider,
+  githubFlushHasExternalEffect,
   githubToolManifest,
+  mergeGitHubFlushReceipts,
   resolveGitHubTools,
+  type GitHubMutationValidationGate,
   type GitHubToolBinding,
 } from "../src/tools/github.js";
 import type {
@@ -164,6 +168,7 @@ function provider(options: {
   readonly allowWrite?: boolean;
   readonly backend?: GitHubToolBackend;
   readonly expectedAuthorId?: number;
+  readonly validationGate?: GitHubMutationValidationGate;
 }): GitHubToolProvider {
   return new GitHubToolProvider({
     ids: options.ids,
@@ -172,12 +177,78 @@ function provider(options: {
     allowWrite: options.allowWrite ?? true,
     expectedAuthorId: options.expectedAuthorId ?? 41898282,
     backend: options.backend ?? fakeBackend(),
+    validationGate: options.validationGate ?? (() => Promise.resolve()),
   });
 }
 
 const invocation = { workspacePath: "C:/immutable", timeoutMs: 10_000 } as const;
 
 describe("Controller-owned typed GitHub tools", () => {
+  it("keeps the legacy provider import as an alias of GitHubAuthorityGateway", () => {
+    expect(GitHubToolProvider).toBe(GitHubAuthorityGateway);
+    expect(provider({ ids: [] })).toBeInstanceOf(GitHubAuthorityGateway);
+  });
+
+  it("requires a Controller validation gate whenever mutation authority is enabled", () => {
+    expect(
+      () =>
+        new GitHubAuthorityGateway({
+          ids: ["github.issue.labels.set"],
+          binding: issueBinding,
+          policy: policy(),
+          allowWrite: true,
+          expectedAuthorId: 41898282,
+          backend: fakeBackend(),
+        }),
+    ).toThrow(/requires a Controller validation gate/u);
+  });
+
+  it("projects final Gateway effects into the original Controller receipt", () => {
+    const flushes = [
+      {
+        result: {
+          callId: "call-receipt",
+          id: "github.issue.labels.set",
+          ok: true,
+          output: {
+            effect: "updated",
+            target: "repository:42/issue:7",
+            attempts: 1,
+            reconciled: true,
+          },
+        },
+        durationMs: 7,
+      },
+    ] as const;
+
+    expect(
+      mergeGitHubFlushReceipts(
+        [
+          {
+            callId: "call-receipt",
+            id: "github.issue.labels.set",
+            ok: true,
+            durationMs: 3,
+            effect: "scheduled",
+          },
+        ],
+        flushes,
+      ),
+    ).toEqual([
+      {
+        callId: "call-receipt",
+        id: "github.issue.labels.set",
+        ok: true,
+        durationMs: 10,
+        effect: "updated",
+        target: "repository:42/issue:7",
+        attempts: 1,
+        reconciled: true,
+      },
+    ]);
+    expect(githubFlushHasExternalEffect(flushes)).toBe(true);
+  });
+
   it("accepts only the six exact allowed-tools IDs", () => {
     expect(parseAllowedTools(JSON.stringify(githubToolSchema.options))).toEqual(
       githubToolSchema.options,
@@ -377,6 +448,45 @@ describe("Controller-owned typed GitHub tools", () => {
         invocation,
       ),
     ).rejects.toThrow(/Invalid input/u);
+  });
+
+  it("runs the typed validation gate before any backend effect and keeps the queue on denial", async () => {
+    const validationFailure = new Error("workspace validation denied GitHub mutation");
+    const validationGate = vi.fn<GitHubMutationValidationGate>(() =>
+      Promise.reject(validationFailure),
+    );
+    const getRepository = vi.fn<GitHubToolBackend["getRepository"]>(() =>
+      Promise.resolve({ id: 42 }),
+    );
+    const getIssue = vi.fn<GitHubToolBackend["getIssue"]>(() => Promise.resolve(issueSnapshot()));
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>(() => Promise.resolve());
+    const gateway = provider({
+      ids: ["github.issue.labels.set"],
+      validationGate,
+      backend: fakeBackend({ getRepository, getIssue, setLabels }),
+    });
+    await gateway.invoke(
+      {
+        callId: "call-validation-denied",
+        id: "github.issue.labels.set",
+        input: { labels: ["safe"] },
+      },
+      invocation,
+    );
+
+    await expect(gateway.flush(invocation)).rejects.toBe(validationFailure);
+
+    expect(validationGate).toHaveBeenCalledOnce();
+    const validationRequest = validationGate.mock.calls[0]?.[0];
+    expect(validationRequest).toMatchObject({
+      workspacePath: invocation.workspacePath,
+      mutations: [{ callId: "call-validation-denied", id: "github.issue.labels.set" }],
+    });
+    expect(validationRequest?.timeoutMs).toBeGreaterThan(0);
+    expect(getRepository).not.toHaveBeenCalled();
+    expect(getIssue).not.toHaveBeenCalled();
+    expect(setLabels).not.toHaveBeenCalled();
+    expect(gateway.hasPendingMutations()).toBe(true);
   });
 
   it("flushes a deferred mutation with a postcondition and bounded receipt", async () => {
