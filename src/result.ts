@@ -17,6 +17,7 @@ import type { PermissionAudit, ToolPolicyAudit } from "./permissions/profile.js"
 import type { PublicationResult } from "./review/publisher.js";
 import { stripTrackingMarkers } from "./review/tracking.js";
 import type { SecurityPolicy } from "./security/policy.js";
+import type { AuthorityAudit, KnownAuthoritySource } from "./security/authority.js";
 import { redactSecrets, sanitizeUntrustedText } from "./security/redaction.js";
 import {
   ValidationIntegrityError,
@@ -77,6 +78,7 @@ export interface RunOutcome {
   readonly policy?: SecurityPolicy;
   readonly permission?: PermissionAudit;
   readonly toolPolicy?: ToolPolicyAudit;
+  readonly authority?: AuthorityAudit;
   readonly agent?: AgentRunSummary;
   readonly publication?: PublicationResult;
   readonly validation?: ValidationSummary;
@@ -309,6 +311,7 @@ function structuredResult(
         }),
     ...(outcome.permission === undefined ? {} : { permissions: outcome.permission }),
     ...(outcome.toolPolicy === undefined ? {} : { toolPolicy: outcome.toolPolicy }),
+    ...(outcome.authority === undefined ? {} : { authority: outcome.authority }),
     ...(outcome.agent === undefined
       ? {}
       : {
@@ -527,6 +530,29 @@ function permissionSummaryLines(
   return lines;
 }
 
+function authoritySourceLabel(source: KnownAuthoritySource): string {
+  if (source.kind === "extension-credential") {
+    return `${source.extensionKind}:${source.extensionId} (explicit credential configured)`;
+  }
+  if (source.service === "github") {
+    return "controller:github (credential not exposed to worker)";
+  }
+  return "controller:deepseek (run-scoped proxy mediation)";
+}
+
+function authoritySummaryLines(authority: AuthorityAudit | undefined): readonly string[] {
+  if (authority === undefined) return [];
+  return [
+    "",
+    "### Known authority sources",
+    "",
+    `**Scope:** ${inlineCode(authority.scope)}`,
+    `**Known sources:** ${boundedInlineList(authority.knownSources.map(authoritySourceLabel))}`,
+    "- Records only sources the Action knows, configures, or mediates; this does not prove the worker has no other authority.",
+    "- Trusted extension code may also use granted network access, runner ambient state, or other process capabilities.",
+  ];
+}
+
 function validationSummaryLines(validation: ValidationSummary | undefined): readonly string[] {
   if (validation === undefined) return [];
   const lines = [
@@ -563,6 +589,7 @@ export function formatStepSummary(outcome: RunOutcome): string {
     "",
     safeMarkdown(outcome.summary),
     ...permissionSummaryLines(outcome.permission, outcome.toolPolicy),
+    ...authoritySummaryLines(outcome.authority),
     ...validationSummaryLines(outcome.validation),
   ];
   if (outcome.error !== undefined) {

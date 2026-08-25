@@ -21,6 +21,7 @@ import {
   type PermissionAudit,
   type ToolPolicyAudit,
 } from "../src/permissions/profile.js";
+import { buildAuthorityAudit } from "../src/security/authority.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import {
   ValidationIntegrityError,
@@ -88,6 +89,7 @@ const permission: PermissionAudit = {
 };
 
 const toolPolicy = buildControllerToolPolicyAudit(permission, "controller");
+const authority = buildAuthorityAudit();
 
 const integrity: ValidationIntegritySummary = {
   schemaVersion: 1,
@@ -145,6 +147,7 @@ describe("versioned action results", () => {
       policy,
       permission,
       toolPolicy,
+      authority,
       agent: {
         durationMs: 3_100,
         turns: 3,
@@ -197,6 +200,7 @@ describe("versioned action results", () => {
     const result = JSON.parse(String(outputs["result-json"])) as {
       readonly permissions: unknown;
       readonly toolPolicy: unknown;
+      readonly authority: unknown;
       readonly validation: { readonly integrity: unknown };
     };
     expect(result).toMatchObject({
@@ -219,6 +223,7 @@ describe("versioned action results", () => {
         effectiveTools: permission.effectiveTools,
         deniedTools: permission.deniedTools,
       },
+      authority,
       validation: {
         status: "passed",
         commandCount: 2,
@@ -238,7 +243,9 @@ describe("versioned action results", () => {
     });
     expect(result.permissions).toEqual(permission);
     expect(result.toolPolicy).toEqual(toolPolicy);
+    expect(result.authority).toEqual(authority);
     expect(result.validation.integrity).toEqual(integrity);
+    expect(outputs).not.toHaveProperty("authority");
   });
 
   it("represents a successful write with no repository mutation", () => {
@@ -534,6 +541,7 @@ describe("versioned action results", () => {
         deniedTools,
       },
       toolPolicy: { ...toolPolicy, deniedTools },
+      authority,
       validation: { status: "passed", commandCount: 2, integrity },
     };
 
@@ -547,6 +555,10 @@ describe("versioned action results", () => {
     expect(summary).toContain("**Workspace write:** `enabled`");
     expect(summary).toContain("`mcp:repo-index (network=yes, workspace-write=no)`");
     expect(summary).toContain("**Denials (1):**");
+    expect(summary).toContain("### Known authority sources");
+    expect(summary).toContain("`controller:github (credential not exposed to worker)`");
+    expect(summary).toContain("`controller:deepseek (run-scoped proxy mediation)`");
+    expect(summary).toContain("does not prove the worker has no other authority");
     expect(summary).toContain("@​team [image removed] 'policy'");
     expect(summary).toContain("**Integrity:** mode `strict` · status `changed`");
     expect(summary).toContain(

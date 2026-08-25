@@ -201,6 +201,28 @@ The tool-policy audit uses four deliberately distinct terms:
 `ControlledComposition` is the only production composition today, and its
 `policyOwner` is always `controller`. There is no native or DSH-owned run mode.
 
+### Known authority sources
+
+The additive top-level `result-json.authority` audit is parallel to
+`permissions` and `toolPolicy`. Its `scope` is `action-known-sources`, and its
+deterministically ordered `knownSources` distinguish:
+
+- the Controller-owned GitHub credential, whose real token is not exposed to
+  the worker;
+- the Controller-owned DeepSeek credential, whose real key is not exposed to
+  the worker and is mediated through a run-scoped proxy; and
+- one generic `extension-credential` record for each effective MCP server or
+  direct plugin configured with credential-like explicit workflow data.
+
+Extension entries identify only the effective owner kind and ID. They never
+contain or classify a secret value, hash, header, argv/env value, URL
+path/query, or secret count. A configured extension with no effective tool is
+not reported. The entry records an accepted configuration plan, not observed
+extension startup or credential use. The audit is intentionally incomplete: it
+records only sources the Action knows, configures, or mediates and does not
+prove that trusted worker or extension code lacks network, runner ambient
+state, or other authority. It is observability, not authorization.
+
 ### Native tools
 
 - `workspace.read` and `workspace.search` operate on the run-scoped `.git`-less
@@ -524,7 +546,10 @@ no-change outcomes.
 operation, summary, policy and permission audit, effective extension audit,
 bounded receipts, loop timing/counts, actual isolation report, publication,
 Controller validation, validation integrity, write result, comment ID, and
-error. When permissions resolve, the additive top-level `toolPolicy` audit has
+error. The additive top-level `authority` audit records the Action-known
+Controller and effective worker-extension credential sources described above,
+without credential material or a completeness guarantee. When permissions
+resolve, the additive top-level `toolPolicy` audit has
 `schemaVersion: 1`, `policyOwner: controller`, and the current
 `requestedTools`, `effectiveTools`, and `deniedTools`. It deliberately has no
 `observedTools`. The existing `permissions` object and the scalar

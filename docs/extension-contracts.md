@@ -204,6 +204,21 @@ extension configuration. Names such as `DEEPSEEK_API_KEY`, `GITHUB_TOKEN`,
 may receive its own explicit env/header secret; it is masked and treated as a
 worker credential, not Controller authority.
 
+The top-level `result-json.authority.knownSources` audit mirrors that boundary
+without publishing configuration data. The GitHub and DeepSeek records are
+Controller-owned credentials whose real bytes are not exposed to the worker;
+DeepSeek access is mediated by the run-scoped proxy. A generic
+`extension-credential` record is emitted once for an effective MCP server or
+direct plugin when the existing credential-like detector finds explicit
+workflow configuration for that owner. It carries only the extension kind and
+ID: no secret type, value, hash, count, header, argv/env field, or URL
+path/query is included. Configured but non-effective extensions are omitted.
+
+This is an Action-known-source audit, not a claim of complete worker authority.
+Trusted extension startup/background code may still use its network grant,
+runner ambient state, or other process capabilities outside model-routed calls.
+Neither this audit nor extension receipts prove the absence of those paths.
+
 The Controller-secret rejection scan walks all nested object keys and string
 values in both manifests and checks percent-decoded variants, including encoded
 URL path and query material. The extension-secret masking set is intentionally
