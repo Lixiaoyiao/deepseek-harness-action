@@ -3,6 +3,41 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## Unreleased
+
+### Added
+
+- Added the experimental `dsh-mode` input with `controlled` as the compatible
+  default and `native` as an explicit opt-in. Native uses the locked official
+  DSH `0.1.1-rc.2` headless composition and leaves DSH in ownership of its
+  internal capability graph; it is not a relaxed version of the controlled
+  ToolRuntime profile.
+- Added mode and composition observability. Controlled runs continue to report
+  Controller-owned requested/effective/denied tool policy. Native runs report
+  `policyOwner: dsh` and the runtime-observed tool names as `observedTools`
+  telemetry, with no Controller `effectiveTools` claim in that audit.
+
+### Security and compatibility
+
+- `controlled` remains the default and preserves the v0.7.0 behavior for
+  workflows that do not configure `dsh-mode`. `permission-profile` is neither
+  reused nor reinterpreted as a composition selector.
+- Native is Docker-only and fails closed for host isolation. The worker still
+  receives neither the real DeepSeek key nor the real GitHub token; repository
+  and actor trust, the Controller GitHub Gateway, validation/revalidation,
+  deferred mutation, deadlines, cancellation, and secret redaction remain
+  outside the DSH composition.
+- Action-managed MCP, Bundle, and Plugin configuration fails closed in native
+  mode during this experimental phase. Controller-owned `command.*` and
+  `github.*` capabilities remain mode-independent and retain their existing
+  authority and write gates.
+
+### Deferred and out of scope
+
+- Complete Skills, Plugin, Bundle, and MCP ecosystem compatibility for native
+  mode remains deferred to Codex 6. This change does not publish v0.8.0, create
+  or move a release tag, or change the locked DSH version.
+
 ## [0.7.0] - 2026-08-25
 
 ### Changed

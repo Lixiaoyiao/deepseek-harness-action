@@ -16,16 +16,19 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 
 ## 核心能力
 
-| 能力          | 作用                                                                            |
-| ------------- | ------------------------------------------------------------------------------- |
-| PR 审查       | 审查新提交，发布一条汇总，并为高置信度问题添加行内评论                          |
-| 通用任务      | 回答仓库问题，或执行经过明确授权的编码任务                                      |
-| CI 诊断与修复 | 读取失败的检查和日志；受信任 workflow 可以验证并发布修复                        |
-| Issue 实现    | 把经过授权的 Issue 请求实现为已验证的分支和 PR                                  |
-| 受控工具      | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
-| 结构化结果    | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
+| 能力             | 作用                                                                            |
+| ---------------- | ------------------------------------------------------------------------------- |
+| PR 审查          | 审查新提交，发布一条汇总，并为高置信度问题添加行内评论                          |
+| 通用任务         | 回答仓库问题，或执行经过明确授权的编码任务                                      |
+| CI 诊断与修复    | 读取失败的检查和日志；受信任 workflow 可以验证并发布修复                        |
+| Issue 实现       | 把经过授权的 Issue 请求实现为已验证的分支和 PR                                  |
+| Composition 模式 | 默认保留现有受控工具档位，并提供实验性的 DSH native 模式                        |
+| 受控工具         | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
+| 结构化结果       | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.7.0 建立四项架构基础，但不扩大公开能力面：内部 `DshComposition` seam（生产环境仍只有 `ControlledComposition`）、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam（生产环境仍由 Octokit 实现）。本版本不包含 `NativeComposition`、native DSH ecosystem 模式、GitHub MCP backend 或 Session/Resume；DSH pin 仍为 `0.1.1-rc.2`。
+v0.7.0 建立了四项架构基础，但没有扩大其已发布能力面：内部 `DshComposition` seam、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam。当前尚未发布的开发版本在同一个锁定的 DSH `0.1.1-rc.2` runtime 上新增实验性的 `dsh-mode: native` 路径。`controlled` 仍是默认值，因此未配置 `dsh-mode` 的现有 workflow 会继续使用原有 composition、权限、工具和输出行为。
+
+Native 模式并不是 unsafe 模式。它只是把 DSH 内部 headless composition 与 capability graph 的 ownership 交还给 DSH；Action 仍拥有 Docker 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、GitHub Gateway、validation 与 deferred write、deadline、cancellation 和 secret redaction。当前实验阶段 native 仅支持 Docker；Action-managed MCP、Bundle 与 Plugin 配置在 native 下会 fail closed，完整兼容性留给 Codex 6。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。本次工作不发布 v0.8.0；该版本会在 Codex 6 完成后统一发布。
 
 ## 真实运行
 

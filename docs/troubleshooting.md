@@ -33,10 +33,15 @@ Useful fields are:
   where the error surfaced and does not determine a classified error's
   identity;
 - `error.message` and `error.guidance`: redacted, bounded diagnostics;
+- `.dsh.mode` and `.dsh.composition`: the selected composition mode and stable
+  identity;
+- `toolPolicy`: Controller-effective grants for controlled mode or DSH-observed
+  inventory telemetry for native mode;
 - `permissions`, `isolation`, `validation`, `validationIntegrity`, and `loop`:
   Controller evidence for the effective run; and
-- scalar `trust`, `permission-profile`, `effective-tools`, `network-access`,
-  `workspace-write`, `error-code`, and `error-message`: convenient summaries.
+- scalar `trust`, `dsh-mode`, `dsh-composition`, `permission-profile`,
+  `effective-tools`, `network-access`, `workspace-write`, `error-code`, and
+  `error-message`: convenient summaries.
 
 `result-json`, model text, and receipts are observability data, not
 authorization or tamper-proof security evidence. Keep their strings in data
@@ -90,8 +95,9 @@ rather than broadening permissions.
 
 ## A tool is missing or denied
 
-Inspect `trust`, `permission-profile`, `effective-tools`, `workspace-write`,
-`network-access`, and the permission audit in `result-json`.
+First inspect `dsh-mode`, `dsh-composition`, `trust`, `workspace-write`,
+`network-access`, and `result-json.toolPolicy`. For controlled mode, also inspect
+`permission-profile`, `effective-tools`, and the permission audit.
 
 Common causes:
 
@@ -111,6 +117,22 @@ Common causes:
 - Extension tools require `permission-profile: custom` (with `strict` retained
   only for older v0.4 compatibility), Docker isolation, matching declared
   permissions, and a consistent process-level network/workspace mode.
+
+Those canonical-tool checks describe controlled mode. In native mode, DSH owns
+the internal capability graph. `toolPolicy.policyOwner` is `dsh`, and
+`observedTools` contains names actually visible to the root DSH Agent. It has no
+Controller `effectiveTools` field. Observation is telemetry, not authorization:
+seeing `bash`, `read`, or another DSH name does not bypass the Docker mount,
+network, credential, trust, validation, or write boundary. Do not compare
+`observedTools` with the scalar `effective-tools` output or expect controlled
+`workspace.*` aliases there.
+
+`permission-profile` does not select or rename the native composition. Native
+mode currently rejects Action-managed MCP, Bundle, and Plugin configuration;
+remove that configuration or use `dsh-mode: controlled`. Controller-owned
+`command.*` and `github.*` tools remain mode-independent and should still be
+diagnosed through their existing canonical IDs, token scopes, and validation
+gates.
 
 Use canonical IDs exactly:
 
@@ -151,9 +173,12 @@ Typical codes include `DSH_ISOLATION_UNAVAILABLE`, `DSH_ENVIRONMENT`, and
   identity, not trustworthiness or platform compatibility.
 - Untrusted work, trusted writes, and effective MCP/Bundle/Plugin tools cannot
   use `isolation: none`.
+- Experimental `dsh-mode: native` always requires `isolation: docker`; native
+  fails closed on the host path even for otherwise eligible trusted-read work.
 - `dsh-executable` is an absolute-path trusted host compatibility option. It has
-  no OS/container boundary and cannot load extensions; use it only for an
-  eligible trusted-read run on a dedicated trusted runner.
+  no OS/container boundary and cannot load extensions; it is controlled-mode
+  compatibility only. Use it only for an eligible controlled trusted-read run
+  on a dedicated trusted runner.
 - If an image cannot be pulled, inspect registry access, platform compatibility,
   daemon storage, and the runner's network policy. Do not work around the
   identity check with a mutable image when a digest is required.
@@ -343,6 +368,10 @@ bounded log message.
   Action run; do not depend on cross-run mutable state.
 - A host `dsh-executable` is not an extension-compatible shortcut and does not
   provide Docker isolation.
+- Native uses that same locked runtime's official headless composition. If
+  `dsh-mode: native` is combined with host isolation or an Action-managed MCP,
+  Bundle, or Plugin declaration, the configuration is intentionally rejected;
+  native ecosystem compatibility remains deferred to Codex 6.
 
 ### MCP
 
@@ -418,8 +447,16 @@ the Controller.
   workflows.
 - `task-output` is empty unless a configured task reached a valid final value;
   when present it is JSON data and remains untrusted.
+- `dsh-mode` and `dsh-composition` report `controlled` /
+  `github-action-controlled`, `native` / `dsh-native-headless`, or `none` when
+  composition selection did not complete. The same values appear under
+  `result-json.dsh` and in the step summary.
 - Parse `effective-tools`, `trusted-extensions`, `tool-receipts`, and
   `result-json` as JSON. Do not treat their encoded text as shell source.
+- In native mode, `effective-tools` remains a backward-compatible Action
+  permission output and is not DSH inventory. Read
+  `result-json.toolPolicy.observedTools` for runtime observation, and never treat
+  either surface as a grant.
 - Receipt arrays may be truncated to the Action output budget. Check
   `truncated` and `droppedCount`; truncation does not weaken or expand
   authorization.

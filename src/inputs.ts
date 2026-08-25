@@ -19,6 +19,7 @@ import {
 } from "./tools/schema.js";
 import { DSH_VERSION } from "./release.js";
 import { parseTaskOutputSchema } from "./dsh/task-output.js";
+import type { DshMode } from "./dsh/composition.js";
 import { validateRefName } from "./security/refs.js";
 import { validateBranchNameTemplate, validateBranchPrefix } from "./write/branch.js";
 
@@ -162,6 +163,7 @@ const actionInputsSchema = z.object({
   command: z.enum(["auto", "task", "review", "diagnose", "fix", "implement"]),
   taskAccess: z.enum(["read", "write"]),
   prompt: z.string(),
+  dshMode: z.enum(["controlled", "native"]),
   dshVersion: z.string().min(1),
   dshExecutable: z.string(),
   isolation: z.enum(["docker", "none"]),
@@ -268,6 +270,7 @@ const defaults = {
   command: "auto",
   taskAccess: "read",
   prompt: "",
+  dshMode: "controlled" satisfies DshMode,
   dshVersion: DSH_VERSION,
   dshExecutable: "",
   isolation: "docker",
@@ -376,6 +379,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     command: optionalInput(reader, "command", defaults.command),
     taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
     prompt: optionalInput(reader, "prompt", defaults.prompt),
+    dshMode: optionalInput(reader, "dsh-mode", defaults.dshMode),
     dshVersion: optionalInput(reader, "dsh-version", defaults.dshVersion),
     dshExecutable: optionalInput(reader, "dsh-executable", defaults.dshExecutable),
     isolation: optionalInput(reader, "isolation", defaults.isolation),
@@ -468,6 +472,24 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   ) {
     throw new ActionConfigurationError(
       "Invalid action inputs: task-output-schema is supported only for command task or auto",
+    );
+  }
+  if (
+    parsed.data.dshMode === "native" &&
+    (parsed.data.isolation !== "docker" || parsed.data.dshExecutable !== "")
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: dsh-mode native requires Docker isolation and does not accept dsh-executable",
+    );
+  }
+  if (
+    parsed.data.dshMode === "native" &&
+    (parsed.data.mcpConfig.servers.length > 0 ||
+      parsed.data.pluginConfig.bundles.length > 0 ||
+      parsed.data.pluginConfig.plugins.length > 0)
+  ) {
+    throw new ActionConfigurationError(
+      "Invalid action inputs: dsh-mode native does not yet support Action-managed MCP, Bundle, or Plugin configuration; use controlled mode until Codex 6",
     );
   }
   if (

@@ -18,6 +18,7 @@ export interface DshFailureTelemetry {
   readonly isolationReport: DshIsolationReport;
   readonly extensionAudit?: ExtensionAudit;
   readonly toolReceipts?: readonly DshToolReceipt[];
+  readonly observedTools?: readonly string[];
 }
 
 const dshErrorIdentities: Readonly<Record<DshErrorCode, ActionErrorIdentity<DshErrorCode>>> = {
@@ -142,7 +143,14 @@ export class DshMalformedOutputError extends DshError {
 
 export class DshCredentialLeakError extends DshError {
   public constructor(
-    channel: "prompt" | "argv" | "environment" | "stdout" | "stderr" | "tool receipt",
+    channel:
+      | "prompt"
+      | "argv"
+      | "environment"
+      | "stdout"
+      | "stderr"
+      | "tool receipt"
+      | "native tool observation",
   ) {
     super("DSH_CREDENTIAL_LEAK", `DSH ${channel} contained a controller credential`);
   }

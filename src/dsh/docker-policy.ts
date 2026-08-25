@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { assertNoGitHubCredentials } from "../security/env.js";
 import { CONTROLLED_PROFILE_NAME } from "../extensions/profile.js";
 import { DshConfigurationError } from "./errors.js";
 import type { DshProcessSpec } from "./process.js";
 import type { DeepSeekProxyHandle } from "./proxy.js";
+import type { DshDockerLaunchPlan } from "./composition.js";
 
 const CONTAINER_IMAGE_REFERENCE_PATTERN =
   /^(?=.{1,512}$)[A-Za-z0-9][A-Za-z0-9._:/-]*(?:@sha256:[a-f0-9]{64})?$/u;
@@ -94,11 +95,9 @@ interface DockerWorkerSpecOptions {
   readonly workspace: string;
   readonly dshHome: string;
   readonly packageRoot: string;
-  readonly policyPluginPath: string;
-  readonly workspacePluginPath: string;
+  readonly launchPlan: DshDockerLaunchPlan;
   readonly networkName: string;
   readonly hostGateway: string;
-  readonly prompt: string;
   readonly environment: NodeJS.ProcessEnv;
   readonly workerEnvironment: NodeJS.ProcessEnv;
   readonly proxy: DeepSeekProxyHandle;
@@ -149,28 +148,30 @@ export function dockerWorkerSpec(options: DockerWorkerSpecOptions): DshProcessSp
     "--volume",
     `${join(options.dshHome, "attachments")}:${CONTAINER_ATTACHMENTS}:rw`,
     "--volume",
-    `${options.packageRoot}:${CONTAINER_PROFILE_ROOT}:ro`,
-    "--volume",
-    `${options.policyPluginPath}:${CONTAINER_POLICY_PLUGIN}:ro`,
-    "--volume",
-    `${options.workspacePluginPath}:${CONTAINER_WORKSPACE_PLUGIN}:ro`,
-    "--volume",
     `${options.packageRoot}:${CONTAINER_PACKAGE_ROOT}:ro`,
     "--workdir",
-    "/tmp",
+    options.launchPlan.workdir,
   ];
+  for (const mount of options.launchPlan.mounts) {
+    if (
+      !isAbsolute(mount.sourcePath) ||
+      !mount.destinationPath.startsWith("/") ||
+      mount.sourcePath.includes("\0") ||
+      mount.destinationPath.includes("\0")
+    ) {
+      throw new DshConfigurationError("DSH composition supplied an invalid Docker mount");
+    }
+    args.push(
+      "--volume",
+      `${mount.sourcePath}:${mount.destinationPath}:${mount.readOnly ? "ro" : "rw"}`,
+    );
+  }
   for (const [name, value] of Object.entries(
     containerEnvironment(options.proxy, options.workspaceWrite),
   )) {
     args.push("--env", `${name}=${value}`);
   }
-  args.push(
-    options.containerImage,
-    "node",
-    "--expose-internals",
-    CONTAINER_LAUNCHER,
-    options.prompt,
-  );
+  args.push(options.containerImage, options.launchPlan.command, ...options.launchPlan.args);
 
   const nameIndex = args.indexOf("--name") + 1;
   const containerName = args[nameIndex];

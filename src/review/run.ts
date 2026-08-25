@@ -14,6 +14,8 @@ import type { EffectiveTools } from "../tools/registry.js";
 import type { AgentEngine, AgentToolManifest, AgentTurnRequest } from "../agent/contracts.js";
 import type { EffectiveExtensionPlan } from "../extensions/plan.js";
 import { nativeToolSchema, type NativeToolId } from "../tools/schema.js";
+import type { DshComposition } from "../dsh/composition.js";
+import { selectDshComposition } from "../dsh/select-composition.js";
 
 export interface AgentTask {
   readonly operation: Operation;
@@ -36,6 +38,7 @@ export interface DshTurnMetadata {
   readonly rawStdout?: string;
   readonly extensionAudit?: EffectiveExtensionPlan["audit"];
   readonly toolReceipts?: readonly DshToolReceipt[];
+  readonly observedTools?: readonly string[];
 }
 
 export function partitionDshToolPlanes(tools: readonly AgentToolManifest[]): {
@@ -66,14 +69,17 @@ export function partitionDshToolPlanes(tools: readonly AgentToolManifest[]): {
 export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
   public readonly id = "dsh";
   public readonly version: string;
+  private readonly composition: DshComposition;
 
   public constructor(
     private readonly inputs: ActionInputs,
     private readonly policy: SecurityPolicy,
     private readonly runtime?: DshRuntime,
     private readonly extensions?: EffectiveExtensionPlan,
+    composition?: DshComposition,
   ) {
     this.version = inputs.dshVersion;
+    this.composition = composition ?? selectDshComposition(inputs.dshMode).create();
   }
 
   public async runTurn(request: AgentTurnRequest) {
@@ -111,7 +117,10 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
         ...(this.inputs.dshExecutable === "" ? {} : { dshExecutable: this.inputs.dshExecutable }),
         containerImage: this.inputs.containerImage,
       },
-      this.runtime === undefined ? {} : { runtime: this.runtime },
+      {
+        composition: this.composition,
+        ...(this.runtime === undefined ? {} : { runtime: this.runtime }),
+      },
     );
     return {
       output: result.output,
@@ -121,6 +130,7 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
         ...(result.rawStdout === undefined ? {} : { rawStdout: result.rawStdout }),
         ...(result.extensionAudit === undefined ? {} : { extensionAudit: result.extensionAudit }),
         ...(result.toolReceipts === undefined ? {} : { toolReceipts: result.toolReceipts }),
+        ...(result.observedTools === undefined ? {} : { observedTools: result.observedTools }),
       },
     };
   }
@@ -160,5 +170,8 @@ export async function runAgentTask(
     ...(turn.metadata.toolReceipts === undefined
       ? {}
       : { toolReceipts: turn.metadata.toolReceipts }),
+    ...(turn.metadata.observedTools === undefined
+      ? {}
+      : { observedTools: turn.metadata.observedTools }),
   };
 }

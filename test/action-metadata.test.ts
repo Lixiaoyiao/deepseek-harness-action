@@ -41,6 +41,10 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/task-output-schema:[\s\S]*?default: ""/u);
     expect(metadata).toMatch(/task-access:[\s\S]*?default: "read"/u);
     expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
+    expect(metadata).toMatch(/dsh-mode:[\s\S]*?default: "controlled"/u);
+    expect(metadata).toMatch(
+      /dsh-mode:[\s\S]*?experimental native uses the official DSH headless composition inside the Action's Docker safety boundary/iu,
+    );
     expect(metadata).toMatch(/permission-profile:[\s\S]*?default: "strict"/u);
     expect(metadata).toMatch(/allowed-tools:[\s\S]*?default: "\[\]"/u);
     expect(metadata).toMatch(/disallowed-tools:[\s\S]*?default: "\[\]"/u);
@@ -64,6 +68,14 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
     expect(metadata).toMatch(/task-output:[\s\S]*?Controller schema validation/u);
     expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
+
+    const outputs = metadata.slice(metadata.indexOf("outputs:"));
+    expect(outputs).toMatch(
+      /^ {2}dsh-mode:\r?\n {4}description: "Resolved DSH mode: controlled, native, or none"$/mu,
+    );
+    expect(outputs).toMatch(
+      /^ {2}dsh-composition:\r?\n {4}description: "Stable selected DSH composition identity, or none"$/mu,
+    );
   });
 
   it("pins the official DSH rc.2 runtime and its lockfile exactly", async () => {
@@ -127,7 +139,14 @@ describe("Marketplace action metadata", () => {
     expect(ci).toContain('await import("@deepseek-ai/dsh-app-boot")');
     expect(ci).toContain('await import("@deepseek-ai/dsh-mcp-client")');
     expect(ci).toContain("action-launcher.mjs");
+    expect(ci).toContain("native-launcher.mjs");
     expect(ci).toContain("action-policy.mjs");
+    expect(ci).toContain("Verify exact candidate checkout");
+    expect(ci).toContain("native headless Docker read-only smoke ok");
+    expect(ci).toContain('"ctx.tools.schemas(agent)"');
+    expect(ci).toContain('index("read") != null');
+    expect(ci).toContain("--security-opt no-new-privileges \\");
+    expect(ci).not.toMatch(/no-new-privileges \+\s+--pids-limit/u);
     expect(ci).not.toContain("lib/bin.js");
     expect(ci).not.toContain("--dump-config");
     expect(ci).not.toContain("policy.patch.yml");
@@ -151,6 +170,9 @@ describe("Marketplace action metadata", () => {
       "github.checks.read",
       "task-output-schema",
       "task-output",
+      "dsh-mode",
+      "dsh-native-headless",
+      "native-launcher.mjs",
     ]) {
       expect(bundle).toContain(token);
     }

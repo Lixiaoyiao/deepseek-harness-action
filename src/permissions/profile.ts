@@ -35,23 +35,25 @@ export interface ToolDenial {
 interface ToolPolicyAuditBase {
   readonly schemaVersion: 1;
   readonly policyOwner: ToolPolicyOwner;
-  /** Canonical capabilities requested by the workflow/profile before policy intersection. */
-  readonly requestedTools: readonly AllowedToolId[];
-  readonly deniedTools: readonly ToolDenial[];
 }
 
 /** Controller-owned policy: this is the exact model-visible grant, not runtime telemetry. */
 export interface ControllerToolPolicyAudit extends ToolPolicyAuditBase {
   readonly policyOwner: "controller";
+  /** Canonical capabilities requested by the workflow/profile before policy intersection. */
+  readonly requestedTools: readonly AllowedToolId[];
   readonly effectiveTools: readonly string[];
+  readonly deniedTools: readonly ToolDenial[];
   readonly observedTools?: never;
 }
 
-/** Reserved audit shape for a future DSH-owned composition; no such mode exists today. */
+/** DSH-owned runtime inventory observation; it is not a Controller grant. */
 export interface DshToolPolicyAudit extends ToolPolicyAuditBase {
   readonly policyOwner: "dsh";
   /** Names actually observed by the DSH runtime; telemetry, not a Controller grant. */
   readonly observedTools: readonly string[];
+  readonly requestedTools?: never;
+  readonly deniedTools?: never;
   readonly effectiveTools?: never;
 }
 
@@ -134,6 +136,7 @@ export function buildPermissionAudit(options: {
   readonly manifests: readonly AgentToolManifest[];
   readonly additionalDenials?: readonly ToolDenial[];
   readonly extensions?: ExtensionAudit;
+  readonly mediatedWeb?: boolean;
 }): PermissionAudit {
   const effectiveTools = sortedUnique(options.manifests.map(({ id }) => id));
   const effective = new Set(effectiveTools);
@@ -153,7 +156,7 @@ export function buildPermissionAudit(options: {
     ({ provider, permissions }) => provider === "command" && permissions.includes("network"),
   );
   const bridge = commandBridge || options.extensions?.network === true;
-  const mediatedWeb = effective.has("native.web-search");
+  const mediatedWeb = options.mediatedWeb ?? effective.has("native.web-search");
   const network: PermissionAudit["network"] = bridge
     ? "bridge"
     : mediatedWeb
@@ -201,5 +204,17 @@ export function buildControllerToolPolicyAudit(
     requestedTools: permission.requestedTools,
     effectiveTools: permission.effectiveTools,
     deniedTools: permission.deniedTools,
+  };
+}
+
+export function buildDshToolPolicyAudit(observedTools: readonly string[]): DshToolPolicyAudit {
+  const normalized = sortedUnique(observedTools);
+  if (normalized.length === 0 || normalized.some((name) => !/^[A-Za-z0-9_-]{1,128}$/u.test(name))) {
+    throw new Error("A DSH-owned policy audit requires observed runtime tool names");
+  }
+  return {
+    schemaVersion: 1,
+    policyOwner: "dsh",
+    observedTools: normalized,
   };
 }

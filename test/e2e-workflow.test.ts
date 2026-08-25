@@ -65,6 +65,32 @@ describe("trusted core E2E workflow", () => {
     );
   });
 
+  it("runs an exact-candidate native read-only smoke with observed DSH inventory", () => {
+    const launch = stepBlock(workflow, "Native headless read-only smoke");
+    const assertion = stepBlock(workflow, "Assert native composition and observed inventory");
+
+    expect(launch).toContain("uses: ./candidate-action");
+    expect(launch).toContain("dsh-mode: native");
+    expect(launch).toContain("isolation: docker");
+    expect(launch).not.toContain("mcp-config:");
+    expect(launch).not.toContain("plugin-config:");
+    for (const contract of [
+      '.dsh.mode == "native"',
+      '.dsh.composition == "dsh-native-headless"',
+      '.toolPolicy.policyOwner == "dsh"',
+      'index("read") != null',
+      'index("glob") != null',
+      'index("grep") != null',
+      'index("workspace.read") == null',
+      '(.toolPolicy | has("effectiveTools") | not)',
+      '(.toolPolicy | has("requestedTools") | not)',
+      '.isolation.workspaceAccess == "read-only"',
+      '.isolation.extensionProfile == "none"',
+    ]) {
+      expect(assertion).toContain(contract);
+    }
+  });
+
   it("requires an authoritative blocked integrity result without a write envelope", () => {
     const assertion = stepBlock(workflow, "Assert integrity failure");
 

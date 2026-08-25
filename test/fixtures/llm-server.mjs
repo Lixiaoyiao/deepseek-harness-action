@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 
 const responseText = JSON.stringify({
+  protocolVersion: 1,
   operation: "review",
   summary: "controlled profile booted",
   findings: [],
@@ -29,7 +30,7 @@ const server = createServer((request, response) => {
   });
 });
 
-server.listen(0, "127.0.0.1", () => {
+server.listen(0, process.env.DSH_FIXTURE_HOST ?? "127.0.0.1", () => {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("Expected TCP address");
   process.stdout.write(

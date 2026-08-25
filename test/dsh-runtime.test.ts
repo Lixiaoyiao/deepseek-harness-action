@@ -24,6 +24,7 @@ function binding(overrides: Partial<DshRuntimeBinding> = {}): DshRuntimeBinding 
     isolation: "docker",
     workspacePath: join(tmpdir(), "dsh-runtime-workspace"),
     chatBaseUrl: "https://api.deepseek.com/",
+    webSearchProxy: false,
     extensionConfigurationDigest: EXTENSION_DIGEST,
     nativeRuntimeTools: ["read", "grep", "bash"],
     workspaceWrite: false,
@@ -128,12 +129,22 @@ describe("run-scoped DSH runtime", () => {
       ["workspacePath", {}, { workspacePath: join(tmpdir(), "another-workspace") }],
       ["chatBaseUrl", {}, { chatBaseUrl: "https://chat.example.test/v1" }],
       [
+        "webSearchProxy",
+        {},
+        {
+          webSearchProxy: true,
+          webSearchBaseUrl: "https://search.example.test/anthropic/v1",
+        },
+      ],
+      [
         "webSearchBaseUrl",
         {
+          webSearchProxy: true,
           nativeRuntimeTools: ["read", "web_search"],
           webSearchBaseUrl: "https://search.example.test/anthropic/v1",
         },
         {
+          webSearchProxy: true,
           nativeRuntimeTools: ["read", "web_search"],
           webSearchBaseUrl: "https://other-search.example.test/anthropic/v1",
         },
@@ -175,7 +186,7 @@ describe("run-scoped DSH runtime", () => {
       { chatBaseUrl: "http://remote.example.test" },
       { chatBaseUrl: "https://user:password@api.example.test" },
       { webSearchBaseUrl: "https://search.example.test/anthropic/v1" },
-      { nativeRuntimeTools: ["read", "web_search"] },
+      { webSearchProxy: true },
       { isolation: "none" },
       { dshExecutableIdentity: join(tmpdir(), "docker-cannot-use-host-bin.js") },
       { extensionConfigurationDigest: "not-a-digest" },

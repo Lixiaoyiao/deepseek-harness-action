@@ -225,6 +225,56 @@ jobs:
             (.extensions.digest | test("^[a-f0-9]{64}$"))
           ' <<<"$RESULT_JSON" >/dev/null
 
+      - name: Native headless read-only smoke
+        id: native
+        uses: ./candidate-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          dsh-mode: native
+          dsh-version: 0.1.1-rc.2
+          isolation: docker
+          command: task
+          task-access: read
+          prompt: Inspect README.md with the DSH native tools and return one concise sentence describing this action. Do not change files.
+          permission-profile: strict
+          progress-comment: "false"
+          max-turns: "2"
+          timeout-minutes: "12"
+
+      - name: Assert native composition and observed inventory
+        shell: bash
+        env:
+          RESULT_JSON: ${{ steps.native.outputs['result-json'] }}
+          DSH_MODE: ${{ steps.native.outputs['dsh-mode'] }}
+          DSH_COMPOSITION: ${{ steps.native.outputs['dsh-composition'] }}
+        run: |
+          set -euo pipefail
+          [[ "$DSH_MODE" == "native" ]]
+          [[ "$DSH_COMPOSITION" == "dsh-native-headless" ]]
+          jq -e '
+            .schemaVersion == 1 and .conclusion == "success" and .operation == "task" and
+            .dsh.mode == "native" and .dsh.composition == "dsh-native-headless" and
+            .policy.trust == "trusted-read" and
+            .toolPolicy.policyOwner == "dsh" and
+            (.toolPolicy.observedTools | length > 0) and
+            (.toolPolicy.observedTools | index("read") != null) and
+            (.toolPolicy.observedTools | index("glob") != null) and
+            (.toolPolicy.observedTools | index("grep") != null) and
+            (.toolPolicy.observedTools | index("workspace.read") == null) and
+            (.toolPolicy.observedTools | index("workspace.search") == null) and
+            (.toolPolicy | has("effectiveTools") | not) and
+            (.toolPolicy | has("requestedTools") | not) and
+            (.toolPolicy | has("deniedTools") | not) and
+            .permissions.workspaceWrite == false and
+            .permissions.network == "mediated-web" and
+            .isolation.backend == "docker" and .isolation.processIsolated == true and
+            .isolation.workspaceAccess == "read-only" and
+            .isolation.extensionProfile == "none" and
+            (.isolation | has("extensionDigest") | not) and
+            (has("extensions") | not)
+          ' <<<"$RESULT_JSON" >/dev/null
+
       - name: Start real Streamable HTTP MCP fixture
         id: mcp_server
         shell: bash

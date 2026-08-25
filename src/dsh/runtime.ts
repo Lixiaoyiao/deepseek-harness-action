@@ -17,6 +17,7 @@ export interface DshRuntimeBinding {
   readonly isolation: DshRuntimeIsolation;
   readonly workspacePath: string;
   readonly chatBaseUrl: string;
+  readonly webSearchProxy: boolean;
   readonly webSearchBaseUrl?: string;
   readonly dshExecutableIdentity?: string;
   readonly extensionConfigurationDigest: string;
@@ -141,10 +142,12 @@ function normalizedBinding(binding: DshRuntimeBinding): DshRuntimeBinding {
       "DSH runtime binding nativeRuntimeTools contains an invalid runtime tool name",
     );
   }
-  const webSearchEnabled = nativeRuntimeTools.includes("web_search");
-  if (webSearchEnabled !== (binding.webSearchBaseUrl !== undefined)) {
+  if (typeof binding.webSearchProxy !== "boolean") {
+    throw new DshConfigurationError("DSH runtime binding webSearchProxy must be boolean");
+  }
+  if (binding.webSearchProxy !== (binding.webSearchBaseUrl !== undefined)) {
     throw new DshConfigurationError(
-      "DSH runtime binding webSearchBaseUrl must be present exactly when web_search is enabled",
+      "DSH runtime binding webSearchBaseUrl must be present exactly when the composition requires its proxy",
     );
   }
   const webSearchBaseUrl =
@@ -181,6 +184,7 @@ function normalizedBinding(binding: DshRuntimeBinding): DshRuntimeBinding {
     isolation,
     workspacePath,
     chatBaseUrl,
+    webSearchProxy: binding.webSearchProxy,
     ...(webSearchBaseUrl === undefined ? {} : { webSearchBaseUrl }),
     ...(dshExecutableIdentity === undefined ? {} : { dshExecutableIdentity }),
     extensionConfigurationDigest: binding.extensionConfigurationDigest,
@@ -199,6 +203,7 @@ function bindingJson(binding: DshRuntimeBinding): JsonObject {
     isolation: binding.isolation,
     workspacePath: binding.workspacePath,
     chatBaseUrl: binding.chatBaseUrl,
+    webSearchProxy: binding.webSearchProxy,
     ...(binding.webSearchBaseUrl === undefined
       ? {}
       : { webSearchBaseUrl: binding.webSearchBaseUrl }),
@@ -232,6 +237,7 @@ function changedBindingFields(
     ["isolation", previous.isolation !== requested.isolation],
     ["workspacePath", previous.workspacePath !== requested.workspacePath],
     ["chatBaseUrl", previous.chatBaseUrl !== requested.chatBaseUrl],
+    ["webSearchProxy", previous.webSearchProxy !== requested.webSearchProxy],
     ["webSearchBaseUrl", previous.webSearchBaseUrl !== requested.webSearchBaseUrl],
     ["dshExecutableIdentity", previous.dshExecutableIdentity !== requested.dshExecutableIdentity],
     [
