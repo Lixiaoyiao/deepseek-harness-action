@@ -26,11 +26,13 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.7.0 established four architecture foundations without widening its published capability surface: the internal `DshComposition` seam, explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam. Current unreleased development adds an experimental `dsh-mode: native` path over the same locked DSH `0.1.1-rc.2` runtime, including its official ecosystem composition. `controlled` remains the default, so existing workflows that omit `dsh-mode` retain their current composition, permissions, tools, budgets, receipts, and outputs.
+v0.8.0 ships the experimental `dsh-mode: native` path over the locked DSH `0.1.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
 
 Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition, capability graph, and model-visible inventory to DSH. Native MCP servers load through official `@deepseek-ai/dsh-mcp-client`; Bundles become official Profile layers; direct Plugins load through Cordis; and repository Skills, Subagents, and Workflows retain DSH-native behavior. Its definition-only extension schema declares owners and process requirements, not Action tools, grants, or per-tool budgets. Dynamic ecosystem tools appear only in runtime `observedTools`, and native `toolPolicy` never claims Controller `effectiveTools`.
 
-The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, the typed GitHub Gateway, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane. This work does not publish v0.8.0 or change the locked DSH version.
+The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Controller Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane.
+
+The v0.8.0 behavior-preserving architecture cleanup makes the orchestrator a thinner typed lifecycle coordinator, converges Controller-owned GitHub authorization, deferred effects, revalidation, backend execution, reconciliation, and receipts in `GitHubAuthorityGateway`, and gives Controller-managed builtin tools one declarative capability contract and generic policy evaluator. Deterministic invariant/matrix tests harden cross-mode security while preserving the public JSON and output schemas. `GitHubToolBackend` remains transport-only; this release does not add an Action-owned GitHub MCP backend or Session/Resume, and it does not change the locked DSH version.
 
 ## Live runs
 
@@ -93,7 +95,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -101,7 +103,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.7.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.8.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 

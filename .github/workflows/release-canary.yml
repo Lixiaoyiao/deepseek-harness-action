@@ -1,4 +1,4 @@
-name: v0.7.0 release canary
+name: v0.8.0 release canary
 
 on:
   workflow_dispatch:
@@ -65,9 +65,9 @@ jobs:
     if: needs.gate.result == 'success'
     runs-on: ubuntu-latest
     environment: core-e2e
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
-      RELEASE_TAG: v0.7.0
+      RELEASE_TAG: v0.8.0
       RELEASE_SHA: ${{ vars.DSH_RELEASE_CANARY_SHA }}
     steps:
       - name: Validate protected canary secret
@@ -115,38 +115,113 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Confirm checked out release commit
-        run: test "$(git -C release-action rev-parse HEAD)" = "$RELEASE_SHA"
+      - name: Confirm checked out release commit and credential isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C release-action rev-parse HEAD)" = "$RELEASE_SHA"
+          credential_config="$(
+            git -C release-action config --local --get-regexp \
+              '^(http\..*\.extraheader|credential\..*|credential\.helper)$' || true
+          )"
+          if [[ -n "$credential_config" ]]; then
+            echo "The release checkout must not retain local Git credentials." >&2
+            exit 1
+          fi
 
-      - name: Run one read-only smoke task
-        id: dsh
+      - name: Controlled default strict read-only smoke
+        id: controlled
         uses: ./release-action
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           command: task
-          prompt: "Return one concise sentence confirming that the release canary reached a final answer. Do not request tools."
+          prompt: "Inspect README.md with the available read-only tools and return one concise sentence describing this action. Do not change files."
           task-access: read
           allow-write: "false"
           permission-profile: strict
           allowed-tools: "[]"
           disallowed-tools: "[]"
           progress-comment: "false"
-          max-turns: "1"
+          max-turns: "2"
+          timeout-minutes: "12"
 
-      - name: Assert the smoke result
+      - name: Assert controlled schema composition and tool policy
         env:
-          DSH_RESULT_JSON: ${{ steps.dsh.outputs['result-json'] }}
-          DSH_PERMISSION_PROFILE: ${{ steps.dsh.outputs['permission-profile'] }}
-          DSH_EFFECTIVE_TOOLS: ${{ steps.dsh.outputs['effective-tools'] }}
-          DSH_NETWORK_ACCESS: ${{ steps.dsh.outputs['network-access'] }}
-          DSH_WORKSPACE_WRITE: ${{ steps.dsh.outputs['workspace-write'] }}
+          DSH_RESULT_JSON: ${{ steps.controlled.outputs['result-json'] }}
+          DSH_MODE: ${{ steps.controlled.outputs['dsh-mode'] }}
+          DSH_COMPOSITION: ${{ steps.controlled.outputs['dsh-composition'] }}
+          DSH_PERMISSION_PROFILE: ${{ steps.controlled.outputs['permission-profile'] }}
+          DSH_EFFECTIVE_TOOLS: ${{ steps.controlled.outputs['effective-tools'] }}
+          DSH_NETWORK_ACCESS: ${{ steps.controlled.outputs['network-access'] }}
+          DSH_WORKSPACE_WRITE: ${{ steps.controlled.outputs['workspace-write'] }}
         run: |
+          set -euo pipefail
+          test "$DSH_MODE" = controlled
+          test "$DSH_COMPOSITION" = github-action-controlled
           test "$DSH_PERMISSION_PROFILE" = strict
           test "$DSH_NETWORK_ACCESS" = host-gateway
           test "$DSH_WORKSPACE_WRITE" = false
           jq -e 'type == "array"' <<<"$DSH_EFFECTIVE_TOOLS" >/dev/null
+          jq -e --argjson effectiveTools "$DSH_EFFECTIVE_TOOLS" '
+            .schemaVersion == 1 and
+            .conclusion == "success" and
+            .operation == "task" and
+            .dsh.mode == "controlled" and
+            .dsh.composition == "github-action-controlled" and
+            .permissions.profile == "strict" and
+            .permissions.workspaceWrite == false and
+            .permissions.effectiveTools == ["workspace.read","workspace.search"] and
+            .permissions.effectiveTools == $effectiveTools and
+            .toolPolicy.schemaVersion == 1 and
+            .toolPolicy.policyOwner == "controller" and
+            .toolPolicy.effectiveTools == $effectiveTools and
+            (.toolPolicy | has("requestedTools")) and
+            (.toolPolicy | has("deniedTools")) and
+            (.toolPolicy | has("observedTools") | not)
+          ' <<<"$DSH_RESULT_JSON" >/dev/null
+
+      - name: Native read-only smoke
+        id: native
+        uses: ./release-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          dsh-mode: native
+          command: task
+          prompt: "Inspect README.md with the DSH native read-only tools and return one concise sentence describing this action. Do not change files."
+          task-access: read
+          allow-write: "false"
+          permission-profile: strict
+          progress-comment: "false"
+          max-turns: "2"
+          timeout-minutes: "12"
+
+      - name: Assert native schema composition and observed tool policy
+        env:
+          DSH_RESULT_JSON: ${{ steps.native.outputs['result-json'] }}
+          DSH_MODE: ${{ steps.native.outputs['dsh-mode'] }}
+          DSH_COMPOSITION: ${{ steps.native.outputs['dsh-composition'] }}
+          DSH_WORKSPACE_WRITE: ${{ steps.native.outputs['workspace-write'] }}
+        run: |
+          set -euo pipefail
+          test "$DSH_MODE" = native
+          test "$DSH_COMPOSITION" = dsh-native-headless
+          test "$DSH_WORKSPACE_WRITE" = false
           jq -e '
             .schemaVersion == 1 and
-            .status == "success" and
-            .operation == "task"
+            .conclusion == "success" and
+            .operation == "task" and
+            .dsh.mode == "native" and
+            .dsh.composition == "dsh-native-headless" and
+            .policy.trust == "trusted-read" and
+            .permissions.profile == "strict" and
+            .permissions.workspaceWrite == false and
+            .isolation.backend == "docker" and
+            .isolation.workspaceAccess == "read-only" and
+            .toolPolicy.schemaVersion == 1 and
+            .toolPolicy.policyOwner == "dsh" and
+            (.toolPolicy.observedTools | length > 0) and
+            (.toolPolicy.observedTools | index("read") != null) and
+            (.toolPolicy | has("effectiveTools") | not) and
+            (.toolPolicy | has("requestedTools") | not) and
+            (.toolPolicy | has("deniedTools") | not)
           ' <<<"$DSH_RESULT_JSON" >/dev/null

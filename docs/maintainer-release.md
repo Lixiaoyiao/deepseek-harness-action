@@ -4,13 +4,15 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
-The experimental NativeComposition and Codex 6 native-ecosystem work after
-v0.7.0 is an unreleased qualification change, not a v0.8.0 publication. For
-that work, follow the focused PR, candidate CI, unchanged controlled Core E2E,
-frozen-candidate-SHA native ecosystem smoke, merge, main CI, and complete
-post-merge Core E2E steps, then stop. Do not create or move a tag, GitHub
-Release, release-canary identity, or npm release. v0.8.0 qualification and
-publication remain a separate follow-up.
+v0.8.0 publishes the experimental `NativeComposition` and official native MCP,
+Profile Bundle, Cordis Plugin, repository Skills, Subagent, and Workflow
+compatibility together with the subsequent behavior-preserving Controller
+cleanup. Freeze and qualify the exact Release PR candidate, merge only after
+required CI and Core E2E pass, then repeat CI, Core E2E, and native ecosystem
+smoke against the exact `main` release SHA before creating the annotated tag and
+GitHub Release. Run the formal tag canary only after those identities agree. The
+standalone installer remains independently versioned at `0.1.1` with its v0.6.0
+Action binding throughout this Action Release PR.
 
 ## Release invariants
 
@@ -48,7 +50,13 @@ npm run check
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
 
-For v0.7.0, the DSH audit also proves that the exact headless package still
+v0.8.0 also includes a deterministic invariant/model matrix across composition
+mode, trust, permission profile, isolation, extension authority, and Controller
+GitHub authority. Use that matrix for cross-axis policy coverage and reserve
+live E2E for the representative high-value paths below; do not attempt a live
+Cartesian product.
+
+For v0.8.0, the DSH audit also proves that the exact headless package still
 accepts only one text task and creates one text content block. That negative
 contract is release evidence for deferring GitHub attachment images; do not
 remove it unless a replacement exact DSH multimodal contract and its security

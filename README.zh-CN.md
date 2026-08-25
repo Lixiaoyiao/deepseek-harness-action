@@ -26,11 +26,13 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具         | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
 | 结构化结果       | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.7.0 建立了四项架构基础，但没有扩大其已发布能力面：内部 `DshComposition` seam、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam。当前尚未发布的开发版本在同一个锁定的 DSH `0.1.1-rc.2` runtime 上新增实验性的 `dsh-mode: native` 路径，并补全官方生态 composition。`controlled` 仍是默认值，因此未配置 `dsh-mode` 的现有 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
+v0.8.0 在锁定的 DSH `0.1.1-rc.2` runtime 上正式发布实验性的 `dsh-mode: native` 路径及其官方生态 composition。Native MCP server、Profile Bundle、direct Cordis Plugin、仓库 Skills、Subagent 和 Workflow 保留 DSH-native discovery 与行为。`controlled` 仍是兼容默认值，因此未配置 `dsh-mode` 的 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
 
 Native 模式并不是 unsafe 模式。它把 DSH 内部 headless composition、capability graph 和 model-visible inventory 的 ownership 交还给 DSH。Native MCP 通过官方 `@deepseek-ai/dsh-mcp-client` 加载；Bundle 作为官方 Profile layer 组合；direct Plugin 通过 Cordis 加载；仓库 Skills、Subagent 与 Workflow 保留 DSH-native 行为。它使用 definition-only 扩展 schema 来声明 owner 和进程需求，而不是声明 Action tool、grant 或 per-tool budget。动态生态工具只通过运行时 `observedTools` 出现，native `toolPolicy` 不会虚构 Controller `effectiveTools`。
 
-Action 仍拥有 trusted-workflow admission、package exact pin、lifecycle script 禁用、runtime inventory audit、Docker 与 `.git`-less workspace 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、typed GitHub Gateway、validation 与 deferred write、deadline、cancellation 和 secret redaction。Native 仍仅支持 Docker；bridge network 和 read/write mount 都是 whole-worker 能力，不是 per-extension 或 per-tool sandbox。用户自行配置并携带自有凭据的 GitHub MCP 属于受信任外部扩展，其直接副作用不享受 Gateway 的 binding、revalidation、validation 或 deferred-mutation 保证。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。本次工作不发布 v0.8.0，也不改变锁定的 DSH 版本。
+Action 仍拥有 trusted-workflow admission、package exact pin、lifecycle script 禁用、runtime inventory audit、Docker 与 `.git`-less workspace 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、validation 与 deferred write、deadline、cancellation 和 secret redaction。Native 仍仅支持 Docker；bridge network 和 read/write mount 都是 whole-worker 能力，不是 per-extension 或 per-tool sandbox。用户自行配置并携带自有凭据的 GitHub MCP 属于受信任外部扩展，其直接副作用不享受 Controller Gateway 的 binding、revalidation、validation 或 deferred-mutation 保证。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。
+
+v0.8.0 的 behavior-preserving architecture cleanup 让 orchestrator 成为更薄的 typed lifecycle 协调层，将 Controller-owned GitHub authorization、deferred effect、revalidation、backend execution、reconciliation 和 receipt 收敛到 `GitHubAuthorityGateway`，并让 Controller-managed builtin tool 通过单一 declarative capability contract 和通用 policy evaluator 解析权限。Deterministic invariant/matrix tests 加固了跨模式安全性，同时保持公共 JSON 与 output schema 兼容。`GitHubToolBackend` 仍只负责 transport；本版本不包含 Action-owned GitHub MCP backend 或 Session/Resume，也不改变锁定的 DSH 版本。
 
 ## 真实运行
 
@@ -93,7 +95,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -101,7 +103,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.7.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.8.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 

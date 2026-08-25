@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
-## Unreleased
+## [0.8.0] - 2026-08-25
 
 ### Added
 
@@ -28,6 +28,37 @@ versioning for published action releases.
   inventory. Repository `.dsh/skills` and `.agents/skills` are discoverable in
   the Action's `.git`-less workspace, while the locked native Skill, Subagent,
   and Workflow capabilities remain part of the official graph.
+
+### Changed
+
+- Refactored the Controller into a small set of typed lifecycle phases for
+  preparation and routing, authorization and context, capability resolution,
+  agent execution, validation and finalization. The top-level orchestrator is
+  now a thinner coordinator; public inputs, outputs, result JSON, receipts, and
+  default behavior remain compatible.
+- Converged Controller-owned `github.*` authority behind
+  `GitHubAuthorityGateway`. It owns GitHub-specific authorization and binding,
+  deferred mutation, the validation gate, immediate revalidation, backend
+  execution, reconciliation, and receipts. `GitHubToolBackend` remains a
+  transport primitive and does not own policy or mutation safety.
+- Added a declarative capability contract for Controller-managed builtin tools.
+  Tool identity, model permission tags, and trust, capability, and isolation
+  requirements now feed one generic evaluator rather than an expanding chain of
+  tool-ID-specific conditions. Native inventory remains DSH-owned and is not
+  copied into Controller policy.
+- Split DSH runner policy, extension credential planning, GitHub catalog and
+  validation, and orchestration phases along existing responsibility boundaries.
+  Duplicate permission, tool-policy, authority, and extension-audit derivation
+  was removed without merging their distinct public meanings.
+
+### Testing
+
+- Added deterministic invariant and model-matrix coverage across composition
+  mode, trust, permission profile, isolation, extension authority, and
+  Controller GitHub authority. The matrix proves explicit-deny precedence,
+  untrusted and write gates, credential isolation, controlled/native tool-policy
+  ownership, mutation deferral and revalidation, identity-drift failure, and
+  value-free audits without using a live Cartesian-product E2E suite.
 
 ### Security and compatibility
 
@@ -58,16 +89,19 @@ versioning for published action releases.
   entire native worker shares that bridge path; a writable repository mount is
   likewise a worker boundary, not a per-tool sandbox or Controller grant.
 - Controller-owned `github.*` capabilities remain mode-independent and retain
-  GitHub Gateway binding, revalidation, validation, and deferred-mutation
+  `GitHubAuthorityGateway` binding, revalidation, validation, and deferred-mutation
   gates. A user-configured GitHub MCP with its own credential is instead a
   trusted external extension; its direct effects are not protected by those
   Gateway guarantees. No Action-owned GitHub MCP backend is added.
+- The audited DSH family remains exactly `0.1.1-rc.2`. The independently
+  versioned `create-deepseek-harness-action@0.1.1` installer and its immutable
+  v0.6.0 Action binding remain unchanged in this Action release.
 
 ### Deferred and out of scope
 
-- This change does not publish v0.8.0, create or move a release tag, change the
-  locked DSH version, add an Action-owned GitHub MCP backend, or implement
-  Session/Resume. Full v0.8 qualification remains a separate follow-up.
+- This release does not add an Action-owned GitHub MCP backend or implement
+  Session/Resume. It does not add another GitHub operation or change the locked
+  DSH version.
 
 ## [0.7.0] - 2026-08-25
 
@@ -728,6 +762,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.8.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.2...v0.5.3

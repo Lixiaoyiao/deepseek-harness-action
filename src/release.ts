@@ -1,5 +1,5 @@
 /** Release constants shared by runtime policy and repository contract checks. */
-export const ACTION_VERSION = "0.7.0" as const;
+export const ACTION_VERSION = "0.8.0" as const;
 export const ACTION_TAG = `v${ACTION_VERSION}` as const;
 export const DSH_VERSION = "0.1.1-rc.2" as const;
 export const RELEASE_CANARY_VARIABLE = "DSH_RELEASE_CANARY_SHA" as const;
