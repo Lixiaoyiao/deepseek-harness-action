@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,7 +13,6 @@ import {
   assertNoSecretOutput,
   assertSecretAbsent,
   buildDshWorkerEnvironment,
-  collectControllerSecrets,
   redactKnownSecrets,
 } from "../security/env.js";
 import {
@@ -31,13 +30,8 @@ import { parseDshOutput } from "./schema.js";
 import type { TaskOutputSchema } from "./task-output.js";
 import type { DshOperation, DshOutput } from "./schema.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
-import {
-  assertControllerCredentialsAbsentFromExtensionPlan,
-  configuredMcpDefinitionSecrets,
-  configuredPluginDefinitionSecrets,
-  emptyNativeExtensionPlan,
-} from "../extensions/plan.js";
-import type { AnyExtensionAudit, ExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
+import { assertControllerCredentialsAbsentFromExtensionPlan } from "../extensions/plan.js";
+import type { AnyExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
 import type { NativeToolId } from "../tools/schema.js";
 import { DSH_VERSION } from "../release.js";
 import {
@@ -72,6 +66,16 @@ import {
 import type { DshToolReceipt } from "./receipts.js";
 import { bindDshRuntime, createDshRuntime, disposeDshRuntime, type DshRuntime } from "./runtime.js";
 import { PHASE_TIMEOUTS, phaseTimeoutMs, runBestEffortDshCleanup } from "./timeouts.js";
+import {
+  assertWorkerLaunchHasNoControllerCredentials,
+  effectiveExtensionPlan,
+  effectiveNativeTools,
+  extensionSecrets,
+  isolationReport,
+  runtimeExtensionAudit,
+  withheldControllerSecrets,
+  workerWorkspaceWrite,
+} from "./runner-policy.js";
 
 export { createDshRuntime, disposeDshRuntime } from "./runtime.js";
 export type { DshRuntime } from "./runtime.js";
@@ -195,48 +199,6 @@ function defaultActionRoot(): string {
   return resolve(defaultAssetsDirectory(), "..", "..");
 }
 
-const EMPTY_EXTENSION_AUDIT_DIGEST = createHash("sha256")
-  .update(
-    '{"entries":[],"network":false,"packageDependencies":{},"profile":"github-action","schemaVersion":1}',
-    "utf8",
-  )
-  .digest("hex");
-const EMPTY_EXTENSION_CONFIGURATION_DIGEST = createHash("sha256")
-  .update(
-    '{"bundles":[],"mcpServers":[],"packageDependencies":{},"plugins":[],"profile":"github-action","schemaVersion":1}',
-    "utf8",
-  )
-  .digest("hex");
-
-function effectiveExtensionPlan(
-  request: DshRunRequest,
-  composition: DshComposition,
-): ExtensionPlan {
-  if (request.extensions !== undefined) return request.extensions;
-  if (composition.extensionPlanProfile === "headless-native") return emptyNativeExtensionPlan();
-  const audit: ExtensionAudit = {
-    schemaVersion: 1,
-    profile: "github-action",
-    digest: EMPTY_EXTENSION_AUDIT_DIGEST,
-    network: false,
-    entries: [],
-  };
-  return {
-    schemaVersion: 1,
-    profileName: "github-action",
-    digest: EMPTY_EXTENSION_AUDIT_DIGEST,
-    configurationDigest: EMPTY_EXTENSION_CONFIGURATION_DIGEST,
-    network: false,
-    mcpServers: [],
-    bundles: [],
-    plugins: [],
-    tools: [],
-    manifests: [],
-    packageDependencies: {},
-    audit,
-  };
-}
-
 async function assertDirectory(path: string, description: string): Promise<void> {
   let details;
   try {
@@ -285,118 +247,6 @@ async function resolveHostDshExecutableIdentity(
   return await realpath(executable);
 }
 
-function isolationReport(request: DshRunRequest, composition: DshComposition): DshIsolationReport {
-  const nativeTools = effectiveNativeTools(request);
-  const plan = effectiveExtensionPlan(request, composition);
-  const metadata = composition.isolationMetadata({
-    isolation: request.isolation,
-    nativeTools,
-    extensionNetwork: plan.network,
-    extensionsConfigured: plan.mcpServers.length + plan.bundles.length + plan.plugins.length > 0,
-  });
-  if (request.isolation === "docker") {
-    return {
-      backend: "docker",
-      credentialMediated: true,
-      repoToolsEnabled: metadata.repoToolsEnabled,
-      processIsolated: true,
-      networkIsolated: !plan.network,
-      workspaceAccess: workerWorkspaceWrite(request, composition) ? "read-write" : "read-only",
-      extensionProfile: metadata.extensionProfile,
-      ...(composition.actionManagedExtensionProfile || plan.audit.entries.length > 0
-        ? { extensionDigest: plan.digest }
-        : {}),
-      limitations: metadata.limitations,
-    };
-  }
-  return {
-    backend: "none",
-    credentialMediated: true,
-    repoToolsEnabled: metadata.repoToolsEnabled,
-    processIsolated: false,
-    networkIsolated: false,
-    workspaceAccess: workerWorkspaceWrite(request, composition) ? "read-write" : "read-only",
-    extensionProfile: metadata.extensionProfile,
-    limitations: metadata.limitations,
-  };
-}
-
-function defaultNativeTools(request: DshRunRequest): readonly NativeToolId[] {
-  if (request.trust === "trusted-write") {
-    return ["workspace.read", "workspace.search", "workspace.edit"];
-  }
-  if (request.trust === "trusted-read" && request.isolation === "docker") {
-    return ["workspace.read", "workspace.search"];
-  }
-  return [];
-}
-
-function effectiveNativeTools(request: DshRunRequest): readonly NativeToolId[] {
-  const requested = request.nativeTools ?? defaultNativeTools(request);
-  if (request.trust === "untrusted") return [];
-  if (request.trust === "trusted-read" && request.isolation !== "docker") return [];
-  return requested.filter(
-    (tool) =>
-      request.isolation === "docker" &&
-      (request.trust === "trusted-write" ||
-        (tool !== "workspace.edit" && tool !== "native.bash" && tool !== "native.subagent")),
-  );
-}
-
-function workerWorkspaceWrite(request: DshRunRequest, composition: DshComposition): boolean {
-  if (composition.toolPolicyOwner === "dsh") return request.trust === "trusted-write";
-  const plan = effectiveExtensionPlan(request, composition);
-  if (plan.profileName !== "github-action") {
-    throw new DshConfigurationError(
-      "Controlled workspace authority requires a github-action extension plan",
-    );
-  }
-  return (
-    effectiveNativeTools(request).includes("workspace.edit") ||
-    plan.tools.some((tool) => tool.permissions.includes("workspace-write"))
-  );
-}
-
-function withheldControllerSecrets(
-  request: DshRunRequest,
-  environment: NodeJS.ProcessEnv,
-): readonly string[] {
-  return [
-    ...new Set([
-      request.apiKey,
-      ...(request.controllerCredentials ?? []),
-      ...collectControllerSecrets(environment),
-    ]),
-  ].filter((secret) => secret.length >= 4);
-}
-
-function extensionSecrets(extensions: ExtensionPlan): readonly string[] {
-  return [
-    ...new Set([
-      ...extensions.mcpServers.flatMap(({ definition }) =>
-        configuredMcpDefinitionSecrets(definition),
-      ),
-      ...extensions.plugins.flatMap(({ definition }) =>
-        configuredPluginDefinitionSecrets(definition),
-      ),
-    ]),
-  ];
-}
-
-function assertWorkerLaunchHasNoControllerCredentials(
-  spec: DshProcessSpec,
-  secrets: readonly string[],
-): void {
-  assertNoSecretOutput("argv", [spec.command, ...spec.args].join("\u0000"), secrets);
-  assertNoSecretOutput(
-    "environment",
-    Object.entries(spec.env)
-      .map(([name, value]) => `${name}=${value ?? ""}`)
-      .join("\u0000"),
-    secrets,
-  );
-}
-
 async function runControllerPhase<T>(options: {
   readonly run: () => Promise<T>;
   readonly capMs: number;
@@ -426,21 +276,6 @@ async function runControllerPhase<T>(options: {
     throw new DshTimeoutError(timeoutMs);
   }
   return result.value;
-}
-
-function runtimeExtensionAudit(
-  request: DshRunRequest,
-  extensions: ExtensionPlan,
-  runtime: DshRuntime,
-  composition: DshComposition,
-): AnyExtensionAudit | undefined {
-  if (request.isolation !== "docker") return undefined;
-  if (!composition.actionManagedExtensionProfile && extensions.audit.entries.length === 0) {
-    return undefined;
-  }
-  return runtime.installedExtensionRuntimeLock === undefined
-    ? extensions.audit
-    : { ...extensions.audit, runtimeLock: runtime.installedExtensionRuntimeLock };
 }
 
 /** Execute one DSH headless turn behind a controller-side credential proxy. */
@@ -600,6 +435,7 @@ export async function runDsh(
         "native.bash cannot share a worker with a bridge-networked extension; remove native.bash or the networked extension",
       );
     }
+    const workspaceWrite = workerWorkspaceWrite(request, composition);
     bindDshRuntime(runtime, {
       compositionId: composition.id,
       dshVersion: request.dshVersion,
@@ -612,7 +448,7 @@ export async function runDsh(
       ...(dshExecutableIdentity === undefined ? {} : { dshExecutableIdentity }),
       extensionConfigurationDigest: extensions.configurationDigest,
       nativeRuntimeTools: composition.runtimeToolNames(effectiveTools),
-      workspaceWrite: workerWorkspaceWrite(request, composition),
+      workspaceWrite,
       network: extensions.network,
       profileSchemaVersion: composition.profileSchemaVersion,
     });
@@ -700,7 +536,7 @@ export async function runDsh(
         plan: extensions,
         nativeTools: effectiveTools,
         trust: request.trust,
-        workspaceWrite: workerWorkspaceWrite(request, composition),
+        workspaceWrite,
         expectedOperation: request.operation,
         task: prompt,
         workspacePath: workspace,
@@ -779,7 +615,7 @@ export async function runDsh(
     const workerEnvironment = buildDshWorkerEnvironment({
       source: environment,
       dshHome: localDshHome,
-      permissionMode: workerWorkspaceWrite(request, composition) ? "workspace-write" : "read-only",
+      permissionMode: workspaceWrite ? "workspace-write" : "read-only",
       proxyBaseUrl: proxy.workerBaseUrl,
       proxyToken: proxy.workerToken,
       realDeepSeekApiKey: request.apiKey,
@@ -809,7 +645,7 @@ export async function runDsh(
         environment,
         workerEnvironment,
         proxy,
-        workspaceWrite: workerWorkspaceWrite(request, composition),
+        workspaceWrite,
       });
     } else {
       spec = { ...preparedComposition.launchPlan, env: workerEnvironment };

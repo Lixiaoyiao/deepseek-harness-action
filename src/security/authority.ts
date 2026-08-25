@@ -1,8 +1,5 @@
-import {
-  configuredMcpDefinitionSecrets,
-  configuredPluginDefinitionSecrets,
-  type ExtensionPlan,
-} from "../extensions/plan.js";
+import { extensionCredentialOwnerFacts } from "../extensions/credentials.js";
+import type { ExtensionPlan } from "../extensions/plan.js";
 
 export type ControllerAuthoritySource =
   | {
@@ -65,32 +62,15 @@ function compareExtensionSources(
 function extensionCredentialSources(
   extensions: ExtensionPlan | undefined,
 ): readonly ExtensionAuthoritySource[] {
-  if (extensions === undefined) return [];
-  const sources: ExtensionAuthoritySource[] = [];
-  for (const server of extensions.mcpServers) {
-    const credentials = configuredMcpDefinitionSecrets(server.definition);
-    if (credentials.length > 0) {
-      sources.push({
-        kind: "extension-credential",
-        extensionKind: "mcp",
-        extensionId: server.definition.id,
-        provisionedBy: "workflow",
-        configuredFor: "worker-extension",
-      });
-    }
-  }
-  for (const plugin of extensions.plugins) {
-    if (configuredPluginDefinitionSecrets(plugin.definition).length > 0) {
-      sources.push({
-        kind: "extension-credential",
-        extensionKind: "plugin",
-        extensionId: plugin.definition.id,
-        provisionedBy: "workflow",
-        configuredFor: "worker-extension",
-      });
-    }
-  }
-  return sources.sort(compareExtensionSources);
+  return extensionCredentialOwnerFacts(extensions)
+    .map<ExtensionAuthoritySource>((owner) => ({
+      kind: "extension-credential",
+      extensionKind: owner.extensionKind,
+      extensionId: owner.extensionId,
+      provisionedBy: "workflow",
+      configuredFor: "worker-extension",
+    }))
+    .sort(compareExtensionSources);
 }
 
 /** Build a value-only audit of Action-known authority sources without credential material. */

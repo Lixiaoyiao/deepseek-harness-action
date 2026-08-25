@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as ActionsCoreModule from "@actions/core";
+import type * as FsPromisesModule from "node:fs/promises";
 import type * as AgentLoopModule from "../src/agent/loop.js";
 import { DshAbortedError, DshCredentialLeakError } from "../src/dsh/errors.js";
 import type * as GitHubClientModule from "../src/github/client.js";
@@ -8,6 +9,7 @@ import type * as GitHubFetchModule from "../src/github/fetch.js";
 import type * as GitHubPayloadModule from "../src/github/payload.js";
 import type * as GitHubPermissionsModule from "../src/github/permissions.js";
 import type * as InputsModule from "../src/inputs.js";
+import type * as WriteGitHubModule from "../src/write/github.js";
 import { runAction } from "../src/orchestrator.js";
 import { ValidationIntegrityError } from "../src/write/validation-integrity.js";
 import { inputs } from "./helpers.js";
@@ -23,6 +25,15 @@ const mocks = vi.hoisted(() => ({
   runAgentLoop: vi.fn(),
   progressUpdate: vi.fn(),
   progressFail: vi.fn(),
+  makeTemporaryWorkspace: vi.fn(),
+  removeTemporaryWorkspace: vi.fn(),
+  getBranchHead: vi.fn(),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof FsPromisesModule>()),
+  mkdtemp: mocks.makeTemporaryWorkspace,
+  rm: mocks.removeTemporaryWorkspace,
 }));
 
 vi.mock("@actions/core", async (importOriginal) => ({
@@ -59,6 +70,11 @@ vi.mock("../src/github/fetch.js", async (importOriginal) => ({
 vi.mock("../src/agent/loop.js", async (importOriginal) => ({
   ...(await importOriginal<typeof AgentLoopModule>()),
   runAgentLoop: mocks.runAgentLoop,
+}));
+
+vi.mock("../src/write/github.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof WriteGitHubModule>()),
+  getBranchHead: mocks.getBranchHead,
 }));
 
 vi.mock("../src/github/progress.js", () => ({
@@ -127,6 +143,9 @@ beforeEach(() => {
   });
   mocks.progressUpdate.mockResolvedValue(undefined);
   mocks.progressFail.mockResolvedValue(undefined);
+  mocks.makeTemporaryWorkspace.mockResolvedValue("C:/dsh-action-cancellation-test");
+  mocks.removeTemporaryWorkspace.mockResolvedValue(undefined);
+  mocks.getBranchHead.mockResolvedValue("a".repeat(40));
 });
 
 afterEach(() => {
@@ -310,6 +329,42 @@ describe("orchestrator cancellation finalization", () => {
     releaseCleanup?.();
     const outcome = await action;
     expect(outcome.error?.code).toBe("DSH_ABORTED");
+  });
+
+  it("starts terminal publication before a failed workspace preparation finishes cleanup", async () => {
+    mocks.loadInputs.mockReturnValue(
+      inputs({
+        command: "task",
+        prompt: "Inspect the issue",
+        taskAccess: "read",
+        isolation: "docker",
+        progressComment: true,
+        allowedTools: [],
+      }),
+    );
+    const workspaceFailure = new Error("Cannot resolve the immutable branch head");
+    mocks.getBranchHead.mockRejectedValueOnce(workspaceFailure);
+    let releaseCleanup: (() => void) | undefined;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    mocks.removeTemporaryWorkspace.mockImplementationOnce(async () => await cleanup);
+
+    let actionSettled = false;
+    const action = runAction().finally(() => {
+      actionSettled = true;
+    });
+
+    await vi.waitFor(() => expect(mocks.progressFail).toHaveBeenCalledOnce());
+    expect(mocks.removeTemporaryWorkspace).toHaveBeenCalledOnce();
+    expect(actionSettled).toBe(false);
+
+    releaseCleanup?.();
+    await expect(action).resolves.toMatchObject({
+      conclusion: "failure",
+      error: { code: "ACTION_RUNTIME_FAILED", phase: "context" },
+    });
+    expect(mocks.runAgentLoop).not.toHaveBeenCalled();
   });
 
   it("does not let a concurrent signal hide an independent integrity failure", async () => {

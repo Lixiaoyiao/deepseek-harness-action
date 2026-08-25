@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { extensionCredentialOwnerFacts } from "../src/extensions/credentials.js";
 import { resolveExtensionPlan } from "../src/extensions/plan.js";
 import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
 import { buildActionOutputs, formatStepSummary, type RunOutcome } from "../src/result.js";
@@ -166,6 +167,27 @@ function effectivePlan(reverse = false) {
 }
 
 describe("known authority sources", () => {
+  it("derives only value-free facts for credential-bearing effective owners", () => {
+    const facts = extensionCredentialOwnerFacts(effectivePlan());
+
+    expect(facts).toHaveLength(3);
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        { extensionKind: "mcp", extensionId: "a-stdio" },
+        { extensionKind: "mcp", extensionId: "z-http" },
+        { extensionKind: "plugin", extensionId: "middle" },
+      ]),
+    );
+    for (const fact of facts) {
+      expect(Object.keys(fact).sort()).toEqual(["extensionId", "extensionKind"]);
+    }
+    const serialized = JSON.stringify(facts);
+    for (const secret of secrets) {
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain(createHash("sha256").update(secret).digest("hex"));
+    }
+  });
+
   it("distinguishes withheld Controller credentials from effective worker extension credentials", () => {
     const audit = buildAuthorityAudit(effectivePlan());
 
