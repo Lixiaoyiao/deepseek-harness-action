@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status after v0.7.0 (unreleased)
+## Status in v0.8.0
 
 The controlled extension model introduced in v0.4 remains active unchanged
 through DeepSeek Harness's official extension mechanisms. The Action does not
@@ -42,10 +42,14 @@ official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
 general-purpose CLI path. The standalone workflow installer added in v0.5.2
 remains unchanged. v0.6.0 added Controller-side routing, branch UX, typed GitHub
 operations, and optional task-result validation. v0.7.0 added only internal
-composition/backend seams and additive audit semantics. Current unreleased work
-uses that seam for experimental native DSH ownership; it still does not add a
+composition/backend seams and additive audit semantics. v0.8.0 uses that seam
+for experimental native DSH ownership and its official MCP, Profile Bundle,
+Cordis Plugin, repository Skills, Subagent, and Workflow graph. Its
+behavior-preserving Controller cleanup also converges typed lifecycle phases,
+`GitHubAuthorityGateway`, and the declarative builtin capability contract
+without changing the public extension schemas. It does not add an Action-owned
 GitHub MCP backend, Session/Resume, a reusable session token, Agent Teams,
-GitHub App, or another Agent core expansion. It does not publish v0.8.0.
+GitHub App, or another Agent core expansion.
 
 ## Versioned configuration
 
@@ -525,7 +529,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.7.0 does not instantiate a store or expose a resume token.
+interfaces only. v0.8.0 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

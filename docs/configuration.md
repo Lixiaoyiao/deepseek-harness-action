@@ -83,7 +83,7 @@ tool requests and blocked tasks omit it. The value remains untrusted task data.
 | Input             | Default                                       | Purpose and constraints                                                                                                                                             |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dsh-mode`        | `controlled`                                  | `controlled` or experimental `native`. This selects composition ownership only; it does not select trust, authorize GitHub, or reinterpret `permission-profile`.    |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.7.0 rejects another version, ranges, and `latest`.                                                                                    |
+| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.8.0 rejects another version, ranges, and `latest`.                                                                                    |
 | `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable for eligible controlled host compatibility. Native mode rejects host execution.                             |
 | `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective controlled extensions require Docker. Experimental native mode always requires Docker.             |
 | `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective controlled extensions require a full `name@sha256:<64 lowercase hex>` digest. |
@@ -246,6 +246,13 @@ Canonical Action tool IDs are:
 - `mcp.<server-id>.<tool-id>` for MCP tools; and
 - `plugin.<extension-id>.<tool-id>` for Bundle or direct plugin tools.
 
+For Controller-managed builtin tools, one declarative capability contract binds
+each identity to its model permission tags and trust, capability, and isolation
+requirements. A generic evaluator intersects those requirements with the
+request, exact explicit denies, `SecurityPolicy`, configured providers, and
+effective isolation. Native DSH's dynamic inventory is not copied into that
+Controller contract.
+
 The controlled DSH runtime may use a different model-facing name; controlled
 authorization always uses the canonical Action ID. Native audit instead reports
 the actual model-facing names observed from that DSH runtime, such as `read` or
@@ -299,7 +306,7 @@ observability, not authorization.
 
 A user-configured GitHub MCP and its own credential are an external extension
 authority. Calls made directly by that extension do not pass through the
-Controller `github.*` Gateway and do not receive its repository/entity/head
+Controller `GitHubAuthorityGateway` and do not receive its repository/entity/head
 binding, revalidation, Controller validation, deferred mutation, or receipts.
 The Action does not provide a GitHub MCP backend.
 
@@ -663,7 +670,7 @@ proves identity, not safety; review and maintain the image separately.
 
 ### GitHub image attachments
 
-v0.7.0 does not download or forward GitHub image attachments. The exact audited
+v0.8.0 does not download or forward GitHub image attachments. The exact audited
 `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
@@ -794,7 +801,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
+- uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

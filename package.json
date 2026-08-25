@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.7.0",
-  "description": "DeepSeek Harness for GitHub - controlled MCP, Bundle/Profile extensions, coding tasks, review, and safe automation",
+  "version": "0.8.0",
+  "description": "DeepSeek Harness for GitHub - controlled and native DSH composition, coding tasks, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {
     "type": "git",

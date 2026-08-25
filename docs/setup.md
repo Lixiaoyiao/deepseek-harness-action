@@ -67,7 +67,7 @@ The default `github-token` is `${{ github.token }}` and is also Controller-only.
 The examples use the current release tag for readability:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
+uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
 ```
 
 For production, replace the tag with the full immutable commit SHA published for that release. Do not use `main`, `latest`, a version range, or another floating ref. Keep `dsh-version` at the Action's audited exact value:
@@ -110,7 +110,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2

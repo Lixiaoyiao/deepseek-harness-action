@@ -1,5 +1,5 @@
 name: "DeepSeek Harness for GitHub"
-description: "DeepSeek coding tasks with controlled DSH MCP, Bundle, Profile, and GitHub automation"
+description: "DeepSeek coding tasks with controlled and native DSH composition, ecosystem extensions, and GitHub automation"
 author: "Lixiaoyiao"
 branding:
   icon: "code"
@@ -78,7 +78,7 @@ inputs:
     required: false
     default: "controlled"
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version. v0.7.0 accepts only the audited 0.1.1-rc.2 runtime."
+    description: "Pinned @deepseek-ai/dsh version. v0.8.0 accepts only the audited 0.1.1-rc.2 runtime."
     required: false
     default: "0.1.1-rc.2"
   dsh-executable:

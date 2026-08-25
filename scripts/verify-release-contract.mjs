@@ -12,6 +12,7 @@ import {
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 const dshPackage = (name) => name === "@deepseek-ai/dsh" || name.startsWith("@deepseek-ai/dsh-");
+const countToken = (source, token) => source.split(token).length - 1;
 
 const [
   manifestText,
@@ -120,6 +121,64 @@ for (const expected of [
   'git -C release-action rev-parse HEAD)" = "$RELEASE_SHA',
 ]) {
   assert.ok(canary.includes(expected), `release canary is missing contract token: ${expected}`);
+}
+
+const controlledCanaryStart = canary.indexOf(
+  "      - name: Controlled default strict read-only smoke",
+);
+const nativeCanaryStart = canary.indexOf("      - name: Native read-only smoke");
+assert.ok(controlledCanaryStart >= 0, "release canary must run the controlled default smoke");
+assert.ok(
+  nativeCanaryStart > controlledCanaryStart,
+  "release canary must run the native smoke after the controlled smoke",
+);
+const controlledCanary = canary.slice(controlledCanaryStart, nativeCanaryStart);
+const nativeCanary = canary.slice(nativeCanaryStart);
+assert.doesNotMatch(
+  controlledCanary,
+  /^\s+dsh-mode:/mu,
+  "controlled release canary must exercise the default dsh-mode",
+);
+assert.match(nativeCanary, /^\s+dsh-mode: native$/mu, "native release canary must opt in");
+assert.equal(
+  countToken(canary, "uses: ./release-action"),
+  2,
+  "release canary must invoke the immutable action exactly twice",
+);
+assert.equal(
+  countToken(canary, "persist-credentials: false"),
+  1,
+  "release checkout must disable credential persistence exactly once",
+);
+assert.equal(
+  countToken(canary, "dsh-mode: native"),
+  1,
+  "release canary must contain exactly one native opt-in",
+);
+assert.ok(
+  canary.includes("git -C release-action config --local --get-regexp"),
+  "release canary must recheck the checkout's local credential configuration",
+);
+assert.ok(
+  controlledCanary.includes('.toolPolicy.policyOwner == "controller"') &&
+    controlledCanary.includes('.dsh.mode == "controlled"') &&
+    controlledCanary.includes('.dsh.composition == "github-action-controlled"') &&
+    controlledCanary.includes(
+      '.permissions.effectiveTools == ["workspace.read","workspace.search"]',
+    ),
+  "controlled release canary must assert its schema ownership and composition",
+);
+for (const expected of [
+  '.toolPolicy.policyOwner == "dsh"',
+  '.dsh.mode == "native"',
+  '.dsh.composition == "dsh-native-headless"',
+  '.isolation.workspaceAccess == "read-only"',
+  '(.toolPolicy.observedTools | index("read") != null)',
+  '(.toolPolicy | has("effectiveTools") | not)',
+  '(.toolPolicy | has("requestedTools") | not)',
+  '(.toolPolicy | has("deniedTools") | not)',
+]) {
+  assert.ok(nativeCanary.includes(expected), `native release canary is missing: ${expected}`);
 }
 
 assert.equal(

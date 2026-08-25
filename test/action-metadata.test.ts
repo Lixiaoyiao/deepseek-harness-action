@@ -234,12 +234,18 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("binds the canary to the formal v0.7.0 release and its immutable tag commit", async () => {
+  it("binds the v0.8.0 canary to the formal release and runs both read-only modes", async () => {
     const canary = await readFile(
       new URL("../.github/workflows/release-canary.yml", import.meta.url),
       "utf8",
     );
     const gate = canary.slice(0, canary.indexOf("  smoke:"));
+    const controlledStart = canary.indexOf(
+      "      - name: Controlled default strict read-only smoke",
+    );
+    const nativeStart = canary.indexOf("      - name: Native read-only smoke");
+    const controlled = canary.slice(controlledStart, nativeStart);
+    const native = canary.slice(nativeStart);
     expect(canary).toContain(`name: ${ACTION_TAG} release canary`);
     expect(gate).toContain('[[ "$WORKFLOW_REF" == "refs/heads/main" ]]');
     expect(gate).toContain('[[ "$RUN_SHA" == "$WORKFLOW_SHA" ]]');
@@ -255,7 +261,29 @@ describe("Marketplace action metadata", () => {
     expect(canary).toContain(".draft == false and .prerelease == false");
     expect(canary).toContain('"$object_sha" != "$RELEASE_SHA"');
     expect(canary).toContain('git -C release-action rev-parse HEAD)" = "$RELEASE_SHA"');
-    expect(canary).toContain("persist-credentials: false");
+    expect(canary.match(/persist-credentials: false/gu)).toHaveLength(1);
+    expect(canary).toContain("git -C release-action config --local --get-regexp");
+    expect(controlledStart).toBeGreaterThan(-1);
+    expect(nativeStart).toBeGreaterThan(controlledStart);
+    expect(canary.match(/uses: \.\/release-action/gu)).toHaveLength(2);
+    expect(canary.match(/dsh-mode: native/gu)).toHaveLength(1);
+    expect(controlled).not.toMatch(/^\s+dsh-mode:/mu);
+    expect(controlled).toContain('.dsh.mode == "controlled"');
+    expect(controlled).toContain('.dsh.composition == "github-action-controlled"');
+    expect(controlled).toContain('.toolPolicy.policyOwner == "controller"');
+    expect(controlled).toContain(
+      '.permissions.effectiveTools == ["workspace.read","workspace.search"]',
+    );
+    expect(native).toMatch(/^\s+dsh-mode: native$/mu);
+    expect(native).toContain('.dsh.mode == "native"');
+    expect(native).toContain('.dsh.composition == "dsh-native-headless"');
+    expect(native).toContain('.toolPolicy.policyOwner == "dsh"');
+    expect(native).toContain("(.toolPolicy.observedTools | length > 0)");
+    expect(native).toContain('(.toolPolicy.observedTools | index("read") != null)');
+    expect(native).toContain('.isolation.workspaceAccess == "read-only"');
+    expect(native).toContain('(.toolPolicy | has("effectiveTools") | not)');
+    expect(native).toContain('(.toolPolicy | has("requestedTools") | not)');
+    expect(native).toContain('(.toolPolicy | has("deniedTools") | not)');
   });
 
   it("generates static bundle notices from NCC source maps only", async () => {
@@ -333,7 +361,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.7.0 task example with the standard coding profile", async () => {
+  it("ships the v0.8.0 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
@@ -347,7 +375,7 @@ describe("Marketplace action metadata", () => {
     expect(example).toContain("test-commands:");
   });
 
-  it("ships a fail-closed v0.7.0 GitHub integration example", async () => {
+  it("ships a fail-closed v0.8.0 GitHub integration example", async () => {
     const example = await readFile(
       new URL("../examples/github-integration.yml", import.meta.url),
       "utf8",
