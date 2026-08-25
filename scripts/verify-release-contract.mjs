@@ -22,6 +22,13 @@ const [
   canary,
   installerManifestText,
   installerLockText,
+  installerReadme,
+  rootReadme,
+  rootReadmeZh,
+  setupGuide,
+  setupGuideZh,
+  changelog,
+  maintainerReleaseGuide,
   installerBuild,
   installerRuntime,
   installerReview,
@@ -34,6 +41,13 @@ const [
   read(".github/workflows/release-canary.yml"),
   read("packages/create-deepseek-harness-action/package.json"),
   read("packages/create-deepseek-harness-action/package-lock.json"),
+  read("packages/create-deepseek-harness-action/README.md"),
+  read("README.md"),
+  read("README.zh-CN.md"),
+  read("docs/setup.md"),
+  read("docs/setup.zh-CN.md"),
+  read("CHANGELOG.md"),
+  read("docs/maintainer-release.md"),
   read("packages/create-deepseek-harness-action/scripts/build.mjs"),
   read("packages/create-deepseek-harness-action/src/installer.mjs"),
   read("packages/create-deepseek-harness-action/src/templates/dsh-review.yml"),
@@ -43,7 +57,9 @@ const manifest = JSON.parse(manifestText);
 const lock = JSON.parse(lockText);
 const installerManifest = JSON.parse(installerManifestText);
 const installerLock = JSON.parse(installerLockText);
-const installerVersion = "0.1.1";
+const installerVersion = "0.2.0";
+const installerActionTag = "v0.8.0";
+const installerActionReleaseSha = "86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1";
 const directDependencies = {
   ...(manifest.dependencies ?? {}),
   ...(manifest.devDependencies ?? {}),
@@ -211,11 +227,46 @@ assert.equal(
   "installer root lock version drifted",
 );
 assert.ok(
-  installerRuntime.includes("/blob/v0.6.0/docs/setup.md"),
-  "installer documentation must bind to the v0.6.0 release",
+  installerRuntime.includes(`/blob/${installerActionTag}/docs/setup.md`),
+  `installer documentation must bind to the ${installerActionTag} release`,
 );
+assert.ok(
+  installerReadme.includes(`Version \`${installerVersion}\``) &&
+    installerReadme.includes(installerActionTag) &&
+    installerReadme.includes(installerActionReleaseSha),
+  "installer README must identify its version and immutable Action binding",
+);
+for (const [name, document] of [
+  ["README.md", rootReadme],
+  ["README.zh-CN.md", rootReadmeZh],
+  ["docs/setup.md", setupGuide],
+  ["docs/setup.zh-CN.md", setupGuideZh],
+  ["CHANGELOG.md", changelog],
+  ["docs/maintainer-release.md", maintainerReleaseGuide],
+]) {
+  assert.ok(
+    document.includes(installerVersion) &&
+      document.includes(installerActionTag) &&
+      document.includes(installerActionReleaseSha),
+    `${name} must identify the installer version and immutable Action binding`,
+  );
+}
+assert.ok(
+  maintainerReleaseGuide.includes('repository="Lixiaoyiao/deepseek-harness-action"') &&
+    !maintainerReleaseGuide.includes("$GITHUB_REPOSITORY"),
+  "installer publish guide must use an explicit repository identity",
+);
+assert.ok(
+  installerRuntime.includes("--dsh-mode controlled|native") &&
+    installerRuntime.includes('const DEFAULT_DSH_MODE = "controlled"'),
+  "installer CLI must expose native as an opt-in and keep controlled as the default",
+);
+for (const expected of ["dsh-review-native.yml", "dsh-commands-native.yml"]) {
+  assert.ok(installerRuntime.includes(expected), `installer runtime is missing: ${expected}`);
+}
 
 const installerReleaseToken = "__DSH_ACTION_RELEASE_SHA__";
+const installerDshModeToken = "__DSH_MODE_INPUT__";
 assert.ok(
   installerBuild.includes("DSH_ACTION_RELEASE_SHA"),
   "installer build must require an explicit release SHA",
@@ -223,6 +274,16 @@ assert.ok(
 assert.ok(
   installerBuild.includes("^[0-9a-f]{40}$"),
   "installer build must accept only a lowercase full commit SHA",
+);
+assert.ok(
+  installerBuild.includes(installerDshModeToken) &&
+    installerBuild.includes('renderTemplate(source, file, "controlled")') &&
+    installerBuild.includes('renderTemplate(source, file, "native")'),
+  "installer build must deterministically render controlled and native templates",
+);
+assert.ok(
+  !installerBuild.includes(installerActionReleaseSha),
+  "installer source build must receive the formal Action SHA only through DSH_ACTION_RELEASE_SHA",
 );
 for (const [name, template] of [
   ["review", installerReview],
@@ -232,6 +293,16 @@ for (const [name, template] of [
     template.split(installerReleaseToken).length - 1,
     1,
     `${name} installer template must contain exactly one controlled release token`,
+  );
+  assert.equal(
+    template.split(installerDshModeToken).length - 1,
+    1,
+    `${name} installer template must contain exactly one DSH mode build anchor`,
+  );
+  assert.doesNotMatch(
+    template,
+    /^\s*dsh-mode:/mu,
+    `${name} source template must leave controlled mode implicit`,
   );
   assert.ok(
     template.includes(`Lixiaoyiao/deepseek-harness-action@${installerReleaseToken}`),

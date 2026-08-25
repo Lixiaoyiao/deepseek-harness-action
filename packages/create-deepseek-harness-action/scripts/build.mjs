@@ -4,6 +4,9 @@ import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RELEASE_TOKEN = "__DSH_ACTION_RELEASE_SHA__";
+const DSH_MODE_TOKEN = "__DSH_MODE_INPUT__";
+const DSH_MODE_ANCHOR = /^([ \t]*)# __DSH_MODE_INPUT__[ \t]*(\r?\n|$)/mu;
+const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function isStrictDescendant(parent, child) {
@@ -54,29 +57,62 @@ if (releaseSha === undefined || !/^[0-9a-f]{40}$/u.test(releaseSha)) {
 
 const destination = outputDirectory(process.argv.slice(2));
 const runtimeFiles = ["cli.mjs", "installer.mjs"];
-const templateFiles = ["dsh-review.yml", "dsh-commands.yml"];
+const sourceTemplateFiles = ["dsh-review.yml", "dsh-commands.yml"];
 const runtime = new Map();
 const templates = new Map();
 
+function nativeTemplateName(sourceFile) {
+  return sourceFile.replace(/\.yml$/u, "-native.yml");
+}
+
+function renderTemplate(source, sourceFile, dshMode) {
+  const releaseOccurrences = source.split(RELEASE_TOKEN).length - 1;
+  if (releaseOccurrences !== 1) {
+    throw new Error(`Template ${sourceFile} must contain exactly one release placeholder`);
+  }
+  const modeOccurrences = source.split(DSH_MODE_TOKEN).length - 1;
+  if (modeOccurrences !== 1 || !DSH_MODE_ANCHOR.test(source)) {
+    throw new Error(`Template ${sourceFile} must contain exactly one DSH mode build anchor`);
+  }
+
+  const withRelease = source.replace(RELEASE_TOKEN, releaseSha);
+  const built = withRelease.replace(DSH_MODE_ANCHOR, (_anchor, indentation, newline) =>
+    dshMode === "native" ? `${indentation}dsh-mode: native${newline}` : "",
+  );
+
+  if (built.includes(RELEASE_TOKEN) || built.includes(DSH_MODE_TOKEN)) {
+    throw new Error(`Template ${sourceFile} still contains a build placeholder after rendering`);
+  }
+  if ((built.match(ACTION_REFERENCE_PATTERN) ?? []).length !== 1) {
+    throw new Error(`Template ${sourceFile} must contain exactly one immutable Action reference`);
+  }
+  const modeLines = built.match(/^\s*dsh-mode:\s*\S+\s*$/gmu) ?? [];
+  if (dshMode === "controlled" && modeLines.length !== 0) {
+    throw new Error(`Controlled template ${sourceFile} must not contain dsh-mode`);
+  }
+  if (
+    dshMode === "native" &&
+    (modeLines.length !== 1 || modeLines[0]?.trim() !== "dsh-mode: native")
+  ) {
+    throw new Error(
+      `Native template ${sourceFile} must contain exactly one dsh-mode: native input`,
+    );
+  }
+  return built;
+}
+
 for (const file of runtimeFiles) {
   const contents = await readFile(join(packageRoot, "src", file), "utf8");
-  if (contents.includes(RELEASE_TOKEN)) {
-    throw new Error(`Runtime file ${file} must not contain the release placeholder`);
+  if (contents.includes(RELEASE_TOKEN) || contents.includes(DSH_MODE_TOKEN)) {
+    throw new Error(`Runtime file ${file} must not contain a build placeholder`);
   }
   runtime.set(file, contents);
 }
 
-for (const file of templateFiles) {
+for (const file of sourceTemplateFiles) {
   const source = await readFile(join(packageRoot, "src", "templates", file), "utf8");
-  const occurrences = source.split(RELEASE_TOKEN).length - 1;
-  if (occurrences !== 1) {
-    throw new Error(`Template ${file} must contain exactly one release placeholder`);
-  }
-  const built = source.replace(RELEASE_TOKEN, releaseSha);
-  if (built.includes(RELEASE_TOKEN)) {
-    throw new Error(`Template ${file} still contains the release placeholder after build`);
-  }
-  templates.set(file, built);
+  templates.set(file, renderTemplate(source, file, "controlled"));
+  templates.set(nativeTemplateName(file), renderTemplate(source, file, "native"));
 }
 
 await rm(destination, { force: true, recursive: true });
@@ -88,8 +124,8 @@ for (const [file, contents] of templates) {
 await chmod(join(destination, "cli.mjs"), 0o755);
 
 for (const [file, contents] of [...runtime, ...templates]) {
-  if (contents.includes(RELEASE_TOKEN)) {
-    throw new Error(`Refusing to publish release placeholder from ${file}`);
+  if (contents.includes(RELEASE_TOKEN) || contents.includes(DSH_MODE_TOKEN)) {
+    throw new Error(`Refusing to publish build placeholder from ${file}`);
   }
 }
 
