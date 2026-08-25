@@ -37,8 +37,13 @@ import type {
   DshRunRequest,
 } from "../src/dsh/runner.js";
 import { PHASE_TIMEOUTS } from "../src/dsh/timeouts.js";
-import { resolveExtensionPlan } from "../src/extensions/plan.js";
-import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
+import { resolveExtensionPlan, resolveNativeExtensionPlan } from "../src/extensions/plan.js";
+import {
+  parseMcpConfiguration,
+  parseNativeMcpConfiguration,
+  parseNativePluginConfiguration,
+  parsePluginConfiguration,
+} from "../src/extensions/schema.js";
 
 const temporaryPaths: string[] = [];
 const PINNED_NODE_IMAGE = `node@sha256:${"a".repeat(64)}`;
@@ -369,6 +374,7 @@ describe("runDsh", () => {
       toolPolicyOwner: "controller",
       profileSchemaVersion: 7,
       actionManagedExtensionProfile: true,
+      extensionPlanProfile: "github-action",
       assertCompatible: vi.fn(),
       promptToolPolicy: vi.fn(() => ({ policyOwner: "controller" as const, nativeTools: [] })),
       runtimeToolNames,
@@ -482,6 +488,7 @@ describe("runDsh", () => {
       toolPolicyOwner: "controller",
       profileSchemaVersion: 9,
       actionManagedExtensionProfile: true,
+      extensionPlanProfile: "github-action",
       assertCompatible: vi.fn(),
       promptToolPolicy: vi.fn(() => ({
         policyOwner: "controller" as const,
@@ -645,7 +652,246 @@ describe("runDsh", () => {
     }
   });
 
-  it("fails native host and Action-managed extension launches before proxy or execution", async () => {
+  it("gives a networked native MCP to the official graph and reports whole-worker authority", async () => {
+    const fixture = await fixtures();
+    const runtime = await createDshRuntime(fixture.root);
+    const extensionCredential = "native-mcp-owned-secret";
+    const realGitHubToken = "github-controller-secret";
+    const plan = resolveNativeExtensionPlan({
+      mcp: parseNativeMcpConfiguration(
+        JSON.stringify({
+          schemaVersion: 1,
+          servers: [
+            {
+              id: "remote",
+              transport: "streamable-http",
+              url: "https://mcp.example.test/rpc",
+              credentialHeaders: { "X-Service": `Bearer ${extensionCredential}` },
+              toolCallTimeoutMs: 8_000,
+            },
+          ],
+        }),
+      ),
+      plugins: parseNativePluginConfiguration('{"schemaVersion":1,"bundles":[],"plugins":[]}'),
+      allowPluginInstall: false,
+      policy: {
+        trust: "trusted-read",
+        allowed: true,
+        reason: "native MCP runner test",
+        capabilities: {
+          readRepository: true,
+          readCi: false,
+          publishComments: true,
+          executeRepositoryCode: false,
+          loadExtensions: true,
+          accessNetwork: true,
+          modifyWorkspace: false,
+          commit: false,
+          push: false,
+          createPullRequest: false,
+          manageIssueLabels: false,
+          manageIssueAssignees: false,
+          updateIssueState: false,
+          updatePullRequestMetadata: false,
+        },
+      },
+    });
+    const proxy = {
+      ...fakeProxy(),
+      workerWebSearchBaseUrl: "http://host.docker.internal:3456/anthropic/v1",
+    };
+    let captured: DshProcessSpec | undefined;
+
+    try {
+      const result = await runDsh(
+        request({
+          isolation: "docker",
+          containerImage: PINNED_NODE_IMAGE,
+          workspacePath: fixture.workspace,
+          extensions: plan,
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          environment: { PATH: process.env.PATH, GITHUB_TOKEN: realGitHubToken },
+          runtime,
+          composition: new NativeComposition(),
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess: async (spec) => {
+            const isNativeWorker = spec.args.includes(CONTAINER_NATIVE_LAUNCHER);
+            if (isNativeWorker) {
+              captured = spec;
+              await writeFile(
+                join(actionStateDirectory(spec), "native-observed-tools.jsonl"),
+                `${JSON.stringify({
+                  schemaVersion: 1,
+                  source: "ctx.tools.schemas(agent)",
+                  observedTools: ["read", "workflow", "mcp__remote__lookup"],
+                })}\n`,
+                { encoding: "utf8", flag: "a" },
+              );
+            }
+            return {
+              stdout: isNativeWorker
+                ? JSON.stringify({
+                    protocolVersion: 1,
+                    operation: "review",
+                    state: "final",
+                    summary: "Native MCP composition used.",
+                    findings: [],
+                  })
+                : "",
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            };
+          },
+        },
+      );
+
+      expect(result.observedTools).toContain("mcp__remote__lookup");
+      expect(result).not.toHaveProperty("toolReceipts");
+      expect(result).not.toHaveProperty("effectiveTools");
+      expect(result.extensionAudit).toMatchObject({
+        profile: "headless-native",
+        workerNetwork: true,
+        entries: [{ id: "remote", inventoryOwner: "dsh", requestsNetwork: true }],
+      });
+      expect(JSON.stringify(result.extensionAudit)).not.toContain(extensionCredential);
+      expect(result.isolationReport).toMatchObject({
+        networkIsolated: false,
+        workspaceAccess: "read-only",
+        extensionProfile: "headless-native",
+      });
+      expect(result.isolationReport.limitations.join(" ")).toMatch(
+        /entire native worker.*share that egress path/iu,
+      );
+      expect(captured?.args).toContain("bridge");
+      expect(captured?.args).toContain(`${fixture.workspace}:/workspace:ro`);
+      const launch = [captured?.command ?? "", ...(captured?.args ?? [])].join("\0");
+      expect(launch).not.toContain(realGitHubToken);
+      expect(launch).not.toContain("controller-real-key");
+      expect(await readFile(join(runtime.packageRoot, "cordis.patch.yml"), "utf8")).toContain(
+        extensionCredential,
+      );
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
+  });
+
+  it("mounts the whole native worker read-write only under trusted-write authority", async () => {
+    const fixture = await fixtures();
+    const runtime = await createDshRuntime(fixture.root);
+    const plan = resolveNativeExtensionPlan({
+      mcp: parseNativeMcpConfiguration(
+        JSON.stringify({
+          schemaVersion: 1,
+          servers: [
+            {
+              id: "writer",
+              transport: "stdio",
+              command: "writer-mcp",
+              workspaceWrite: true,
+            },
+          ],
+        }),
+      ),
+      plugins: parseNativePluginConfiguration('{"schemaVersion":1,"bundles":[],"plugins":[]}'),
+      allowPluginInstall: false,
+      policy: {
+        trust: "trusted-write",
+        allowed: true,
+        reason: "native write runner test",
+        capabilities: {
+          readRepository: true,
+          readCi: false,
+          publishComments: true,
+          executeRepositoryCode: true,
+          loadExtensions: true,
+          accessNetwork: true,
+          modifyWorkspace: true,
+          commit: false,
+          push: false,
+          createPullRequest: false,
+          manageIssueLabels: false,
+          manageIssueAssignees: false,
+          updateIssueState: false,
+          updatePullRequestMetadata: false,
+        },
+      },
+    });
+    const proxy = {
+      ...fakeProxy(),
+      workerWebSearchBaseUrl: "http://host.docker.internal:3456/anthropic/v1",
+    };
+    let captured: DshProcessSpec | undefined;
+
+    try {
+      const result = await runDsh(
+        request({
+          isolation: "docker",
+          trust: "trusted-write",
+          containerImage: PINNED_NODE_IMAGE,
+          workspacePath: fixture.workspace,
+          extensions: plan,
+          nativeTools: [],
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          environment: { PATH: process.env.PATH },
+          runtime,
+          composition: new NativeComposition(),
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess: async (spec) => {
+            const inspected = networkInspectResult(spec);
+            if (inspected !== undefined) return inspected;
+            const isNativeWorker = spec.args.includes(CONTAINER_NATIVE_LAUNCHER);
+            if (isNativeWorker) {
+              captured = spec;
+              await writeFile(
+                join(actionStateDirectory(spec), "native-observed-tools.jsonl"),
+                `${JSON.stringify({
+                  schemaVersion: 1,
+                  source: "ctx.tools.schemas(agent)",
+                  observedTools: ["read", "write", "mcp__writer__apply"],
+                })}\n`,
+                { encoding: "utf8", flag: "a" },
+              );
+            }
+            return {
+              stdout: isNativeWorker
+                ? JSON.stringify({
+                    protocolVersion: 1,
+                    operation: "review",
+                    state: "final",
+                    summary: "Native write composition used.",
+                    findings: [],
+                  })
+                : "",
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            };
+          },
+        },
+      );
+
+      expect(result.isolationReport).toMatchObject({
+        networkIsolated: true,
+        workspaceAccess: "read-write",
+        extensionProfile: "headless-native",
+      });
+      expect(result.extensionAudit).toMatchObject({
+        entries: [{ id: "writer", requestsWorkspaceWrite: true }],
+      });
+      expect(captured?.args).toContain(`${fixture.workspace}:/workspace:rw`);
+      const networkIndex = captured?.args.indexOf("--network") ?? -1;
+      expect(captured?.args[networkIndex + 1]).toMatch(/^dsh-action-internal-/u);
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
+  });
+
+  it("fails native host and controlled-shaped extension launches before proxy or execution", async () => {
     const fixture = await fixtures();
     const startProxy = vi.fn();
     const executeProcess = vi.fn();
@@ -730,8 +976,74 @@ describe("runDsh", () => {
           executeProcess,
         },
       ),
-    ).rejects.toThrow(/does not yet support Action-managed MCP, Bundle, or Plugin/u);
+    ).rejects.toThrow(/definition-only headless-native extension plan/u);
 
+    expect(startProxy).not.toHaveBeenCalled();
+    expect(executeProcess).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ambient Controller credential aliased into native extension config", async () => {
+    const fixture = await fixtures();
+    const ambientGitHubCredential = "ambient-gh-controller-secret";
+    const extensions = resolveNativeExtensionPlan({
+      mcp: parseNativeMcpConfiguration(
+        JSON.stringify({
+          schemaVersion: 1,
+          servers: [
+            {
+              id: "alias",
+              transport: "stdio",
+              command: "alias-mcp",
+              env: { EXT_VALUE: ambientGitHubCredential },
+            },
+          ],
+        }),
+      ),
+      plugins: parseNativePluginConfiguration('{"schemaVersion":1,"bundles":[],"plugins":[]}'),
+      allowPluginInstall: false,
+      policy: {
+        trust: "trusted-read",
+        allowed: true,
+        reason: "ambient alias test",
+        capabilities: {
+          readRepository: true,
+          readCi: false,
+          publishComments: true,
+          executeRepositoryCode: false,
+          loadExtensions: true,
+          accessNetwork: true,
+          modifyWorkspace: false,
+          commit: false,
+          push: false,
+          createPullRequest: false,
+          manageIssueLabels: false,
+          manageIssueAssignees: false,
+          updateIssueState: false,
+          updatePullRequestMetadata: false,
+        },
+      },
+    });
+    const startProxy = vi.fn();
+    const executeProcess = vi.fn();
+
+    await expect(
+      runDsh(
+        request({
+          isolation: "docker",
+          workspacePath: fixture.workspace,
+          containerImage: PINNED_NODE_IMAGE,
+          extensions,
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          composition: new NativeComposition(),
+          environment: { PATH: process.env.PATH, GH_TOKEN: ambientGitHubCredential },
+          startProxy,
+          executeProcess,
+        },
+      ),
+    ).rejects.toThrow(/must not contain a controller credential/u);
     expect(startProxy).not.toHaveBeenCalled();
     expect(executeProcess).not.toHaveBeenCalled();
   });

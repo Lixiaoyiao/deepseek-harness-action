@@ -4,11 +4,13 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
-The experimental NativeComposition work after v0.7.0 is an unreleased
-qualification change, not a v0.8.0 publication. For that work, follow the PR,
-candidate CI, frozen-SHA smoke, merge, main CI, and complete post-merge Core E2E
-steps, then stop. Do not create or move a tag, GitHub Release, release-canary
-identity, or npm release; v0.8.0 remains deferred until Codex 6 is complete.
+The experimental NativeComposition and Codex 6 native-ecosystem work after
+v0.7.0 is an unreleased qualification change, not a v0.8.0 publication. For
+that work, follow the focused PR, candidate CI, unchanged controlled Core E2E,
+frozen-candidate-SHA native ecosystem smoke, merge, main CI, and complete
+post-merge Core E2E steps, then stop. Do not create or move a tag, GitHub
+Release, release-canary identity, or npm release. v0.8.0 qualification and
+publication remain a separate follow-up.
 
 ## Release invariants
 
@@ -75,7 +77,7 @@ For a DSH version bump, additionally:
 1. Confirm the complete official npm package family is published and that ordinary `npm ci` succeeds with peer and lock validation intact.
 2. Update `DSH_VERSION` and every package in `DIRECT_DSH_PACKAGES` to the same exact version, then regenerate the lock normally.
 3. Audit the real upstream change range for app-boot, Profile/Bundle/Plugin composition, MCP, ToolRuntime, Bash, Web Search, Subagent, receipts, Docker/path/timeout handling, and the bundled Action entrypoint.
-4. Revalidate the controlled Profile, native tool inventory, permission intersections, credential routing, extension locks, runtime reuse, receipts, and cleanup boundaries.
+4. Revalidate the controlled Profile, native tool inventory and official ecosystem (MCP, Profile Bundle, Cordis Plugin, project Skills, Subagent, and Workflow), permission intersections, credential routing, extension locks, runtime reuse, receipts, and cleanup boundaries.
 5. Add compatibility and security regression coverage before running the real golden paths.
 
 If the official package family is incomplete or clean `npm ci` cannot consume it, do not use `--legacy-peer-deps`, mix versions, or weaken the lock audit. Leave the current exact DSH pin in place and defer the upgrade.
@@ -120,23 +122,24 @@ Harness files and fixtures are checked out at the trusted default-branch SHA. Ca
 
 The golden paths cover:
 
-| Area                        | Required evidence                                                                                                                                                |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Strict read-only            | Controlled `github-action` Profile and official Bundle identity with no write capability                                                                         |
-| Native read-only            | Frozen-candidate-SHA Docker run through the official rc.2 headless composition, DSH-owned observed inventory, and no Controller-effective native inventory claim |
-| MCP                         | Real Streamable HTTP allow and deny paths plus bounded receipts                                                                                                  |
-| Web Search                  | Real Controller-mediated Web Search without exposing the real key                                                                                                |
-| Validation Integrity        | Strict weakening denial with no GitHub mutation                                                                                                                  |
-| Ordinary validation failure | Failure with no comment, commit, ref, or PR mutation                                                                                                             |
-| Subagent                    | Real `native.subagent` through a successful no-change write path                                                                                                 |
-| Bash trusted write          | `standard` native Bash, validation, and exact branch/PR/commit/file assertions                                                                                   |
-| Cancellation                | Graceful `SIGTERM` moves the isolated sticky comment from In progress to cancelled, then removes only the fixture comment and closes its temporary Issue         |
-| Trigger and filters         | Deterministic label, assignee, custom phrase, actor deny, historical-comment exclusion, and triggering-comment retention                                         |
-| Branch UX                   | A real task PR targets the candidate branch and uses the configured sanitized prefix/template while retaining the Controller key                                 |
-| Typed GitHub tools          | All six exact operations: labels, assignees, Issue state, reconciled comment creation, PR metadata, and immutable-head check/status reads                        |
-| Structured task output      | Trusted bounded schema, final Controller validation, scalar output, and optional field inside the unchanged audit envelope                                       |
-| Image boundary              | Inline/reference Markdown, HTML image/source, and raw GitHub attachment URLs/tokens are absent from the deterministic LLM request                                |
-| Credential isolation        | All candidate and harness checkouts use `persist-credentials: false` and have no residual Git auth configuration                                                 |
+| Area                        | Required evidence                                                                                                                                                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Strict read-only            | Controlled `github-action` Profile and official Bundle identity with no write capability                                                                                                                                                                 |
+| Native read-only            | Frozen-candidate-SHA Docker run through the official rc.2 headless composition, DSH-owned observed inventory, and no Controller-effective native inventory claim                                                                                         |
+| Native ecosystem            | Frozen-candidate-SHA smoke for `.git`-less `.dsh/skills` / `.agents/skills`, real stdio/HTTP MCP calls, official Profile Bundle, direct Cordis Plugin, native Subagent/Workflow, dynamic `observedTools` only, and value-free extension-credential audit |
+| MCP                         | Real Streamable HTTP allow and deny paths plus bounded receipts                                                                                                                                                                                          |
+| Web Search                  | Real Controller-mediated Web Search without exposing the real key                                                                                                                                                                                        |
+| Validation Integrity        | Strict weakening denial with no GitHub mutation                                                                                                                                                                                                          |
+| Ordinary validation failure | Failure with no comment, commit, ref, or PR mutation                                                                                                                                                                                                     |
+| Subagent                    | Real `native.subagent` through a successful no-change write path                                                                                                                                                                                         |
+| Bash trusted write          | `standard` native Bash, validation, and exact branch/PR/commit/file assertions                                                                                                                                                                           |
+| Cancellation                | Graceful `SIGTERM` moves the isolated sticky comment from In progress to cancelled, then removes only the fixture comment and closes its temporary Issue                                                                                                 |
+| Trigger and filters         | Deterministic label, assignee, custom phrase, actor deny, historical-comment exclusion, and triggering-comment retention                                                                                                                                 |
+| Branch UX                   | A real task PR targets the candidate branch and uses the configured sanitized prefix/template while retaining the Controller key                                                                                                                         |
+| Typed GitHub tools          | All six exact operations: labels, assignees, Issue state, reconciled comment creation, PR metadata, and immutable-head check/status reads                                                                                                                |
+| Structured task output      | Trusted bounded schema, final Controller validation, scalar output, and optional field inside the unchanged audit envelope                                                                                                                               |
+| Image boundary              | Inline/reference Markdown, HTML image/source, and raw GitHub attachment URLs/tokens are absent from the deterministic LLM request                                                                                                                        |
+| Credential isolation        | All candidate and harness checkouts use `persist-credentials: false` and have no residual Git auth configuration                                                                                                                                         |
 
 The workflow also compares `main`, the candidate identity, PR/comments when
 present, legacy `dsh/task-*` refs, and Controller-created task PRs on

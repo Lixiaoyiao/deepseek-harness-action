@@ -1,4 +1,4 @@
-import type { EffectiveExtensionPlan } from "../extensions/plan.js";
+import type { ExtensionPlan } from "../extensions/plan.js";
 import type { NativeToolId, ToolPolicyOwner } from "../tools/schema.js";
 import type { DshRuntime } from "./runtime.js";
 import type { DshOperation } from "./schema.js";
@@ -27,12 +27,12 @@ export type DshPromptToolPolicy =
 
 export interface DshCompositionCompatibilityOptions {
   readonly isolation: "docker" | "none";
-  readonly extensions: EffectiveExtensionPlan;
+  readonly extensions: ExtensionPlan;
 }
 
 export interface DshCompositionIsolationMetadata {
   readonly repoToolsEnabled: boolean;
-  readonly extensionProfile: "github-action" | "none";
+  readonly extensionProfile: "github-action" | "headless-native" | "none";
   readonly limitations: readonly string[];
 }
 
@@ -40,7 +40,7 @@ export interface PrepareDshCompositionOptions {
   readonly isolation: "docker" | "none";
   readonly assetsDirectory: string;
   readonly runtime: DshRuntime;
-  readonly plan: EffectiveExtensionPlan;
+  readonly plan: ExtensionPlan;
   readonly nativeTools: readonly NativeToolId[];
   readonly trust: "untrusted" | "trusted-read" | "trusted-write";
   readonly workspaceWrite: boolean;
@@ -109,6 +109,8 @@ export interface DshComposition {
   /** Binds reuse to this exact composition contract. */
   readonly profileSchemaVersion: number;
   readonly actionManagedExtensionProfile: boolean;
+  /** Admission plan shape this composition accepts. */
+  readonly extensionPlanProfile: ExtensionPlan["profileName"];
 
   readonly assertCompatible?: (options: DshCompositionCompatibilityOptions) => void;
 
@@ -124,6 +126,7 @@ export interface DshComposition {
     readonly isolation: "docker" | "none";
     readonly nativeTools: readonly NativeToolId[];
     readonly extensionNetwork: boolean;
+    readonly extensionsConfigured: boolean;
   }): DshCompositionIsolationMetadata;
 
   prepare(options: PrepareDshCompositionOptions): Promise<PreparedDshComposition>;

@@ -20,6 +20,7 @@ import type { NativeToolId } from "../tools/schema.js";
 import { DshConfigurationError } from "./errors.js";
 import type {
   DshComposition,
+  DshCompositionCompatibilityOptions,
   DshCompositionSelection,
   DshCompositionIsolationMetadata,
   DshPromptToolPolicy,
@@ -75,13 +76,22 @@ function controlledAssets(assetsDirectory: string): {
   };
 }
 
-/** The sole current DSH composition: the existing github-action controlled behavior. */
+/** Existing github-action controlled behavior, kept byte-compatible as the default. */
 export class ControlledComposition implements DshComposition {
   public readonly id = "github-action-controlled";
   public readonly toolPolicyOwner = "controller";
   public readonly profileSchemaVersion = CONTROLLED_PROFILE_SCHEMA_VERSION;
   public readonly actionManagedExtensionProfile = true;
+  public readonly extensionPlanProfile = "github-action" as const;
   private validatedAssetsDirectory: string | undefined;
+
+  public readonly assertCompatible = (options: DshCompositionCompatibilityOptions): void => {
+    if (options.extensions.profileName !== this.extensionPlanProfile) {
+      throw new DshConfigurationError(
+        "ControlledComposition requires the github-action controlled extension plan",
+      );
+    }
+  };
 
   public runtimeToolNames(
     nativeTools: Parameters<DshComposition["runtimeToolNames"]>[0],
@@ -101,6 +111,7 @@ export class ControlledComposition implements DshComposition {
     readonly isolation: "docker" | "none";
     readonly nativeTools: readonly NativeToolId[];
     readonly extensionNetwork: boolean;
+    readonly extensionsConfigured: boolean;
   }): DshCompositionIsolationMetadata {
     if (options.isolation === "none") {
       return {
@@ -157,6 +168,12 @@ export class ControlledComposition implements DshComposition {
   }
 
   public async prepare(options: PrepareDshCompositionOptions): Promise<PreparedDshComposition> {
+    this.assertCompatible({ isolation: options.isolation, extensions: options.plan });
+    if (options.plan.profileName !== this.extensionPlanProfile) {
+      throw new DshConfigurationError(
+        "ControlledComposition requires the github-action controlled extension plan",
+      );
+    }
     if (this.validatedAssetsDirectory !== options.assetsDirectory) {
       await this.validateRuntimeAssets({ assetsDirectory: options.assetsDirectory });
     }
@@ -206,6 +223,11 @@ export class ControlledComposition implements DshComposition {
     },
     pluginModuleSpecifiers: Readonly<Record<string, string>> | undefined,
   ): Promise<PreparedDockerDshComposition> {
+    if (options.plan.profileName !== this.extensionPlanProfile) {
+      throw new DshConfigurationError(
+        "ControlledComposition requires the github-action controlled extension plan",
+      );
+    }
     const assets = controlledAssets(options.assetsDirectory);
     const profile = await prepareControlledProfile({
       dshHome: options.runtime.dshHome,

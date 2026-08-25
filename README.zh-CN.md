@@ -26,9 +26,11 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具         | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
 | 结构化结果       | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.7.0 建立了四项架构基础，但没有扩大其已发布能力面：内部 `DshComposition` seam、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam。当前尚未发布的开发版本在同一个锁定的 DSH `0.1.1-rc.2` runtime 上新增实验性的 `dsh-mode: native` 路径。`controlled` 仍是默认值，因此未配置 `dsh-mode` 的现有 workflow 会继续使用原有 composition、权限、工具和输出行为。
+v0.7.0 建立了四项架构基础，但没有扩大其已发布能力面：内部 `DshComposition` seam、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam。当前尚未发布的开发版本在同一个锁定的 DSH `0.1.1-rc.2` runtime 上新增实验性的 `dsh-mode: native` 路径，并补全官方生态 composition。`controlled` 仍是默认值，因此未配置 `dsh-mode` 的现有 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
 
-Native 模式并不是 unsafe 模式。它只是把 DSH 内部 headless composition 与 capability graph 的 ownership 交还给 DSH；Action 仍拥有 Docker 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、GitHub Gateway、validation 与 deferred write、deadline、cancellation 和 secret redaction。当前实验阶段 native 仅支持 Docker；Action-managed MCP、Bundle 与 Plugin 配置在 native 下会 fail closed，完整兼容性留给 Codex 6。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。本次工作不发布 v0.8.0；该版本会在 Codex 6 完成后统一发布。
+Native 模式并不是 unsafe 模式。它把 DSH 内部 headless composition、capability graph 和 model-visible inventory 的 ownership 交还给 DSH。Native MCP 通过官方 `@deepseek-ai/dsh-mcp-client` 加载；Bundle 作为官方 Profile layer 组合；direct Plugin 通过 Cordis 加载；仓库 Skills、Subagent 与 Workflow 保留 DSH-native 行为。它使用 definition-only 扩展 schema 来声明 owner 和进程需求，而不是声明 Action tool、grant 或 per-tool budget。动态生态工具只通过运行时 `observedTools` 出现，native `toolPolicy` 不会虚构 Controller `effectiveTools`。
+
+Action 仍拥有 trusted-workflow admission、package exact pin、lifecycle script 禁用、runtime inventory audit、Docker 与 `.git`-less workspace 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、typed GitHub Gateway、validation 与 deferred write、deadline、cancellation 和 secret redaction。Native 仍仅支持 Docker；bridge network 和 read/write mount 都是 whole-worker 能力，不是 per-extension 或 per-tool sandbox。用户自行配置并携带自有凭据的 GitHub MCP 属于受信任外部扩展，其直接副作用不享受 Gateway 的 binding、revalidation、validation 或 deferred-mutation 保证。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。本次工作不发布 v0.8.0，也不改变锁定的 DSH 版本。
 
 ## 真实运行
 
@@ -120,14 +122,15 @@ jobs:
 
 ## 安全边界
 
-- Agent 不会拿到真实的 `GITHUB_TOKEN` 或 DeepSeek key。只有 Controller 能调用 GitHub 写入 API。
+- Agent 不会拿到真实的 `GITHUB_TOKEN` 或 DeepSeek key。只有 Controller 能调用 Action-owned `github.*` 写入 API；显式配置的外部 GitHub MCP 使用其自有凭据和 authority，边界见下文。
 - 仓库内容、diff、Issue、PR、评论、日志、模型输出和工具输出始终是不可信数据。
 - fork 审查使用没有 `.git`、没有凭据的 worker；workflow 只能检出受信任的 base SHA，并设置 `persist-credentials: false`。
 - 写入需要受信任的同仓库上下文、通过授权检查的操作者、Docker、`allow-write: "true"`、非空固定验证命令，以及全部验证成功；受保护路径和 Validation Integrity 检查仍然有效。
 - Typed `github.*` mutation 使用精确 ID、绑定当前 entity，并延迟到 Controller 验证成功后执行，同时保留有界 receipts 与 reconciliation；不存在 arbitrary REST、GraphQL、raw URL 或凭据透传。
 - Validation Integrity 针对已支持的 entrypoint、package script、test/config 变弱、lock/toolchain 控制和已知 wrapper/interpreter 提供高置信度变弱检测与 baseline replay；它不是完整的跨语言 dependency provenance 或形式化完整性证明。
 - Validation 可能使用 Docker bridge network。在 self-hosted runner 或企业网络中，仓库验证代码可能访问 runner 可达的网络服务；应使用专用 runner 以及 runner 级网络分段和出口控制。
-- 获准的 Bundle、Plugin 或 stdio MCP server 属于受信任的 worker code。ToolRuntime 只能限制模型路由的调用，不能沙箱化扩展启动、后台任务或直接进程 I/O。
+- 获准的 Bundle、Plugin 或 stdio MCP server 属于受信任的 worker code。Controlled ToolRuntime 只限制模型路由的调用；native 的路由与 inventory 由 DSH 自己管理。两种模式都不能沙箱化扩展启动、后台任务或直接进程 I/O，任何 bridge/RW 能力都作用于整个 worker。
+- `github.*` 使用 Controller GitHub Gateway；另行配置的 GitHub MCP 使用它自己的外部凭据，不享受 Gateway 的 binding、revalidation、validation 和 deferred-write 保证。
 
 启用写模式、host 执行、网络访问或第三方扩展前，请完整阅读[安全策略](SECURITY.md)。
 

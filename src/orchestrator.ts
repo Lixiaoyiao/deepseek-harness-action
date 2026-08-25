@@ -33,7 +33,17 @@ import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { buildAuthorityAudit, type AuthorityAudit } from "./security/authority.js";
 import { redactKnownSecrets } from "./security/env.js";
-import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
+import {
+  configuredExtensionSecrets,
+  resolveExtensionPlan,
+  resolveNativeExtensionPlan,
+} from "./extensions/plan.js";
+import type {
+  McpConfiguration,
+  NativeMcpConfiguration,
+  NativePluginConfiguration,
+  PluginConfiguration,
+} from "./extensions/schema.js";
 import { selectDshComposition } from "./dsh/select-composition.js";
 import type { DshComposition, DshMode } from "./dsh/composition.js";
 import {
@@ -572,19 +582,33 @@ async function runActionInternal(
     const extensionAllowedTools = resolvedTools.permission.requestedTools.filter(
       (id) => !deniedTools.has(id),
     );
-    const extensions = resolveExtensionPlan({
-      allowedTools: extensionAllowedTools,
-      mcp: inputs.mcpConfig,
-      plugins: inputs.pluginConfig,
-      allowPluginInstall: inputs.allowPluginInstall,
-      policy,
-    });
+    const extensions =
+      inputs.dshMode === "native"
+        ? resolveNativeExtensionPlan({
+            mcp: inputs.mcpConfig as NativeMcpConfiguration,
+            plugins: inputs.pluginConfig as NativePluginConfiguration,
+            allowPluginInstall: inputs.allowPluginInstall,
+            policy,
+          })
+        : resolveExtensionPlan({
+            allowedTools: extensionAllowedTools,
+            mcp: inputs.mcpConfig as McpConfiguration,
+            plugins: inputs.pluginConfig as PluginConfiguration,
+            allowPluginInstall: inputs.allowPluginInstall,
+            policy,
+          });
+    const extensionManifests =
+      extensions.profileName === "github-action" ? extensions.manifests : [];
     const tools = {
       ...resolvedTools,
       extensions,
-      manifests: [...resolvedTools.manifests, ...extensions.manifests],
+      manifests: [...resolvedTools.manifests, ...extensionManifests],
     };
-    if (extensions.network && tools.native.includes("native.bash")) {
+    if (
+      extensions.profileName === "github-action" &&
+      extensions.network &&
+      tools.native.includes("native.bash")
+    ) {
       throw new PolicyDeniedError(
         "native.bash cannot share a worker with a bridge-networked extension; use mediated web-search or remove Bash",
       );
@@ -634,7 +658,8 @@ async function runActionInternal(
       resolution: resolvedTools.permission,
       manifests: agentTools.manifests,
       additionalDenials: resolvedTools.permissionDenials,
-      ...(state.composition?.actionManagedExtensionProfile === true
+      ...(state.composition?.actionManagedExtensionProfile === true ||
+      extensions.audit.entries.length > 0
         ? { extensions: extensions.audit }
         : {}),
       ...(state.composition === undefined
@@ -834,7 +859,8 @@ async function runActionInternal(
               ? {}
               : { dshToolReceipts: failure.toolReceipts }),
             ...(failure.extensionAudit === undefined
-              ? selectedComposition.actionManagedExtensionProfile
+              ? selectedComposition.actionManagedExtensionProfile ||
+                extensions.audit.entries.length > 0
                 ? { extensionAudit: extensions.audit }
                 : {}
               : { extensionAudit: failure.extensionAudit }),

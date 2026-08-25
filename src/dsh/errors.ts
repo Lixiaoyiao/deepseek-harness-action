@@ -16,7 +16,7 @@ export type DshErrorCode =
 export interface DshFailureTelemetry {
   readonly durationMs: number;
   readonly isolationReport: DshIsolationReport;
-  readonly extensionAudit?: ExtensionAudit;
+  readonly extensionAudit?: AnyExtensionAudit;
   readonly toolReceipts?: readonly DshToolReceipt[];
   readonly observedTools?: readonly string[];
 }
@@ -161,5 +161,5 @@ export class DshProxyError extends DshError {
     super("DSH_PROXY", message, options);
   }
 }
-import type { ExtensionAudit } from "../extensions/plan.js";
+import type { AnyExtensionAudit } from "../extensions/plan.js";
 import type { DshIsolationReport, DshToolReceipt } from "./runner.js";

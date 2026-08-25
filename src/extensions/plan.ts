@@ -17,6 +17,11 @@ import type {
   McpConfiguration,
   McpServerDefinition,
   McpToolDefinition,
+  NativeBundleDefinition,
+  NativeMcpConfiguration,
+  NativeMcpServerDefinition,
+  NativePluginConfiguration,
+  NativePluginDefinition,
   PluginConfiguration,
   PluginDefinition,
 } from "./schema.js";
@@ -107,6 +112,58 @@ export interface EffectiveExtensionPlan {
   readonly packageDependencies: Readonly<Record<string, string>>;
   readonly audit: ExtensionAudit;
 }
+
+export interface NativeEffectiveMcpServer {
+  readonly definition: NativeMcpServerDefinition;
+}
+
+export interface NativeEffectiveBundle {
+  readonly definition: NativeBundleDefinition;
+}
+
+export interface NativeEffectivePlugin {
+  readonly definition: NativePluginDefinition;
+}
+
+export interface NativeExtensionAuditEntry {
+  readonly id: string;
+  readonly kind: "mcp" | "bundle" | "plugin";
+  readonly source: string;
+  readonly transport?: "stdio" | "streamable-http";
+  /** Requested owner capability; the effective bridge path belongs to the whole worker. */
+  readonly requestsNetwork: boolean;
+  /** Requested owner capability; the effective writable mount belongs to the whole worker. */
+  readonly requestsWorkspaceWrite: boolean;
+  readonly inventoryOwner: "dsh";
+}
+
+export interface NativeExtensionAudit {
+  readonly schemaVersion: 1;
+  readonly profile: "headless-native";
+  readonly digest: string;
+  /** True means every capability in the native worker shares bridge egress. */
+  readonly workerNetwork: boolean;
+  readonly entries: readonly NativeExtensionAuditEntry[];
+  readonly runtimeLock?: ExtensionRuntimeLockAudit;
+}
+
+/** Action admission and installation metadata; never a Controller tool grant. */
+export interface NativeExtensionPlan {
+  readonly schemaVersion: 1;
+  readonly profileName: "headless-native";
+  readonly digest: string;
+  readonly configurationDigest: string;
+  readonly network: boolean;
+  readonly workspaceWrite: boolean;
+  readonly mcpServers: readonly NativeEffectiveMcpServer[];
+  readonly bundles: readonly NativeEffectiveBundle[];
+  readonly plugins: readonly NativeEffectivePlugin[];
+  readonly packageDependencies: Readonly<Record<string, string>>;
+  readonly audit: NativeExtensionAudit;
+}
+
+export type ExtensionPlan = EffectiveExtensionPlan | NativeExtensionPlan;
+export type AnyExtensionAudit = ExtensionAudit | NativeExtensionAudit;
 
 export class ExtensionPolicyError extends PolicyDeniedError {
   public constructor(message: string, options?: ErrorOptions) {
@@ -477,6 +534,175 @@ export function resolveExtensionPlan(options: ResolveExtensionPlanOptions): Effe
   };
 }
 
+export interface ResolveNativeExtensionPlanOptions {
+  readonly mcp: NativeMcpConfiguration;
+  readonly plugins: NativePluginConfiguration;
+  readonly allowPluginInstall: boolean;
+  readonly policy: SecurityPolicy;
+}
+
+function assertNativeExtensionPolicy(options: ResolveNativeExtensionPlanOptions): void {
+  const configured =
+    options.mcp.servers.length + options.plugins.bundles.length + options.plugins.plugins.length;
+  if (configured === 0) return;
+  if (
+    !options.policy.allowed ||
+    options.policy.trust === "untrusted" ||
+    !options.policy.capabilities.readRepository ||
+    !options.policy.capabilities.loadExtensions
+  ) {
+    throw new ExtensionPolicyError(
+      "Native extensions require a trusted same-repository workflow and extension authority",
+    );
+  }
+  const owners = [...options.mcp.servers, ...options.plugins.bundles, ...options.plugins.plugins];
+  if (owners.some(({ network }) => network) && !options.policy.capabilities.accessNetwork) {
+    throw new ExtensionPolicyError(
+      "Native extension bridge networking is denied by the Action trust policy",
+    );
+  }
+  if (
+    owners.some(({ workspaceWrite }) => workspaceWrite) &&
+    (options.policy.trust !== "trusted-write" || !options.policy.capabilities.modifyWorkspace)
+  ) {
+    throw new ExtensionPolicyError(
+      "Native extension workspace-write requires trusted-write Action authority",
+    );
+  }
+  if (
+    (options.plugins.bundles.length > 0 || options.plugins.plugins.length > 0) &&
+    !options.allowPluginInstall
+  ) {
+    throw new ExtensionPolicyError(
+      "Third-party Bundle/Plugin installation is disabled; set allow-plugin-install=true in the trusted workflow",
+    );
+  }
+}
+
+function nativeMcpAuditEntry(definition: NativeMcpServerDefinition): NativeExtensionAuditEntry {
+  const source =
+    definition.transport === "stdio"
+      ? definition.command
+      : (() => {
+          const endpoint = new URL(definition.url);
+          return endpoint.origin;
+        })();
+  return {
+    id: definition.id,
+    kind: "mcp",
+    source,
+    transport: definition.transport,
+    requestsNetwork: definition.network,
+    requestsWorkspaceWrite: definition.workspaceWrite,
+    inventoryOwner: "dsh",
+  };
+}
+
+function nativePackageAuditEntry(
+  kind: "bundle" | "plugin",
+  definition: NativeBundleDefinition | NativePluginDefinition,
+): NativeExtensionAuditEntry {
+  return {
+    id: definition.id,
+    kind,
+    source: definition.source,
+    requestsNetwork: definition.network,
+    requestsWorkspaceWrite: definition.workspaceWrite,
+    inventoryOwner: "dsh",
+  };
+}
+
+/** Resolve Action-owned outer admission without predicting DSH's native inventory. */
+export function resolveNativeExtensionPlan(
+  options: ResolveNativeExtensionPlanOptions,
+): NativeExtensionPlan {
+  assertNativeExtensionPolicy(options);
+  const mcpServers = options.mcp.servers.map((definition) => ({ definition }));
+  const bundles = options.plugins.bundles.map((definition) => ({ definition }));
+  const plugins = options.plugins.plugins.map((definition) => ({ definition }));
+  const packageDependencies: Record<string, string> = {};
+  for (const extension of [...bundles, ...plugins]) {
+    packageDependencies[extension.definition.package] = extension.definition.source;
+  }
+  const entries = [
+    ...mcpServers.map(({ definition }) => nativeMcpAuditEntry(definition)),
+    ...bundles.map(({ definition }) => nativePackageAuditEntry("bundle", definition)),
+    ...plugins.map(({ definition }) => nativePackageAuditEntry("plugin", definition)),
+  ];
+  const network = entries.some(({ requestsNetwork }) => requestsNetwork);
+  const workspaceWrite = entries.some(({ requestsWorkspaceWrite }) => requestsWorkspaceWrite);
+  const configurationDigest = createHash("sha256")
+    .update(
+      canonicalJson({
+        schemaVersion: 1,
+        profile: "headless-native",
+        mcpServers: options.mcp.servers,
+        bundles: options.plugins.bundles,
+        plugins: options.plugins.plugins,
+        packageDependencies,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+  const auditSurface = {
+    schemaVersion: 1 as const,
+    profile: "headless-native" as const,
+    workerNetwork: network,
+    entries,
+    packageDependencies,
+  };
+  const digest = createHash("sha256").update(canonicalJson(auditSurface), "utf8").digest("hex");
+  return {
+    schemaVersion: 1,
+    profileName: "headless-native",
+    digest,
+    configurationDigest,
+    network,
+    workspaceWrite,
+    mcpServers,
+    bundles,
+    plugins,
+    packageDependencies,
+    audit: {
+      schemaVersion: 1,
+      profile: "headless-native",
+      digest,
+      workerNetwork: network,
+      entries,
+    },
+  };
+}
+
+/** Empty native admission for direct runner callers that omit extension inputs. */
+export function emptyNativeExtensionPlan(): NativeExtensionPlan {
+  return resolveNativeExtensionPlan({
+    mcp: { schemaVersion: 1, servers: [] },
+    plugins: { schemaVersion: 1, bundles: [], plugins: [] },
+    allowPluginInstall: false,
+    policy: {
+      trust: "untrusted",
+      allowed: true,
+      reason: "empty native extension admission",
+      capabilities: {
+        readRepository: false,
+        readCi: false,
+        publishComments: false,
+        executeRepositoryCode: false,
+        loadExtensions: false,
+        accessNetwork: false,
+        modifyWorkspace: false,
+        commit: false,
+        push: false,
+        createPullRequest: false,
+        manageIssueLabels: false,
+        manageIssueAssignees: false,
+        updateIssueState: false,
+        updatePullRequestMetadata: false,
+      },
+    },
+  });
+}
+
 function equalSecret(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left);
   const rightBytes = Buffer.from(right);
@@ -550,6 +776,19 @@ function httpUrlSecrets(value: string): readonly string[] {
 
 const AUTH_SCHEMES = new Set(["basic", "bearer", "digest", "token"]);
 
+function configuredExplicitSecrets(values: readonly string[]): readonly string[] {
+  return [
+    ...new Set(
+      values.flatMap((value) => [
+        ...decodedVariants(value),
+        ...value
+          .split(/[\s,;=]+/u)
+          .filter((part) => part.length >= 4 && !AUTH_SCHEMES.has(part.toLowerCase())),
+      ]),
+    ),
+  ].filter((value) => value.length >= 4);
+}
+
 /** Values that must never cross a Controller log/output boundary. */
 export function configuredHttpSecrets(
   url: string,
@@ -597,29 +836,64 @@ export function configuredPluginSecrets(config: unknown): readonly string[] {
   return [...new Set(sensitiveValuesInJson(config).filter((value) => value.length >= 4))];
 }
 
+/** Explicit native credential channels supplement the compatible heuristic detector. */
+export function configuredMcpDefinitionSecrets(
+  server: McpServerDefinition | NativeMcpServerDefinition,
+): readonly string[] {
+  if (server.transport === "stdio") {
+    return [
+      ...configuredStdioSecrets(server.args, server.env),
+      ...("credentialEnv" in server
+        ? configuredExplicitSecrets(Object.values(server.credentialEnv))
+        : []),
+    ];
+  }
+  return [
+    ...configuredHttpSecrets(server.url, server.headers),
+    ...("credentialHeaders" in server
+      ? configuredExplicitSecrets(Object.values(server.credentialHeaders))
+      : []),
+  ];
+}
+
+export function configuredPluginDefinitionSecrets(
+  plugin: PluginDefinition | NativePluginDefinition,
+): readonly string[] {
+  return [
+    ...configuredPluginSecrets(plugin.config),
+    ...("credentialConfig" in plugin
+      ? configuredExplicitSecrets(Object.values(plugin.credentialConfig))
+      : []),
+  ];
+}
+
 export function configuredExtensionSecrets(
-  mcp: McpConfiguration,
-  plugins: PluginConfiguration,
+  mcp: McpConfiguration | NativeMcpConfiguration,
+  plugins: PluginConfiguration | NativePluginConfiguration,
 ): readonly string[] {
   const values = [
-    ...mcp.servers.flatMap((server) =>
-      server.transport === "stdio"
-        ? configuredStdioSecrets(server.args, server.env)
-        : configuredHttpSecrets(server.url, server.headers),
-    ),
-    ...plugins.plugins.flatMap((plugin) => configuredPluginSecrets(plugin.config)),
+    ...mcp.servers.flatMap((server) => configuredMcpDefinitionSecrets(server)),
+    ...plugins.plugins.flatMap((plugin) => configuredPluginDefinitionSecrets(plugin)),
   ];
   return [...new Set(values.filter((value) => value.length >= 4))];
 }
 
 export function assertControllerCredentialsAbsentFromExtensions(
-  mcp: McpConfiguration,
-  plugins: PluginConfiguration,
+  mcp: McpConfiguration | NativeMcpConfiguration,
+  plugins: PluginConfiguration | NativePluginConfiguration,
   controllerSecrets: readonly string[],
 ): void {
   for (const server of mcp.servers) {
     const names =
-      server.transport === "stdio" ? Object.keys(server.env) : Object.keys(server.headers);
+      server.transport === "stdio"
+        ? [
+            ...Object.keys(server.env),
+            ...("credentialEnv" in server ? Object.keys(server.credentialEnv) : []),
+          ]
+        : [
+            ...Object.keys(server.headers),
+            ...("credentialHeaders" in server ? Object.keys(server.credentialHeaders) : []),
+          ];
     const forbidden = names.find(containsCredentialName);
     if (forbidden !== undefined) {
       throw new Error(
@@ -628,7 +902,10 @@ export function assertControllerCredentialsAbsentFromExtensions(
     }
   }
   const forbiddenPluginKey = plugins.plugins
-    .flatMap((plugin) => keysInJson(plugin.config))
+    .flatMap((plugin) => [
+      ...keysInJson(plugin.config),
+      ...("credentialConfig" in plugin ? Object.keys(plugin.credentialConfig) : []),
+    ])
     .find(containsCredentialName);
   if (forbiddenPluginKey !== undefined) {
     throw new Error(
@@ -637,6 +914,36 @@ export function assertControllerCredentialsAbsentFromExtensions(
   }
   const values = [...stringsInJson({ mcp, plugins }), ...keysInJson({ mcp, plugins })].flatMap(
     (value) => decodedVariants(value),
+  );
+  if (
+    values.some((value) =>
+      controllerSecrets.some(
+        (secret) => secret.length >= 4 && (equalSecret(value, secret) || value.includes(secret)),
+      ),
+    )
+  ) {
+    throw new Error("Extension configuration must not contain a controller credential");
+  }
+}
+
+/** Recheck admitted definitions against ambient Controller credentials before Profile rendering. */
+export function assertControllerCredentialsAbsentFromExtensionPlan(
+  plan: ExtensionPlan,
+  controllerSecrets: readonly string[],
+): void {
+  const definitions = {
+    mcp: plan.mcpServers.map(({ definition }) => definition),
+    bundles: plan.bundles.map(({ definition }) => definition),
+    plugins: plan.plugins.map(({ definition }) => definition),
+  };
+  const forbiddenName = keysInJson(definitions).find(containsCredentialName);
+  if (forbiddenName !== undefined) {
+    throw new Error(
+      `Extension configuration must not use controller credential name ${forbiddenName}`,
+    );
+  }
+  const values = [...stringsInJson(definitions), ...keysInJson(definitions)].flatMap((value) =>
+    decodedVariants(value),
   );
   if (
     values.some((value) =>

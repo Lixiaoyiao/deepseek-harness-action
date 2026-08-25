@@ -157,9 +157,12 @@ Native is not an unsafe mode. It requires Docker and retains the Action-owned
 workspace mount, Docker network, real-credential exclusion, run-scoped DeepSeek
 proxy, actor/repository/event trust, GitHub Gateway, validation/revalidation,
 deferred mutation, deadlines, cancellation, cleanup, bounded output, and
-redaction boundaries. Action-managed MCP, Bundle, and Plugin configuration
-fails closed in native mode until the Codex 6 ecosystem work. Controller-owned
-`command.*` and `github.*` tools remain a separate, mode-independent plane.
+redaction boundaries. Native ecosystem definitions are admitted by the Action
+but composed through the locked official DSH Profile, Bundle, Cordis, MCP,
+Skill, Subagent, and Workflow mechanisms. They are not converted into
+controlled manifests or protected by the controlled ToolRuntime allowlist.
+Controller-owned `command.*` and `github.*` tools remain a separate,
+mode-independent plane.
 
 The audit also keeps these meanings separate. Controlled mode reports
 `policyOwner: controller` and exact requested/effective/denied canonical tools.
@@ -196,12 +199,15 @@ The additive `result-json.authority` audit records only authority sources that
 the Action explicitly knows, configures, or mediates. Its fixed Controller
 entries state that the real GitHub credential is withheld from the worker and
 that the real DeepSeek credential is withheld behind the run-scoped proxy. An
-`extension-credential` entry instead means that one effective MCP server or
-direct plugin is configured with credential-like workflow data for its worker
-extension configuration; it is not Controller authority. This is a configured
-plan fact, not a runtime receipt that extension startup completed or a
-credential was used. The audit contains no credential values, hashes, header
-values, argv/env values, URL path/query material, or credential counts.
+`extension-credential` entry instead means that one controlled-effective or
+native-admitted MCP server or direct plugin is configured with credential-like
+workflow data for its worker extension configuration. Native also has explicit
+`credentialEnv`, `credentialHeaders`, and `credentialConfig` channels for
+arbitrary key names; it is not Controller
+authority. This is a configured plan fact, not a runtime receipt that extension
+startup completed or a credential was used. The audit contains no credential
+values, hashes, header values, argv/env values, URL path/query material, or
+credential counts.
 
 `knownSources` is not a complete authority inventory and does not prove that
 the worker has no other authority. Approved extension code is trusted worker
@@ -209,6 +215,14 @@ code and may still act through its granted network path, runner ambient state,
 startup/background behavior, or other process capabilities outside the
 Action-known sources in this audit. The authority audit is observability data,
 not an authorization decision or tamper-proof security record.
+
+An extension credential may intentionally be a credential for GitHub or
+another external service. In particular, a user-configured GitHub MCP is a
+trusted external extension authority: its calls do not pass through the typed
+Controller GitHub Gateway and therefore do not receive repository/entity/head
+binding, revalidation, Controller validation, deferred mutation, or Gateway
+receipts. The Action does not supply or implement a GitHub MCP backend; the
+workflow owner supplies and accepts the authority of that external extension.
 
 #### Maintainer-defined controller tools
 
@@ -384,7 +398,7 @@ reserved names and GitHub Actions OIDC variable names.
 Controller-credential rejection recursively scans every string value and object
 key in the parsed MCP and plugin configuration. It also checks percent-decoded
 variants, including encoded URL path or query material, so encoding a Controller
-credential does not bypass the check. Extension-secret masking is deliberately
+credential does not bypass the check. Controlled extension-secret masking is deliberately
 narrower: in addition to withheld HTTP URL path/query material, it includes only
 credential-like stdio argv fields, env/header entries, and plugin configuration
 values nested under credential-like keys. Ordinary configuration values such as
@@ -421,8 +435,32 @@ Bundle patch stays within its installed package before startup.
 `dsh-mode: native` uses `NativeComposition` (`dsh-native-headless`) and the
 official rc.2 headless composition as one DSH-owned graph. It is not the
 controlled Profile with fewer disabled rows. The native launch plan does not
-install fake/no-op Action ToolRuntime policy, workspace-policy, extension
-Profile, receipt-rule, or positive-allowlist artifacts.
+install fake/no-op Action ToolRuntime policy, workspace-policy, receipt-rule,
+or positive-allowlist artifacts. Its run-scoped native Profile starts with the
+official base and headless Bundles, adds configured Bundles as official Profile
+layers, inserts official `@deepseek-ai/dsh-mcp-client` rows, and loads direct
+Plugins through Cordis. The Action does not wrap any of those capabilities as
+an Action provider.
+
+Native extension inputs are definition-only. An MCP owner declares its ID,
+transport, connection settings, owner-level `network` and `workspaceWrite`,
+and the official client's server-level `toolCallTimeoutMs` and reconnect
+settings. Bundle and direct Plugin owners declare an exact package source plus
+owner-level `network` and `workspaceWrite`; stdio and HTTP MCP owners may use
+`credentialEnv` and `credentialHeaders`, while a direct Plugin may use
+`credentialConfig`. These explicit values are merged into the corresponding
+official env/headers/config and registered for masking regardless of key name.
+Only a direct Plugin has an ordinary `config` object. Native definitions cannot declare tool names, Action grants,
+permissions arrays, call-count/output budgets, or controlled receipts. DSH
+discovers and registers the resulting tools and decides the final model-visible
+inventory.
+
+The official native Skill system discovers repository `.dsh/skills` and
+`.agents/skills` from the disposable `.git`-less Action workspace. Subagent and
+Workflow capabilities remain the implementations contributed by the locked
+base/headless graph. These repository and built-in capabilities are not
+repackaged as Action extensions, and the Action does not install a controlled
+allowlist around them.
 
 The Action observes the root Agent's actual model-facing tool names from DSH's
 public runtime schema surface. `observedTools` is inventory telemetry: it does
@@ -440,12 +478,34 @@ immutable repository identity, typed GitHub operations, validation and
 revalidation, mutation queuing and flush, process deadlines, cancellation,
 cleanup, output bounds, and redaction.
 
-Native also rejects non-empty Action-managed MCP, Bundle, and Plugin
-configuration during this phase. That explicit gap is safer than pretending
-the controlled extension compiler governs DSH's full native ecosystem. Complete
-Skills/Plugin/Bundle/MCP compatibility remains Codex 6 work. Fixed-argv
-`command.*` and typed `github.*` tools remain Controller-owned and follow the
-same gates in both modes.
+Native admission still fails closed unless configuration comes from an eligible
+trusted workflow and the outer extension, network, and write capabilities are
+available. An owner's `network: true` enables Docker bridge egress for the
+entire native worker, including every other DSH capability in that process; it
+is not a destination or per-extension allowlist. A read/write repository mount
+is likewise a whole-worker boundary selected by Action trust/write policy, not
+a per-tool sandbox. An owner that requests `workspaceWrite` cannot expand a
+trusted-read run into trusted-write authority.
+
+Configured Bundle and Plugin packages require an exact npm semver or immutable
+GitHub commit and the independent `allow-plugin-install=true` gate. Acquisition
+continues to disable lifecycle scripts. Before startup, the Controller verifies
+the installed identity and pin, lock provenance, and preservation of the full
+pre-existing top-level runtime package inventory. This does not make package
+startup safe: Bundle patches, direct Plugins, and stdio MCP programs are
+trusted executable worker code with process-level effects.
+
+An extension may receive its own explicit credential after masking and
+value-free known-authority auditing. Credential values and hashes are never
+published. Immediately before Profile rendering, every admitted definition is
+rescanned against the ambient withheld GitHub, OIDC, and DeepSeek values, so a
+Controller credential cannot be exposed merely by assigning it an alias key.
+The real DeepSeek key, Action GitHub token, their reserved names, and GitHub
+Actions OIDC variables remain forbidden in extension configuration and absent
+from the worker. A user-supplied GitHub MCP and credential therefore
+remain external extension authority and do not inherit Controller GitHub
+Gateway guarantees. Fixed-argv `command.*` and typed `github.*` tools remain
+Controller-owned and follow the same gates in both modes.
 
 #### Validation-definition integrity
 

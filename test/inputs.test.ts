@@ -99,6 +99,63 @@ describe("loadInputs", () => {
     );
   });
 
+  it("accepts definition-only native MCP, Bundle, and direct Plugin admission", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "dsh-mode": "native",
+        "permission-profile": "standard",
+        "allow-plugin-install": "true",
+        "mcp-config": JSON.stringify({
+          schemaVersion: 1,
+          servers: [
+            {
+              id: "docs",
+              transport: "streamable-http",
+              url: "https://mcp.example.test/rpc",
+              credentialHeaders: { "X-Service": "extension-owned-token" },
+              toolCallTimeoutMs: 12_000,
+            },
+          ],
+        }),
+        "plugin-config": JSON.stringify({
+          schemaVersion: 1,
+          bundles: [{ id: "audit", package: "dsh-audit-bundle", source: "1.2.3" }],
+          plugins: [
+            {
+              id: "lint",
+              package: "dsh-lint-plugin",
+              source: "2.3.4",
+              credentialConfig: { connection: "plugin-owned-token" },
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(result.mcpConfig.servers[0]).toMatchObject({
+      id: "docs",
+      network: true,
+      workspaceWrite: false,
+      toolCallTimeoutMs: 12_000,
+      credentialHeaders: { "X-Service": "extension-owned-token" },
+    });
+    expect(result.pluginConfig).toMatchObject({
+      bundles: [{ id: "audit", source: "1.2.3", workspaceWrite: false }],
+      plugins: [
+        {
+          id: "lint",
+          source: "2.3.4",
+          workspaceWrite: false,
+          credentialConfig: { connection: "plugin-owned-token" },
+        },
+      ],
+    });
+    expect(JSON.stringify(result.mcpConfig)).not.toContain('"tools"');
+    expect(JSON.stringify(result.pluginConfig)).not.toContain('"tools"');
+  });
+
   it.each([
     ["allow-write", "yes"],
     ["progress-comment", "yes"],
@@ -250,17 +307,34 @@ describe("loadInputs", () => {
         ],
       }),
     },
-  ])("fails closed for native Action-managed $label configuration", ({ name, value }) => {
+  ])(
+    "rejects controlled-shaped per-tool metadata in native $label configuration",
+    ({ name, value }) => {
+      expect(() =>
+        loadInputs(
+          reader({
+            "deepseek-api-key": "deepseek-key",
+            "github-token": "github-token",
+            "dsh-mode": "native",
+            [name]: value,
+          }),
+        ),
+      ).toThrow(/Invalid native .*Unrecognized key: "tools"/u);
+    },
+  );
+
+  it("rejects native extension IDs in allowed-tools because they are not grants", () => {
     expect(() =>
       loadInputs(
         reader({
           "deepseek-api-key": "deepseek-key",
           "github-token": "github-token",
           "dsh-mode": "native",
-          [name]: value,
+          "permission-profile": "custom",
+          "allowed-tools": '["mcp.docs.lookup"]',
         }),
       ),
-    ).toThrow(/does not yet support Action-managed MCP, Bundle, or Plugin configuration/u);
+    ).toThrow(/DSH owns native extension discovery and inventory/u);
   });
 
   it("enforces strict autonomy and reserves configured extensions for custom or v0.4 strict", () => {

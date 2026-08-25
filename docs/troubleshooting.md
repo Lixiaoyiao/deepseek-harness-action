@@ -101,6 +101,8 @@ First inspect `dsh-mode`, `dsh-composition`, `trust`, `workspace-write`,
 
 Common causes:
 
+- The canonical allow/deny and budget checks below apply to controlled tools.
+  Native MCP/Bundle/Plugin inventory is discovered by DSH instead.
 - `custom` starts empty. List every required canonical ID in `allowed-tools`.
 - With `strict` or `standard`, `allowed-tools` adds requests after preset
   expansion; it does not replace the preset. Use `custom` for an exact minimal
@@ -128,13 +130,31 @@ network, credential, trust, validation, or write boundary. Do not compare
 `workspace.*` aliases there.
 
 `permission-profile` does not select or rename the native composition. Native
-mode currently rejects Action-managed MCP, Bundle, and Plugin configuration;
-remove that configuration or use `dsh-mode: controlled`. Controller-owned
-`command.*` and `github.*` tools remain mode-independent and should still be
-diagnosed through their existing canonical IDs, token scopes, and validation
-gates.
+MCP, Bundle, and Plugin configuration uses a separate definition-only schema:
+declare owners, transports or exact packages, owner-level
+`workspaceWrite`/`network`, and MCP's server-level `toolCallTimeoutMs`, but no
+`tools`, grants, permissions, call/output budgets, or Action manifests. DSH
+loads official MCP/Profile/Cordis mechanisms and decides the inventory. A
+native `mcp.*` or `plugin.*` entry in `allowed-tools` / `disallowed-tools`
+therefore fails closed. Controller-owned `command.*` and `github.*` tools remain
+mode-independent and should still be diagnosed through their existing
+canonical IDs, token scopes, and validation gates.
 
-Use canonical IDs exactly:
+If a native ecosystem tool is absent from `observedTools`, check that the
+definition passed schema and trusted-workflow admission, the MCP server started,
+the Bundle was added as an official Profile layer, or the direct Plugin loaded
+through Cordis. Also check `allow-plugin-install`, exact package pins, Docker
+image digest, Action network/write authority, and the extension startup logs.
+Do not add a guessed tool grant: the next successful native boot must report the
+real dynamic name.
+
+Repository native Skills should live at `.dsh/skills/<name>/SKILL.md` or
+`.agents/skills/<name>/SKILL.md`. The worker is intentionally `.git`-less; the
+official Skill system discovers those project directories without repository
+Git metadata. Native Subagent and Workflow capabilities likewise come from the
+locked official graph and are not controlled `native.subagent` aliases.
+
+For controlled and Controller-owned planes, use canonical IDs exactly:
 
 - `workspace.read`, `workspace.search`, `workspace.edit`;
 - `native.bash`, `native.web-search`, `native.subagent`;
@@ -144,7 +164,7 @@ Use canonical IDs exactly:
 - `mcp.<server>.<tool>`; and
 - `plugin.<extension>.<tool>`.
 
-Unknown IDs, undefined command tools, references to undeclared extension tools,
+Unknown controlled IDs, undefined command tools, references to undeclared controlled extension tools,
 missing runtime registrations, and tools that remain visible outside the
 effective allowlist all fail closed. The model cannot approve a tool, edit its
 profile, or expand its own permissions.
@@ -231,10 +251,12 @@ cancellation-comment finalization have fixed, short best-effort grace periods;
 they may extend wall-clock time slightly beyond the Action deadline but cannot
 hang indefinitely.
 
-For an extension tool timeout, also check its per-tool `timeoutMs`, per-tool
-`maxCalls`, and owner-wide `maxCalls`. Same-process plugin cancellation is
-cooperative. The overall Controller deadline is the hard boundary that can stop
-an uncooperative worker process.
+For a controlled extension tool timeout, also check its per-tool `timeoutMs`,
+per-tool `maxCalls`, and owner-wide `maxCalls`. Native definitions have none of
+those Action budgets; for native MCP, check the server-wide
+`toolCallTimeoutMs`, MCP logs, and the overall Action deadline. Same-process
+Plugin cancellation is cooperative. The overall Controller deadline is the
+hard boundary that can stop an uncooperative worker process.
 
 ## Cancellation or a sticky comment remains “In progress”
 
@@ -369,30 +391,45 @@ bounded log message.
 - A host `dsh-executable` is not an extension-compatible shortcut and does not
   provide Docker isolation.
 - Native uses that same locked runtime's official headless composition. If
-  `dsh-mode: native` is combined with host isolation or an Action-managed MCP,
-  Bundle, or Plugin declaration, the configuration is intentionally rejected;
-  native ecosystem compatibility remains deferred to Codex 6.
+  `dsh-mode: native` is combined with host isolation, it is intentionally
+  rejected. For ecosystem startup failures, inspect the definition-only
+  Profile/Cordis/MCP configuration rather than switching to a controlled tool
+  schema.
 
 ### MCP
 
-- `mcp-config` must be valid schema-v1 JSON with unique server/tool IDs, and
-  every referenced canonical ID must exist in the manifest.
+- `mcp-config` must be valid schema-v1 JSON with unique server IDs. Controlled
+  mode additionally requires unique declared tool IDs and exact canonical
+  references. Native accepts no tool declarations or `mcp.*` grants; DSH
+  discovers the inventory.
 - `stdio` commands must be an audited bare executable or absolute container
   path outside `/workspace`. Shells, interpreters, package managers, downloaders,
   Git, relative paths, and dynamic runners such as `npx` are rejected.
 - `streamable-http` requires HTTP(S), no embedded URL credentials or fragment,
-  and explicit network permission on the server and every tool.
-- A selected server uses fail-closed startup. If an allowed tool does not
-  register, or an unknown/unselected tool remains visible, the run fails rather
-  than silently changing the model's tool surface.
-- Tools owned by one server must agree on workspace-write mode and with the
-  server's network setting. All co-hosted extension owners must have compatible
-  process-level modes.
+  and network authority. Controlled declares network on the server and every
+  tool; native HTTP fixes the owner to `network: true`.
+- Every selected/admitted server uses fail-closed startup. Controlled then
+  enforces the exact known/allowed/visible contract. Native leaves discovery and
+  visibility to the official DSH graph and reports the actual names only in
+  `observedTools`.
+- Controlled tools and co-hosted owners must have compatible process modes.
+  Native owner flags request outer authority: one `network: true` owner gives
+  the whole worker bridge egress, while any actual RW mount is likewise shared
+  by the complete native worker.
+- A native extension's arbitrary-name credential belongs in `credentialEnv`,
+  `credentialHeaders`, or direct-Plugin `credentialConfig`; these values are
+  merged into that extension and masked/audited without values or hashes.
+  Controlled retains its compatible credential-like key detector. The real DeepSeek key and Action
+  GitHub token remain forbidden. A user-configured GitHub MCP is external
+  extension authority and does not receive Controller GitHub Gateway binding,
+  revalidation, validation, deferred mutation, or receipts.
 
 ### Bundle and Plugin packages
 
-- Use `permission-profile: custom`, `isolation: docker`, an immutable
-  digest-pinned `container-image`, an exact canonical tool allowlist, and
+- Controlled uses `permission-profile: custom` plus an exact canonical tool
+  allowlist. Native instead accepts definition-only Bundle/Profile and direct
+  Cordis Plugin entries and rejects `plugin.*` grants. Both require
+  `isolation: docker`, an immutable digest-pinned `container-image`, and
   `allow-plugin-install: "true"`.
 - Each package source must be an exact semver or a GitHub `git+https` URL pinned
   to a lowercase 40-character commit. Ranges, `latest`, floating refs, and
@@ -404,12 +441,17 @@ bounded log message.
 - Installation fails if an existing top-level runtime package is removed or its
   version changes, the installed identity/pin differs, or a Bundle patch escapes
   its installed package.
+- For native, confirm the Bundle package appears as an official Profile layer
+  and that a direct Plugin resolves to its installed module in the Cordis
+  patch. Its dynamic tool name must come from `observedTools`, not a configured
+  manifest.
 
-ToolRuntime restricts model-routed calls only. It does **not** sandbox an
-approved stdio executable, Bundle, or plugin during initialization, startup,
-background work, or direct process I/O. If that code is not trusted at the
-process level, do not enable it. See [Extension contracts](extension-contracts.md)
-for the exact compatibility and audit rules.
+Controlled ToolRuntime restricts model-routed calls only; native leaves routing
+and inventory to the official DSH graph. Neither path sandboxes an approved
+stdio executable, Bundle, or Plugin during initialization, startup, background
+work, or direct process I/O. If that code is not trusted at the process level,
+do not enable it. See [Extension contracts](extension-contracts.md) for the
+exact compatibility and audit rules.
 
 ## GitHub publication fails
 

@@ -6,7 +6,14 @@ import {
   validateExtensionToolReferences,
 } from "./extensions/plan.js";
 import { ActionConfigurationError } from "./errors.js";
-import { parseMcpConfiguration, parsePluginConfiguration } from "./extensions/schema.js";
+import {
+  parseMcpConfiguration,
+  parseNativeMcpConfiguration,
+  parseNativePluginConfiguration,
+  parsePluginConfiguration,
+  type AnyMcpConfiguration,
+  type AnyPluginConfiguration,
+} from "./extensions/schema.js";
 import {
   assertPermissionProfileConfiguration,
   permissionProfileSchema,
@@ -223,28 +230,8 @@ const actionInputsSchema = z.object({
       return z.NEVER;
     }
   }),
-  mcpConfig: z.string().transform((value, context) => {
-    try {
-      return parseMcpConfiguration(value);
-    } catch (error: unknown) {
-      context.addIssue({
-        code: "custom",
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return z.NEVER;
-    }
-  }),
-  pluginConfig: z.string().transform((value, context) => {
-    try {
-      return parsePluginConfiguration(value);
-    } catch (error: unknown) {
-      context.addIssue({
-        code: "custom",
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return z.NEVER;
-    }
-  }),
+  mcpConfig: z.custom<AnyMcpConfiguration>(),
+  pluginConfig: z.custom<AnyPluginConfiguration>(),
   taskOutputSchema: z
     .string()
     .transform((value, context) => {
@@ -361,6 +348,24 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     "branch-name-template",
     defaults.branchNameTemplate,
   );
+  const dshMode = optionalInput(reader, "dsh-mode", defaults.dshMode);
+  let mcpConfig: AnyMcpConfiguration;
+  let pluginConfig: AnyPluginConfiguration;
+  try {
+    const rawMcp = optionalInput(reader, "mcp-config", defaults.mcpConfig);
+    const rawPlugins = optionalInput(reader, "plugin-config", defaults.pluginConfig);
+    mcpConfig =
+      dshMode === "native" ? parseNativeMcpConfiguration(rawMcp) : parseMcpConfiguration(rawMcp);
+    pluginConfig =
+      dshMode === "native"
+        ? parseNativePluginConfiguration(rawPlugins)
+        : parsePluginConfiguration(rawPlugins);
+  } catch (error: unknown) {
+    throw new ActionConfigurationError(
+      `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   if (
     [deepseekApiKey, githubToken].some(
       (secret) =>
@@ -379,7 +384,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     command: optionalInput(reader, "command", defaults.command),
     taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
     prompt: optionalInput(reader, "prompt", defaults.prompt),
-    dshMode: optionalInput(reader, "dsh-mode", defaults.dshMode),
+    dshMode,
     dshVersion: optionalInput(reader, "dsh-version", defaults.dshVersion),
     dshExecutable: optionalInput(reader, "dsh-executable", defaults.dshExecutable),
     isolation: optionalInput(reader, "isolation", defaults.isolation),
@@ -421,8 +426,8 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     allowedTools: optionalInput(reader, "allowed-tools", defaults.allowedTools),
     disallowedTools: optionalInput(reader, "disallowed-tools", defaults.disallowedTools),
     toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
-    mcpConfig: optionalInput(reader, "mcp-config", defaults.mcpConfig),
-    pluginConfig: optionalInput(reader, "plugin-config", defaults.pluginConfig),
+    mcpConfig,
+    pluginConfig,
     taskOutputSchema: optionalInput(reader, "task-output-schema", defaults.taskOutputSchema),
   });
 
@@ -437,17 +442,28 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
       parsed.data.toolConfig,
       "disallowed-tools",
     );
-    validateExtensionToolReferences(
-      parsed.data.allowedTools,
-      parsed.data.mcpConfig,
-      parsed.data.pluginConfig,
-    );
-    validateExtensionToolReferences(
-      parsed.data.disallowedTools,
-      parsed.data.mcpConfig,
-      parsed.data.pluginConfig,
-      "disallowed-tools",
-    );
+    if (parsed.data.dshMode === "controlled") {
+      validateExtensionToolReferences(
+        parsed.data.allowedTools,
+        parsed.data.mcpConfig as Parameters<typeof validateExtensionToolReferences>[1],
+        parsed.data.pluginConfig as Parameters<typeof validateExtensionToolReferences>[2],
+      );
+      validateExtensionToolReferences(
+        parsed.data.disallowedTools,
+        parsed.data.mcpConfig as Parameters<typeof validateExtensionToolReferences>[1],
+        parsed.data.pluginConfig as Parameters<typeof validateExtensionToolReferences>[2],
+        "disallowed-tools",
+      );
+    } else {
+      const fabricatedGrant = [...parsed.data.allowedTools, ...parsed.data.disallowedTools].find(
+        (id) => id.startsWith("mcp.") || id.startsWith("plugin."),
+      );
+      if (fabricatedGrant !== undefined) {
+        throw new Error(
+          `dsh-mode native does not accept ${fabricatedGrant} in allowed-tools/disallowed-tools; DSH owns native extension discovery and inventory`,
+        );
+      }
+    }
     assertControllerCredentialsAbsentFromExtensions(
       parsed.data.mcpConfig,
       parsed.data.pluginConfig,
@@ -483,16 +499,7 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
     );
   }
   if (
-    parsed.data.dshMode === "native" &&
-    (parsed.data.mcpConfig.servers.length > 0 ||
-      parsed.data.pluginConfig.bundles.length > 0 ||
-      parsed.data.pluginConfig.plugins.length > 0)
-  ) {
-    throw new ActionConfigurationError(
-      "Invalid action inputs: dsh-mode native does not yet support Action-managed MCP, Bundle, or Plugin configuration; use controlled mode until Codex 6",
-    );
-  }
-  if (
+    parsed.data.dshMode === "controlled" &&
     parsed.data.permissionProfile === "standard" &&
     (parsed.data.mcpConfig.servers.length > 0 ||
       parsed.data.pluginConfig.bundles.length > 0 ||

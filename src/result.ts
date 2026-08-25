@@ -12,7 +12,7 @@ import {
   type ClassifiedActionError,
 } from "./errors.js";
 import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
-import type { ExtensionAudit } from "./extensions/plan.js";
+import type { AnyExtensionAudit } from "./extensions/plan.js";
 import type { PermissionAudit, ToolPolicyAudit } from "./permissions/profile.js";
 import type { DshMode } from "./dsh/composition.js";
 import type { PublicationResult } from "./review/publisher.js";
@@ -59,7 +59,7 @@ export interface AgentRunSummary {
   readonly validationRetries?: number;
   readonly toolReceipts?: readonly AgentToolReceipt[];
   readonly dshToolReceipts?: readonly DshToolReceipt[];
-  readonly extensionAudit?: ExtensionAudit;
+  readonly extensionAudit?: AnyExtensionAudit;
 }
 
 export interface ValidationSummary {

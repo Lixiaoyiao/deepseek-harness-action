@@ -1,0 +1,11 @@
+{
+  "name": "@dsh-action/native-ecosystem-bundle",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": "./index.mjs",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
