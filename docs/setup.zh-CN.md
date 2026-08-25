@@ -26,7 +26,19 @@ npm create deepseek-harness-action@latest
 npm create deepseek-harness-action@latest -- --mode both
 ```
 
-安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。它不会添加 `DEEPSEEK_API_KEY`、commit 或 push 改动，也不会创建 PR。安装器 v0.1.1 生成的 workflow 会把 Action 固定到 v0.6.0 的不可变 release commit。
+非交互使用时，省略 `--dsh-mode` 会保持兼容的 `controlled` 默认值。交互流程
+会明确询问；除非确实需要 native composition，否则请选择 Controlled：
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
+```
+
+安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。
+它不会添加 `DEEPSEEK_API_KEY`、commit 或 push 改动，也不会创建 PR。安装器
+v0.2.0 只在正式 v0.8.0 Tag、GitHub Release 与 release canary 身份一致后
+构建；生成的 workflow 固定到不可变 commit
+`86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1`，不会使用 candidate SHA、浮动 Tag
+或分支。
 
 安装成功后：
 
@@ -70,7 +82,15 @@ DEEPSEEK_API_KEY
 uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
 ```
 
-生产环境应把 Tag 替换为该版本发布时的完整、不可变 commit SHA。不要使用 `main`、`latest`、版本范围或其它浮动 ref。`dsh-version` 必须保持为本版本审计过的精确值：
+生产环境应把 Tag 替换为该版本发布时的完整、不可变 commit SHA。正式
+v0.8.0 commit 是：
+
+```yaml
+uses: Lixiaoyiao/deepseek-harness-action@86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1
+```
+
+不要使用 `main`、`latest`、版本范围、candidate SHA 或其它浮动 ref。
+`dsh-version` 必须保持为本版本审计过的精确值：
 
 ```yaml
 with:

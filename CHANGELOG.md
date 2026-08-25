@@ -3,6 +3,27 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## Installer 0.2.0 - 2026-08-26
+
+- Added `--dsh-mode controlled|native` to the independently versioned
+  `create-deepseek-harness-action` package. `controlled` remains the default;
+  native composition requires an explicit selection in non-interactive use and
+  a clear choice in the interactive flow. The existing
+  `--mode review|commands|both` workflow selection is unchanged.
+- Bound the production package build to the formal v0.8.0 release commit
+  `86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1` through the existing
+  `DSH_ACTION_RELEASE_SHA` pack contract. Generated workflows never use a
+  candidate SHA, floating tag, or branch.
+- Added deterministic coverage for all six workflow-mode and DSH-mode
+  combinations plus packed-tarball smoke checks for YAML parsing, immutable
+  Action identity, controlled default behavior, native opt-in, release-token
+  removal, credential-free checkout, and overwrite refusal.
+- Preserved the installer's safety boundaries: it creates workflow files only,
+  never writes a secret, commit, push, or pull request, and never overwrites an
+  existing workflow. This installer release does not add an Action-owned GitHub
+  MCP backend or Session/Resume, and the audited DSH version remains
+  `0.1.1-rc.2`.
+
 ## [0.8.0] - 2026-08-25
 
 ### Added

@@ -30,6 +30,7 @@ jobs:
       - uses: Lixiaoyiao/deepseek-harness-action@__DSH_ACTION_RELEASE_SHA__
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          # __DSH_MODE_INPUT__
           dsh-version: 0.1.1-rc.2
           permission-profile: strict
           isolation: docker

@@ -1,6 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 
 export type InstallerMode = "review" | "commands" | "both";
+export type InstallerDshMode = "controlled" | "native";
 
 export interface InstallerOptions {
   readonly argv?: readonly string[];
@@ -14,12 +15,14 @@ export interface InstallerOptions {
 
 export interface InstallerResult {
   readonly mode?: InstallerMode;
+  readonly dshMode: InstallerDshMode;
   readonly createdFiles: readonly string[];
 }
 
 export function parseArguments(argv: readonly string[]): {
   readonly help: boolean;
   readonly mode: InstallerMode | undefined;
+  readonly dshMode: InstallerDshMode | undefined;
 };
 
 export function runInstaller(options?: InstallerOptions): Promise<InstallerResult>;

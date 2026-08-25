@@ -26,7 +26,21 @@ For CI or another non-interactive environment, pass the mode explicitly. The ins
 npm create deepseek-harness-action@latest -- --mode both
 ```
 
-The installer creates `.github/workflows/` when necessary and refuses to overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`, commit or push changes, or open a pull request. Installer v0.1.1 generates workflows pinned to the immutable v0.6.0 release commit.
+For non-interactive use, omitting `--dsh-mode` keeps the compatible `controlled`
+default. The interactive flow asks explicitly; choose Controlled there unless
+native composition is intended:
+
+```bash
+npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
+```
+
+The installer creates `.github/workflows/` when necessary and refuses to
+overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`,
+commit or push changes, or open a pull request. Installer v0.2.0 is built only
+after the formal v0.8.0 tag, GitHub Release, and release canary agree; its
+workflows pin immutable commit
+`86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1`, not a candidate SHA, floating tag,
+or branch.
 
 After the installer succeeds:
 
@@ -70,7 +84,15 @@ The examples use the current release tag for readability:
 uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
 ```
 
-For production, replace the tag with the full immutable commit SHA published for that release. Do not use `main`, `latest`, a version range, or another floating ref. Keep `dsh-version` at the Action's audited exact value:
+For production, replace the tag with the full immutable commit SHA published
+for that release. The formal v0.8.0 commit is:
+
+```yaml
+uses: Lixiaoyiao/deepseek-harness-action@86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1
+```
+
+Do not use `main`, `latest`, a version range, a candidate SHA, or another
+floating ref. Keep `dsh-version` at the Action's audited exact value:
 
 ```yaml
 with:

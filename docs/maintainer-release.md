@@ -7,12 +7,11 @@ This guide is for repository maintainers qualifying and publishing an Action rel
 v0.8.0 publishes the experimental `NativeComposition` and official native MCP,
 Profile Bundle, Cordis Plugin, repository Skills, Subagent, and Workflow
 compatibility together with the subsequent behavior-preserving Controller
-cleanup. Freeze and qualify the exact Release PR candidate, merge only after
-required CI and Core E2E pass, then repeat CI, Core E2E, and native ecosystem
-smoke against the exact `main` release SHA before creating the annotated tag and
-GitHub Release. Run the formal tag canary only after those identities agree. The
-standalone installer remains independently versioned at `0.1.1` with its v0.6.0
-Action binding throughout this Action Release PR.
+cleanup. Its formal annotated tag, GitHub Release, and release canary resolve to
+commit `86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1`. The independently versioned
+installer follows as `0.2.0` only after that Action identity is complete. Its
+reviewed source has a separate immutable tag, while its pack step binds generated
+workflows to the formal Action commit through `DSH_ACTION_RELEASE_SHA`.
 
 ## Release invariants
 
@@ -76,9 +75,11 @@ For an Action version bump, update every release surface together:
 6. Any release-specific verification fixture or documentation.
 
 The standalone `create-deepseek-harness-action` package has its own semantic
-version. Its v0.6.0 companion release is `0.1.1`; do not change it to the Action
-version. Keep its package manifest, npm lock/workspace metadata, CLI tests, and
-pack-time release-SHA contract aligned.
+version. Its v0.8.0 companion release is `0.2.0`; do not change it to the Action
+version. Keep its package manifest, npm lock/workspace metadata, CLI tests,
+controlled/native templates, and pack-time release-SHA contract aligned. The
+formal v0.8.0 Action binding is
+`86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1`.
 
 For a DSH version bump, additionally:
 
@@ -246,34 +247,37 @@ then create a detached staging checkout. Each tag-resolution loop accepts an
 annotated or lightweight tag and must end at its expected commit:
 
 ```bash
-release_tag="vX.Y.Z"
-installer_tag="create-deepseek-harness-action-v0.1.1"
+release_tag="v0.8.0"
+release_sha="86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1"
+installer_tag="create-deepseek-harness-action-v0.2.0"
+installer_source_sha="${INSTALLER_SOURCE_SHA:?Set the reviewed installer source commit SHA}"
+repository="Lixiaoyiao/deepseek-harness-action"
 sha_pattern='^[0-9a-f]{40}$'
 [[ "$release_sha" =~ $sha_pattern ]]
 [[ "$installer_source_sha" =~ $sha_pattern ]]
 
-release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag")"
+release_json="$(gh api "repos/$repository/releases/tags/$release_tag")"
 jq -e --arg tag "$release_tag" '
   .tag_name == $tag and .draft == false and .prerelease == false
 ' <<<"$release_json" >/dev/null
 
-ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag")"
+ref_json="$(gh api "repos/$repository/git/ref/tags/$release_tag")"
 object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
 object_type="$(jq -r '.object.type' <<<"$ref_json")"
 for _ in 1 2 3 4 5; do
   [[ "$object_type" != "tag" ]] && break
-  tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+  tag_json="$(gh api "repos/$repository/git/tags/$object_sha")"
   object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
   object_type="$(jq -r '.object.type' <<<"$tag_json")"
 done
 [[ "$object_type" == "commit" && "$object_sha" == "$release_sha" ]]
 
-installer_ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$installer_tag")"
+installer_ref_json="$(gh api "repos/$repository/git/ref/tags/$installer_tag")"
 installer_object_sha="$(jq -r '.object.sha' <<<"$installer_ref_json")"
 installer_object_type="$(jq -r '.object.type' <<<"$installer_ref_json")"
 for _ in 1 2 3 4 5; do
   [[ "$installer_object_type" != "tag" ]] && break
-  installer_tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$installer_object_sha")"
+  installer_tag_json="$(gh api "repos/$repository/git/tags/$installer_object_sha")"
   installer_object_sha="$(jq -r '.object.sha' <<<"$installer_tag_json")"
   installer_object_type="$(jq -r '.object.type' <<<"$installer_tag_json")"
 done
@@ -281,7 +285,8 @@ done
 
 installer_stage="$(mktemp -d)"
 git worktree add --detach "$installer_stage/source" "$installer_source_sha"
-mkdir "$installer_stage/pack" "$installer_stage/unpacked" "$installer_stage/smoke"
+mkdir "$installer_stage/pack" "$installer_stage/unpacked" \
+  "$installer_stage/controlled" "$installer_stage/native" "$installer_stage/overwrite"
 ```
 
 Pack with the verified SHA as the only production substitution input. The
@@ -300,9 +305,9 @@ tar -xzf "$tarball" -C "$installer_stage/unpacked"
 ```
 
 Inspect the packed artifact, not only the source tree. It must contain version
-`0.1.1`, expose the `create-deepseek-harness-action` executable, contain no
-unresolved release token or floating `v0.6.0` Action reference, and generate
-exactly two workflows bound to `release_sha` in a non-interactive smoke run:
+`0.2.0`, expose the `create-deepseek-harness-action` executable, contain no
+unresolved release token or floating Action reference, and generate controlled
+and native workflows bound only to `release_sha`:
 
 ```bash
 node --input-type=module - "$installer_stage/unpacked/package/package.json" <<'NODE'
@@ -311,7 +316,7 @@ import { readFile } from "node:fs/promises";
 
 const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
 assert.equal(manifest.name, "create-deepseek-harness-action");
-assert.equal(manifest.version, "0.1.1");
+assert.equal(manifest.version, "0.2.0");
 assert.ok(manifest.bin?.["create-deepseek-harness-action"]);
 NODE
 
@@ -319,17 +324,50 @@ NODE
   "$installer_stage/unpacked/package"
 
 (
-  cd "$installer_stage/smoke"
+  cd "$installer_stage/controlled"
   npm exec --yes --package "$tarball" -- \
     create-deepseek-harness-action --mode both
 )
 
-test "$(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml' | wc -l)" -eq 2
-while IFS= read -r workflow; do
-  grep -F "uses: Lixiaoyiao/deepseek-harness-action@$release_sha" "$workflow"
-  ! grep -E 'Lixiaoyiao/deepseek-harness-action@(v[0-9]|main|latest)' "$workflow"
-done < <(find "$installer_stage/smoke/.github/workflows" -type f -name '*.yml')
+(
+  cd "$installer_stage/native"
+  npm exec --yes --package "$tarball" -- \
+    create-deepseek-harness-action --mode both --dsh-mode native
+)
+
+for variant in controlled native; do
+  workflow_root="$installer_stage/$variant/.github/workflows"
+  test "$(find "$workflow_root" -type f -name '*.yml' | wc -l)" -eq 2
+  while IFS= read -r workflow; do
+    test "$(grep -F -o "Lixiaoyiao/deepseek-harness-action@$release_sha" "$workflow" | wc -l)" -eq 1
+    grep -F "persist-credentials: false" "$workflow" >/dev/null
+    ! grep -E 'Lixiaoyiao/deepseek-harness-action@(v[0-9]|main|latest)' "$workflow"
+  done < <(find "$workflow_root" -type f -name '*.yml')
+done
+
+! grep -R -E '^\s+dsh-mode:\s+native\s*$' "$installer_stage/controlled/.github/workflows"
+test "$(grep -R -l -E '^\s+dsh-mode:\s+native\s*$' "$installer_stage/native/.github/workflows" | wc -l)" -eq 2
+
+mkdir -p "$installer_stage/overwrite/.github/workflows"
+printf 'user-owned\n' >"$installer_stage/overwrite/.github/workflows/dsh-review.yml"
+if (
+  cd "$installer_stage/overwrite"
+  npm exec --yes --package "$tarball" -- \
+    create-deepseek-harness-action --mode both --dsh-mode native
+); then
+  echo "installer unexpectedly overwrote an existing workflow" >&2
+  exit 1
+fi
+test "$(cat "$installer_stage/overwrite/.github/workflows/dsh-review.yml")" = "user-owned"
+test ! -e "$installer_stage/overwrite/.github/workflows/dsh-commands.yml"
 ```
+
+Parse all four generated workflow files as YAML using the already-installed
+repository `yaml` dependency. Confirm the controlled pair resolves the default
+composition, the native pair explicitly selects `dsh-mode: native`, and every
+file contains exactly one immutable Action reference. The deterministic test
+suite separately covers all six `review|commands|both` × `controlled|native`
+combinations.
 
 Only after those checks pass, authenticate to the official npm registry and
 publish that exact tarball. Do not publish from the source directory because
@@ -338,14 +376,39 @@ that would rerun packing with an unreviewed environment:
 ```bash
 npm whoami --registry=https://registry.npmjs.org/
 npm publish "$tarball" --access public --registry=https://registry.npmjs.org/
-npm view create-deepseek-harness-action@0.1.1 \
+npm view create-deepseek-harness-action@0.2.0 \
   name version dist-tags --json --registry=https://registry.npmjs.org/
 ```
 
-Run one final `npm create deepseek-harness-action@latest -- --mode both` smoke
-from an empty temporary directory against the public registry. Confirm the two
-generated workflow files still contain only `release_sha`, parse as YAML, and
-retain the required checkout, permission, Docker, validation, and credential
-boundaries. Then remove the disposable worktree and staging directory. npm
-versions and the release tag are immutable; a bad published installer must be
-fixed with a new installer patch version rather than replacing `0.1.1`.
+Stop if `npm whoami` fails; the configured default registry may be a mirror, so
+every authentication, publish, view, and public consumer command must name the
+official registry explicitly. After publication, create three new empty
+directories and run representative consumers from the official package:
+
+```bash
+mkdir "$installer_stage/public-review" \
+  "$installer_stage/public-commands-native" "$installer_stage/public-both"
+(
+  cd "$installer_stage/public-review"
+  npm_config_registry=https://registry.npmjs.org/ \
+    npm create deepseek-harness-action@0.2.0 -- --mode review
+)
+(
+  cd "$installer_stage/public-commands-native"
+  npm_config_registry=https://registry.npmjs.org/ \
+    npm create deepseek-harness-action@0.2.0 -- --mode commands --dsh-mode native
+)
+(
+  cd "$installer_stage/public-both"
+  npm_config_registry=https://registry.npmjs.org/ \
+    npm create deepseek-harness-action@0.2.0 -- --mode both
+)
+```
+
+Confirm the review, commands, and both file sets are correct; controlled remains
+the default; native is explicit; every workflow parses as YAML and contains
+exactly one `release_sha` Action reference; and checkout, permission, Docker,
+validation, credential, and overwrite boundaries remain intact. Then remove the
+disposable worktree and staging directory. npm versions and both release tags
+are immutable; a bad published installer must be fixed with a new installer
+patch version rather than replacing `0.2.0`.

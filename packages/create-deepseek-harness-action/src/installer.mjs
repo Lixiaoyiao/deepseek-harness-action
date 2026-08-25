@@ -5,35 +5,54 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 const DOCUMENTATION_URL =
-  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/v0.6.0/docs/setup.md";
+  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/v0.8.0/docs/setup.md";
 const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
 const MODES = new Set(["review", "commands", "both"]);
+const DSH_MODES = new Set(["controlled", "native"]);
+const DEFAULT_DSH_MODE = "controlled";
 const WORKFLOWS = Object.freeze({
-  review: Object.freeze({
-    source: "dsh-review.yml",
-    target: ".github/workflows/dsh-review.yml",
+  controlled: Object.freeze({
+    review: Object.freeze({
+      source: "dsh-review.yml",
+      target: ".github/workflows/dsh-review.yml",
+    }),
+    commands: Object.freeze({
+      source: "dsh-commands.yml",
+      target: ".github/workflows/dsh-commands.yml",
+    }),
   }),
-  commands: Object.freeze({
-    source: "dsh-commands.yml",
-    target: ".github/workflows/dsh-commands.yml",
+  native: Object.freeze({
+    review: Object.freeze({
+      source: "dsh-review-native.yml",
+      target: ".github/workflows/dsh-review.yml",
+    }),
+    commands: Object.freeze({
+      source: "dsh-commands-native.yml",
+      target: ".github/workflows/dsh-commands.yml",
+    }),
   }),
 });
 
 function usage() {
   return [
-    "Usage: create-deepseek-harness-action [--mode review|commands|both]",
+    "Usage: create-deepseek-harness-action [--mode review|commands|both] [--dsh-mode controlled|native]",
     "",
-    "Interactive choices:",
+    "Workflow choices:",
     "  1) PR Review",
     "  2) @dsh Coding Commands",
     "  3) Both",
     "",
-    "CI/non-interactive usage requires --mode.",
+    "DSH mode choices:",
+    "  1) Controlled (default for non-interactive use)",
+    "  2) Native",
+    "",
+    "CI/non-interactive usage requires --mode; --dsh-mode defaults to controlled.",
   ].join("\n");
 }
 
 export function parseArguments(argv) {
   let mode;
+  let dshMode;
   let help = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -43,61 +62,120 @@ export function parseArguments(argv) {
       continue;
     }
 
+    let option;
     let value;
     if (argument === "--mode") {
+      option = "mode";
       value = argv[index + 1];
       index += 1;
     } else if (argument?.startsWith("--mode=")) {
+      option = "mode";
       value = argument.slice("--mode=".length);
+    } else if (argument === "--dsh-mode") {
+      option = "dsh-mode";
+      value = argv[index + 1];
+      index += 1;
+    } else if (argument?.startsWith("--dsh-mode=")) {
+      option = "dsh-mode";
+      value = argument.slice("--dsh-mode=".length);
     } else {
       throw new Error(`Unknown argument: ${argument ?? ""}\n\n${usage()}`);
     }
 
-    if (mode !== undefined) throw new Error("--mode may be provided only once");
-    if (value === undefined || value === "") {
-      throw new Error(`--mode requires review, commands, or both\n\n${usage()}`);
+    if (option === "mode") {
+      if (mode !== undefined) throw new Error("--mode may be provided only once");
+      if (value === undefined || value === "" || value.startsWith("--")) {
+        throw new Error(`--mode requires review, commands, or both\n\n${usage()}`);
+      }
+      if (!MODES.has(value)) {
+        throw new Error(`Invalid --mode value: ${value}\n\n${usage()}`);
+      }
+      mode = value;
+      continue;
     }
-    if (!MODES.has(value)) {
-      throw new Error(`Invalid --mode value: ${value}\n\n${usage()}`);
+
+    if (dshMode !== undefined) throw new Error("--dsh-mode may be provided only once");
+    if (value === undefined || value === "" || value.startsWith("--")) {
+      throw new Error(`--dsh-mode requires controlled or native\n\n${usage()}`);
     }
-    mode = value;
+    if (!DSH_MODES.has(value)) {
+      throw new Error(`Invalid --dsh-mode value: ${value}\n\n${usage()}`);
+    }
+    dshMode = value;
   }
 
-  return { help, mode };
+  return { help, mode, dshMode };
 }
 
-async function promptForMode(input, output) {
-  const readline = createInterface({ input, output, terminal: false });
-  try {
-    while (true) {
-      const answer = (
-        await readline.question(
-          [
-            "Choose what to install:\n",
-            "  1) PR Review\n",
-            "  2) @dsh Coding Commands\n",
-            "  3) Both\n",
-            "Selection [1-3]: ",
-          ].join(""),
-        )
+async function promptForMode(readline, output) {
+  while (true) {
+    const answer = (
+      await readline.question(
+        [
+          "Choose what to install:\n",
+          "  1) PR Review\n",
+          "  2) @dsh Coding Commands\n",
+          "  3) Both\n",
+          "Selection [1-3]: ",
+        ].join(""),
       )
-        .trim()
-        .toLowerCase();
+    )
+      .trim()
+      .toLowerCase();
 
-      if (answer === "1" || answer === "review") return "review";
-      if (answer === "2" || answer === "commands") return "commands";
-      if (answer === "3" || answer === "both") return "both";
-      output.write("Please enter 1, 2, or 3.\n");
-    }
+    if (answer === "1" || answer === "review") return "review";
+    if (answer === "2" || answer === "commands") return "commands";
+    if (answer === "3" || answer === "both") return "both";
+    output.write("Please enter 1, 2, or 3.\n");
+  }
+}
+
+async function promptForDshMode(readline, output) {
+  while (true) {
+    const answer = (
+      await readline.question(
+        ["Choose the DSH mode:\n", "  1) Controlled\n", "  2) Native\n", "Selection [1-2]: "].join(
+          "",
+        ),
+      )
+    )
+      .trim()
+      .toLowerCase();
+
+    if (answer === "1" || answer === "controlled") return "controlled";
+    if (answer === "2" || answer === "native") return "native";
+    output.write("Please enter 1 or 2.\n");
+  }
+}
+
+async function promptForMissingSelections({ input, output, mode, dshMode }) {
+  const readline = createInterface({ input, output, terminal: false });
+  const answers = readline[Symbol.asyncIterator]();
+  const prompt = {
+    async question(message) {
+      output.write(message);
+      const answer = await answers.next();
+      if (answer.done) {
+        throw new Error("Interactive input ended before all installer choices were selected");
+      }
+      return answer.value;
+    },
+  };
+  try {
+    return {
+      mode: mode ?? (await promptForMode(prompt, output)),
+      dshMode: dshMode ?? (await promptForDshMode(prompt, output)),
+    };
   } finally {
     readline.close();
   }
 }
 
-function workflowDefinitions(mode) {
-  if (mode === "review") return [WORKFLOWS.review];
-  if (mode === "commands") return [WORKFLOWS.commands];
-  return [WORKFLOWS.review, WORKFLOWS.commands];
+function workflowDefinitions(mode, dshMode) {
+  const workflows = WORKFLOWS[dshMode];
+  if (mode === "review") return [workflows.review];
+  if (mode === "commands") return [workflows.commands];
+  return [workflows.review, workflows.commands];
 }
 
 async function pathExists(path) {
@@ -119,8 +197,8 @@ function assertReleaseBuiltTemplate(contents, source) {
   }
 }
 
-async function installWorkflows({ cwd, mode, templateDirectory }) {
-  const definitions = workflowDefinitions(mode).map((definition) => ({
+async function installWorkflows({ cwd, mode, dshMode, templateDirectory }) {
+  const definitions = workflowDefinitions(mode, dshMode).map((definition) => ({
     ...definition,
     absoluteTarget: join(cwd, ...definition.target.split("/")),
   }));
@@ -166,9 +244,10 @@ async function installWorkflows({ cwd, mode, templateDirectory }) {
   return created.map(({ target }) => target);
 }
 
-function printSuccess(output, mode, createdFiles) {
+function printSuccess(output, mode, dshMode, createdFiles) {
   output.write("\nCreated workflow files:\n");
   for (const path of createdFiles) output.write(`  - ${path}\n`);
+  output.write(`\nDSH mode: ${dshMode}\n`);
 
   output.write(
     [
@@ -214,20 +293,26 @@ export async function runInstaller(options = {}) {
 
   if (parsed.help) {
     output.write(`${usage()}\n`);
-    return { createdFiles: [] };
+    return { dshMode: parsed.dshMode ?? DEFAULT_DSH_MODE, createdFiles: [] };
   }
 
   let mode = parsed.mode;
+  let dshMode = parsed.dshMode;
+  const interactive = isTTY && !environment.CI;
   if (mode === undefined) {
-    if (!isTTY || Boolean(environment.CI)) {
+    if (!interactive) {
       throw new Error(
         `Non-interactive or CI input requires --mode review|commands|both\n\n${usage()}`,
       );
     }
-    mode = await promptForMode(input, output);
   }
 
-  const createdFiles = await installWorkflows({ cwd, mode, templateDirectory });
-  printSuccess(output, mode, createdFiles);
-  return { mode, createdFiles };
+  if (interactive && (mode === undefined || dshMode === undefined)) {
+    ({ mode, dshMode } = await promptForMissingSelections({ input, output, mode, dshMode }));
+  }
+  dshMode ??= DEFAULT_DSH_MODE;
+
+  const createdFiles = await installWorkflows({ cwd, mode, dshMode, templateDirectory });
+  printSuccess(output, mode, dshMode, createdFiles);
+  return { mode, dshMode, createdFiles };
 }
