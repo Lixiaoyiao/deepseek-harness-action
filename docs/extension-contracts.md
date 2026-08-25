@@ -2,9 +2,9 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status in v0.6.0
+## Status in v0.7.0
 
-The extension model introduced in v0.4 remains active unchanged in v0.6.0
+The extension model introduced in v0.4 remains active unchanged in v0.7.0
 through DeepSeek Harness's official extension mechanisms. The Action does not
 define a second plugin system:
 
@@ -28,9 +28,12 @@ headless process over the same run-scoped `.git`-less workspace and persistent
 invocation-count files. The Action boots its controlled Profile through the
 official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
 general-purpose CLI path. The standalone workflow installer added in v0.5.2
-remains unchanged. v0.6.0 adds Controller-side routing, branch UX, typed GitHub
-operations, and optional task-result validation, but no Session/Resume input,
-reusable session token, Agent Teams, GitHub App, or other Agent core expansion.
+remains unchanged. v0.6.0 added Controller-side routing, branch UX, typed GitHub
+operations, and optional task-result validation. v0.7.0 adds only internal
+composition/backend seams and additive audit semantics: it does not add
+`NativeComposition`, a native DSH ecosystem mode, a GitHub MCP backend,
+Session/Resume, a reusable session token, Agent Teams, GitHub App, or another
+Agent core expansion.
 
 ## Versioned configuration
 
@@ -369,7 +372,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.6.0 does not instantiate a store or expose a resume token.
+interfaces only. v0.7.0 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

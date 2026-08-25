@@ -82,7 +82,7 @@ tool requests and blocked tasks omit it. The value remains untrusted task data.
 
 | Input             | Default                                       | Purpose and constraints                                                                                                                                                  |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.6.0 rejects another version, ranges, and `latest`.                                                                                         |
+| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.7.0 rejects another version, ranges, and `latest`.                                                                                         |
 | `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable. This trusted host-compatibility path has no container boundary and cannot load extensions.                      |
 | `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective extensions require Docker. `none` is only for eligible trusted-read work on a dedicated trusted runner. |
 | `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective extensions require a full `name@sha256:<64 lowercase hex>` digest.                 |
@@ -443,7 +443,7 @@ proves identity, not safety; review and maintain the image separately.
 
 ### GitHub image attachments
 
-v0.6.0 does not download or forward GitHub image attachments. The exact audited
+v0.7.0 does not download or forward GitHub image attachments. The exact audited
 `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
@@ -565,7 +565,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
+- uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

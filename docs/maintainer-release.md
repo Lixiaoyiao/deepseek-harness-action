@@ -40,7 +40,7 @@ npm run check
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
 
-For v0.6.0, the DSH audit also proves that the exact headless package still
+For v0.7.0, the DSH audit also proves that the exact headless package still
 accepts only one text task and creates one text content block. That negative
 contract is release evidence for deferring GitHub attachment images; do not
 remove it unless a replacement exact DSH multimodal contract and its security
