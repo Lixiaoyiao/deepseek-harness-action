@@ -552,7 +552,7 @@ jobs:
           command: task
           task-access: write
           allow-write: "true"
-          prompt: Use native.bash exactly once to replace scripts/verify-dsh-config.mjs with the single line process.exit(0). Make no other change and do not restore it.
+          prompt: Use the available Bash tool exactly once to replace scripts/verify-dsh-config.mjs with the single line process.exit(0). Make no other change and do not restore it.
           permission-profile: custom
           allowed-tools: '["workspace.edit","native.bash"]'
           progress-comment: "false"
@@ -674,7 +674,7 @@ jobs:
           command: task
           task-access: write
           allow-write: "true"
-          prompt: Call native.subagent exactly once for a read-only inspection of README.md. After it returns, make no workspace changes, call no other tool, and summarize its answer.
+          prompt: Call the available Subagent tool exactly once for a read-only inspection of README.md. After it returns, make no workspace changes, call no other tool, and summarize its answer.
           permission-profile: custom
           allowed-tools: '["workspace.read","workspace.search","workspace.edit","native.subagent"]'
           disallowed-tools: '["native.bash","native.web-search"]'
@@ -723,7 +723,7 @@ jobs:
           base-branch: ${{ needs.gate.outputs.candidate_branch }}
           branch-prefix: dsh-e2e/
           branch-name-template: "{{prefix}}task-{{key}}"
-          prompt: Use native.bash exactly once to create dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt containing exactly trusted-write followed by a newline. Make no other change.
+          prompt: Use the available Bash tool exactly once to create dsh-e2e-write-${{ github.run_id }}-${{ github.run_attempt }}.txt containing exactly trusted-write followed by a newline. Make no other change.
           permission-profile: standard
           disallowed-tools: '["native.web-search","native.subagent"]'
           progress-comment: "false"
