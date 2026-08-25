@@ -74,7 +74,7 @@ inputs:
     required: false
     default: ""
   dsh-mode:
-    description: "DSH composition ownership: controlled preserves the existing Controller-owned ToolRuntime policy; experimental native uses the official DSH headless composition inside the Action's Docker safety boundary."
+    description: "DSH composition ownership: controlled preserves the Controller-owned ToolRuntime policy; experimental native uses the official DSH headless Profile, MCP, Bundle, Plugin, Skill, Subagent, and Workflow graph inside the Action's Docker safety boundary."
     required: false
     default: "controlled"
   dsh-version:
@@ -138,7 +138,7 @@ inputs:
     required: false
     default: "strict"
   allowed-tools:
-    description: "JSON allowlist of workspace.*, native.*, command.<name>, typed github.*, mcp.<server>.<tool>, and plugin.<extension>.<tool> IDs. Configuration alone never authorizes a tool."
+    description: "JSON allowlist of Action/controlled capabilities. controlled accepts workspace.*, native.*, command.*, typed github.*, mcp.*, and plugin.* IDs; native rejects mcp./plugin. grants because DSH owns that inventory."
     required: false
     default: "[]"
   disallowed-tools:
@@ -150,11 +150,11 @@ inputs:
     required: false
     default: '{"schemaVersion":1,"commands":[]}'
   mcp-config:
-    description: "Versioned maintainer-owned allowlist for official DSH MCP servers and tools. stdio startup executes trusted worker code; both transports require explicit read/workspace-write/network, timeout, output, and invocation limits."
+    description: "Versioned maintainer-owned official DSH MCP config. controlled declares exact tools/budgets; native declares the server, owner-level workspaceWrite/network, toolCallTimeoutMs, and explicit credentialEnv/credentialHeaders because DSH discovers tools."
     required: false
     default: '{"schemaVersion":1,"servers":[]}'
   plugin-config:
-    description: "Versioned maintainer-owned DSH Bundle/Plugin allowlist. Startup executes trusted worker code; every package must use an exact semver or a GitHub git+https URL pinned to a 40-character commit."
+    description: "Versioned maintainer-owned DSH Bundle/Plugin config. Native entries are definition-only, with direct-Plugin credentialConfig, and load through official Profile/Cordis composition. Startup executes trusted worker code; every package requires an exact semver or GitHub commit pin."
     required: false
     default: '{"schemaVersion":1,"bundles":[],"plugins":[]}'
   allow-plugin-install:
@@ -187,13 +187,13 @@ outputs:
   permission-profile:
     description: "Resolved Agent permission profile: strict, standard, custom, or none"
   effective-tools:
-    description: "Backward-compatible JSON array of exact canonical tools granted by the Controller after preset, deny, trust, and extension policy intersection"
+    description: "Backward-compatible Controller-plane canonical capability array. It is exact for controlled mode but never describes native DSH inventory; use result-json.toolPolicy.observedTools for native telemetry."
   network-access:
     description: "Effective worker network: host-gateway, mediated-web, bridge, or none before permission resolution"
   workspace-write:
     description: "Whether the effective Agent tools can modify the disposable workspace"
   trusted-extensions:
-    description: "JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for this run"
+    description: "JSON array of Action-admitted MCP, Bundle, and Plugin owners; native network/write values describe shared worker authority, not per-tool grants"
   duration-ms:
     description: "Total controller duration in milliseconds"
   comment-id:
@@ -203,7 +203,7 @@ outputs:
   error-message:
     description: "Redacted and bounded failure message"
   extension-profile-digest:
-    description: "SHA-256 digest of the redacted controller-generated DSH extension audit profile, empty when unavailable"
+    description: "SHA-256 digest of the redacted controlled extension profile or native admission audit, empty when unavailable"
   tool-receipts:
     description: "JSON object with bounded controller/DSH receipt arrays and truncation metadata; never an authorization input"
   task-output:

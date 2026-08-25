@@ -12,8 +12,18 @@ import {
 import { NativeComposition, NATIVE_DSH_COMPOSITION } from "../src/dsh/native-composition.js";
 import { createDshRuntime, disposeDshRuntime, type DshRuntime } from "../src/dsh/runtime.js";
 import { selectDshComposition } from "../src/dsh/select-composition.js";
-import { resolveExtensionPlan, type EffectiveExtensionPlan } from "../src/extensions/plan.js";
-import { parseMcpConfiguration, parsePluginConfiguration } from "../src/extensions/schema.js";
+import {
+  resolveExtensionPlan,
+  resolveNativeExtensionPlan,
+  type EffectiveExtensionPlan,
+  type NativeExtensionPlan,
+} from "../src/extensions/plan.js";
+import {
+  parseMcpConfiguration,
+  parseNativeMcpConfiguration,
+  parseNativePluginConfiguration,
+  parsePluginConfiguration,
+} from "../src/extensions/schema.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 
 const temporaryPaths: string[] = [];
@@ -81,6 +91,23 @@ function managedMcpPlan(): EffectiveExtensionPlan {
         },
       ],
     }),
+  });
+}
+
+function nativeExtensionPlan(
+  options: {
+    readonly mcp?: string;
+    readonly plugins?: string;
+    readonly allowPluginInstall?: boolean;
+  } = {},
+): NativeExtensionPlan {
+  return resolveNativeExtensionPlan({
+    mcp: parseNativeMcpConfiguration(options.mcp ?? '{"schemaVersion":1,"servers":[]}'),
+    plugins: parseNativePluginConfiguration(
+      options.plugins ?? '{"schemaVersion":1,"bundles":[],"plugins":[]}',
+    ),
+    allowPluginInstall: options.allowPluginInstall ?? false,
+    policy: trustedRead,
   });
 }
 
@@ -372,7 +399,9 @@ describe("NativeComposition", () => {
       await expect(
         readFile(join(fixture.assets, "action-workspace.mjs"), "utf8"),
       ).rejects.toThrow();
-      const prepared = await composition.prepare(prepareOptions(runtime, fixture.assets));
+      const prepared = await composition.prepare(
+        prepareOptions(runtime, fixture.assets, { plan: nativeExtensionPlan() }),
+      );
       expect(prepared.isolation).toBe("docker");
       if (prepared.isolation !== "docker") throw new Error("expected a Docker launch plan");
 
@@ -380,6 +409,7 @@ describe("NativeComposition", () => {
         id: "dsh-native-headless",
         toolPolicyOwner: "dsh",
         actionManagedExtensionProfile: false,
+        extensionPlanProfile: "headless-native",
       });
       expect(composition.promptToolPolicy(["workspace.read", "native.bash"])).toEqual({
         policyOwner: "dsh",
@@ -407,18 +437,18 @@ describe("NativeComposition", () => {
       ).resolves.toBe(fixture.launcher);
 
       const nativeManifest = JSON.parse(
-        await readFile(join(runtime.dshHome, "profiles", "headless", "package.json"), "utf8"),
+        await readFile(join(runtime.packageRoot, "package.json"), "utf8"),
       ) as { readonly dsh: { readonly profile: { readonly bundles: readonly string[] } } };
       expect(nativeManifest.dsh.profile.bundles).toEqual([
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-headless",
       ]);
       await expect(
-        readFile(join(runtime.dshHome, "profiles", "headless", "action-native-root.yml"), "utf8"),
+        readFile(join(runtime.packageRoot, "action-native-root.yml"), "utf8"),
       ).resolves.toBe("[]\n");
-      await expect(
-        readFile(join(runtime.dshHome, "profiles", "headless", "cordis.patch.yml"), "utf8"),
-      ).resolves.toBe("[]\n");
+      await expect(readFile(join(runtime.packageRoot, "cordis.patch.yml"), "utf8")).resolves.toBe(
+        "[]\n",
+      );
 
       const observationPath = join(runtime.dshHome, "action-state", "native-observed-tools.jsonl");
       await appendFile(
@@ -445,7 +475,106 @@ describe("NativeComposition", () => {
     }
   });
 
-  it("fails closed for host isolation and Action-managed extensions", async () => {
+  it("composes native MCP, Bundle, and direct Cordis Plugin entries without grants", async () => {
+    const fixture = await nativeAssets();
+    const runtime = await createDshRuntime(fixture.root);
+    const composition: DshComposition = new NativeComposition();
+    const bundlePackage = "@acme/native-bundle";
+    const pluginPackage = "@acme/native-plugin";
+    const plan = nativeExtensionPlan({
+      mcp: JSON.stringify({
+        schemaVersion: 1,
+        servers: [
+          {
+            id: "fixture",
+            transport: "stdio",
+            command: "fixture-mcp",
+            args: ["--stdio"],
+            credentialEnv: { SERVICE_VALUE: "native-extension-token" },
+            toolCallTimeoutMs: 12_345,
+            reconnect: { enabled: false, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
+          },
+        ],
+      }),
+      plugins: JSON.stringify({
+        schemaVersion: 1,
+        bundles: [{ id: "bundle", package: bundlePackage, source: "1.2.3" }],
+        plugins: [
+          {
+            id: "plugin",
+            package: pluginPackage,
+            source: "2.3.4",
+            config: { marker: "native-cordis" },
+            credentialConfig: { connection: "native-plugin-secret" },
+          },
+        ],
+      }),
+      allowPluginInstall: true,
+    });
+
+    try {
+      expect(plan).not.toHaveProperty("tools");
+      expect(plan).not.toHaveProperty("manifests");
+      const prepared = await composition.prepare(
+        prepareOptions(runtime, fixture.assets, { plan, nativeTools: [] }),
+      );
+      expect(prepared.isolation).toBe("docker");
+      if (prepared.isolation !== "docker") throw new Error("expected Docker preparation");
+      expect(prepared).not.toHaveProperty("receipts");
+
+      const manifest = JSON.parse(
+        await readFile(join(runtime.packageRoot, "package.json"), "utf8"),
+      ) as {
+        readonly dependencies: Readonly<Record<string, string>>;
+        readonly dsh: { readonly profile: { readonly bundles: readonly string[] } };
+      };
+      expect(manifest.dsh.profile.bundles).toEqual([
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-headless",
+        bundlePackage,
+      ]);
+      expect(manifest.dependencies).toMatchObject({
+        [bundlePackage]: "1.2.3",
+        [pluginPackage]: "2.3.4",
+      });
+      const initialPatch = await readFile(join(runtime.packageRoot, "cordis.patch.yml"), "utf8");
+      expect(initialPatch).toContain('"name": "@deepseek-ai/dsh-mcp-client"');
+      expect(initialPatch).toContain('"serverName": "fixture"');
+      expect(initialPatch).toContain('"toolCallTimeoutMs": 12345');
+      expect(initialPatch).toContain("__dsh_action_unresolved_native_plugin__/plugin.mjs");
+      expect(initialPatch).not.toContain("action-policy");
+
+      const installedPlugin = join(
+        runtime.packageRoot,
+        "node_modules",
+        ...pluginPackage.split("/"),
+      );
+      await mkdir(installedPlugin, { recursive: true });
+      await writeFile(
+        join(installedPlugin, "package.json"),
+        `${JSON.stringify({ name: pluginPackage, version: "2.3.4", exports: "./index.mjs" })}\n`,
+      );
+      await writeFile(
+        join(installedPlugin, "index.mjs"),
+        "export const name = 'native-plugin-fixture'; export function apply() {}\n",
+      );
+      if (prepared.finalizeAfterInstall === undefined) {
+        throw new Error("expected native direct Plugin finalization");
+      }
+      const finalized = await prepared.finalizeAfterInstall(async (prepare) => await prepare());
+      expect(finalized).not.toHaveProperty("finalizeAfterInstall");
+      const finalPatch = await readFile(join(runtime.packageRoot, "cordis.patch.yml"), "utf8");
+      expect(finalPatch).toContain(
+        "/dsh-home/profiles/github-action/node_modules/@acme/native-plugin/index.mjs",
+      );
+      expect(finalPatch).toContain('"connection": "native-plugin-secret"');
+      expect(finalPatch).not.toContain("__dsh_action_unresolved_native_plugin__");
+    } finally {
+      await disposeDshRuntime(runtime);
+    }
+  });
+
+  it("fails closed for host isolation and a controlled-shaped extension plan", async () => {
     const fixture = await nativeAssets();
     const runtime = await createDshRuntime(fixture.root);
     const composition: DshComposition = new NativeComposition();
@@ -466,7 +595,7 @@ describe("NativeComposition", () => {
             plan: managedMcpPlan(),
           }),
         ),
-      ).rejects.toThrow(/does not yet support Action-managed MCP, Bundle, or Plugin/u);
+      ).rejects.toThrow(/definition-only headless-native extension plan/u);
     } finally {
       await disposeDshRuntime(runtime);
     }

@@ -26,9 +26,11 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.7.0 established four architecture foundations without widening its published capability surface: the internal `DshComposition` seam, explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam. Current unreleased development adds an experimental `dsh-mode: native` path over the same locked DSH `0.1.1-rc.2` runtime. `controlled` remains the default, so existing workflows that omit `dsh-mode` retain their current composition, permissions, tools, and outputs.
+v0.7.0 established four architecture foundations without widening its published capability surface: the internal `DshComposition` seam, explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam. Current unreleased development adds an experimental `dsh-mode: native` path over the same locked DSH `0.1.1-rc.2` runtime, including its official ecosystem composition. `controlled` remains the default, so existing workflows that omit `dsh-mode` retain their current composition, permissions, tools, budgets, receipts, and outputs.
 
-Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition and capability graph to DSH, while the Action still owns the Docker boundary, run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, GitHub Gateway, validation and deferred writes, deadlines, cancellation, and secret redaction. Native is Docker-only in this experimental phase. Action-managed MCP, Bundle, and Plugin configuration fails closed in native mode until the Codex 6 compatibility work; Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane. This work does not publish v0.8.0; that release remains deferred until Codex 6 is complete.
+Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition, capability graph, and model-visible inventory to DSH. Native MCP servers load through official `@deepseek-ai/dsh-mcp-client`; Bundles become official Profile layers; direct Plugins load through Cordis; and repository Skills, Subagents, and Workflows retain DSH-native behavior. Its definition-only extension schema declares owners and process requirements, not Action tools, grants, or per-tool budgets. Dynamic ecosystem tools appear only in runtime `observedTools`, and native `toolPolicy` never claims Controller `effectiveTools`.
+
+The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, the typed GitHub Gateway, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane. This work does not publish v0.8.0 or change the locked DSH version.
 
 ## Live runs
 
@@ -120,14 +122,15 @@ Maintainers can change the trigger phrase, add label/assignee routes, filter act
 
 ## Security
 
-- The Agent receives neither the real `GITHUB_TOKEN` nor the real DeepSeek key. Only the Controller can call GitHub mutation APIs.
+- The Agent receives neither the real `GITHUB_TOKEN` nor the real DeepSeek key. Only the Controller can call Action-owned `github.*` mutation APIs; an explicitly configured external GitHub MCP uses its own credential and authority as described below.
 - Repository content, diffs, issues, pull requests, comments, logs, model output, and tool output remain untrusted data.
 - Fork review uses a `.git`-less, credential-free worker and must check out only the trusted base SHA with `persist-credentials: false`.
 - Writes require a trusted same-repository context, authorized actors, Docker, `allow-write: "true"`, non-empty fixed validation commands, and successful validation. Protected-path and Validation Integrity checks still apply.
 - Typed `github.*` mutations are exact-ID, entity-bound, deferred until Controller validation, and reconciled with bounded receipts. No arbitrary REST, GraphQL, URL, or credential pass-through exists.
 - Validation Integrity provides high-confidence weakening detection plus baseline replay for its supported entrypoints, scripts, test/config weakening, lock/toolchain controls, and known wrappers/interpreters; it is not complete cross-language dependency provenance or a formal proof.
 - Validation may use Docker bridge networking. On self-hosted or corporate-network runners, repository validation code may reach runner-accessible network services; use dedicated runners and runner-level segmentation/egress controls.
-- An approved Bundle, Plugin, or stdio MCP server is trusted worker code. ToolRuntime limits model-routed calls; it does not sandbox extension startup, background work, or direct process I/O.
+- An approved Bundle, Plugin, or stdio MCP server is trusted worker code. Controlled ToolRuntime limits model-routed calls; native leaves routing and inventory to DSH. Neither model is a sandbox for extension startup, background work, or direct process I/O, and any bridge/RW capability applies to the whole worker.
+- `github.*` uses the Controller GitHub Gateway. A separately configured GitHub MCP uses its own external credential and is outside the Gateway's binding, revalidation, validation, and deferred-write guarantees.
 
 Read the complete [Security policy](SECURITY.md) before enabling write mode, host execution, network access, or third-party extensions.
 

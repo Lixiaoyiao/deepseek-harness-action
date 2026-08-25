@@ -113,6 +113,12 @@ const environmentValueSchema = z
     message: "must not contain NUL",
   });
 const environmentSchema = z.record(environmentNameSchema, environmentValueSchema);
+const credentialEnvironmentSchema = z.record(
+  environmentNameSchema,
+  environmentValueSchema.refine((value) => value.length >= 4, {
+    message: "credential values must contain at least 4 characters",
+  }),
+);
 
 const forbiddenMcpExecutables = new Set([
   "bash",
@@ -222,6 +228,12 @@ const headerValueSchema = z
   .string()
   .max(16_384)
   .refine((value) => !/[\r\n\0]/u.test(value), { message: "must not contain CR, LF, or NUL" });
+const credentialHeaderSchema = z.record(
+  headerNameSchema,
+  headerValueSchema.refine((value) => value.length >= 4, {
+    message: "credential values must contain at least 4 characters",
+  }),
+);
 
 const mcpServerBaseSchema = z.strictObject({
   id: extensionIdSchema,
@@ -328,6 +340,116 @@ const mcpConfigurationSchema = z
     validateUniqueIds(configuration.servers, context, "server");
   });
 
+// NativeComposition deliberately uses an owner/process-shaped admission
+// contract. DSH discovers the server's tools at runtime, so asking the
+// workflow to predict names, per-tool budgets, or an allowlist here would
+// misrepresent Controller metadata as DSH inventory.
+const nativeMcpServerBaseSchema = z.strictObject({
+  id: extensionIdSchema,
+  workspaceWrite: z.boolean().default(false),
+  toolCallTimeoutMs: z
+    .number()
+    .int()
+    .min(100)
+    .max(30 * 60_000)
+    .default(60_000),
+  reconnect: reconnectSchema.default({
+    enabled: true,
+    initialDelayMs: 500,
+    maxDelayMs: 30_000,
+    maxAttempts: 10,
+  }),
+});
+
+const nativeStdioMcpServerSchema = nativeMcpServerBaseSchema
+  .extend({
+    transport: z.literal("stdio"),
+    command: commandSchema,
+    args: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(4_096)
+          .refine((value) => !value.includes("\0"), { message: "must not contain NUL" }),
+      )
+      .max(64)
+      .default([]),
+    env: environmentSchema.default({}),
+    credentialEnv: credentialEnvironmentSchema.default({}),
+    cwd: relativeCwdSchema.optional(),
+    network: z.boolean().default(false),
+  })
+  .superRefine((server, context) => {
+    const duplicate = Object.keys(server.credentialEnv).find((name) => name in server.env);
+    if (duplicate !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["credentialEnv", duplicate],
+        message: "must not duplicate an ordinary env key",
+      });
+    }
+  });
+
+const nativeStreamableHttpMcpServerSchema = nativeMcpServerBaseSchema
+  .extend({
+    transport: z.literal("streamable-http"),
+    url: z.url().max(2_048),
+    headers: z.record(headerNameSchema, headerValueSchema).default({}),
+    credentialHeaders: credentialHeaderSchema.default({}),
+    network: z.literal(true).default(true),
+  })
+  .superRefine((server, context) => {
+    let url: URL;
+    try {
+      url = new URL(server.url);
+    } catch {
+      return;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      context.addIssue({ code: "custom", path: ["url"], message: "must use http or https" });
+    }
+    if (url.username !== "" || url.password !== "") {
+      context.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "must not embed credentials; use explicit headers",
+      });
+    }
+    if (url.hash !== "") {
+      context.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "must not contain a URL fragment",
+      });
+    }
+    const ordinaryNames = new Set(Object.keys(server.headers).map((name) => name.toLowerCase()));
+    const duplicate = Object.keys(server.credentialHeaders).find((name) =>
+      ordinaryNames.has(name.toLowerCase()),
+    );
+    if (duplicate !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["credentialHeaders", duplicate],
+        message: "must not duplicate an ordinary header key",
+      });
+    }
+  });
+
+const nativeMcpServerSchema = z.discriminatedUnion("transport", [
+  nativeStdioMcpServerSchema,
+  nativeStreamableHttpMcpServerSchema,
+]);
+
+const nativeMcpConfigurationSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    servers: z.array(nativeMcpServerSchema).max(16).default([]),
+  })
+  .superRefine((configuration, context) => {
+    validateUniqueIds(configuration.servers, context, "server");
+  });
+
 const reservedRuntimePackages = new Set([
   "@actions/core",
   "@actions/github",
@@ -414,6 +536,60 @@ const pluginConfigurationSchema = z
     }
   });
 
+const nativePackageExtensionBaseSchema = z.strictObject({
+  id: extensionIdSchema,
+  package: npmPackageNameSchema,
+  source: pinnedPackageSourceSchema,
+  network: z.boolean().default(false),
+  workspaceWrite: z.boolean().default(false),
+});
+
+const nativeBundleSchema = nativePackageExtensionBaseSchema;
+const nativePluginSchema = nativePackageExtensionBaseSchema
+  .extend({
+    config: z.record(z.string().min(1).max(128), z.json()).default({}),
+    credentialConfig: z
+      .record(z.string().min(1).max(128), z.string().min(4).max(16_384))
+      .default({}),
+  })
+  .superRefine((plugin, context) => {
+    const duplicate = Object.keys(plugin.credentialConfig).find((key) => key in plugin.config);
+    if (duplicate !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["credentialConfig", duplicate],
+        message: "must not duplicate an ordinary config key",
+      });
+    }
+  });
+
+const nativePluginConfigurationSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    bundles: z.array(nativeBundleSchema).max(16).default([]),
+    plugins: z.array(nativePluginSchema).max(32).default([]),
+  })
+  .superRefine((configuration, context) => {
+    validateUniqueIds([...configuration.bundles, ...configuration.plugins], context, "extension");
+    const packages = new Map<string, string>();
+    for (const [kind, extensions] of [
+      ["bundles", configuration.bundles],
+      ["plugins", configuration.plugins],
+    ] as const) {
+      for (const [index, extension] of extensions.entries()) {
+        const existing = packages.get(extension.package);
+        if (existing !== undefined && existing !== extension.source) {
+          context.addIssue({
+            code: "custom",
+            path: [kind, index, "source"],
+            message: `package ${extension.package} is already pinned to a different source`,
+          });
+        }
+        packages.set(extension.package, extension.source);
+      }
+    }
+  });
+
 function validateConsistentWorkspacePermission(
   tools: readonly { readonly permissions: readonly ExtensionPermission[] }[],
   context: z.RefinementCtx,
@@ -493,6 +669,13 @@ export type McpConfiguration = z.infer<typeof mcpConfigurationSchema>;
 export type BundleDefinition = z.infer<typeof bundleSchema>;
 export type PluginDefinition = z.infer<typeof pluginSchema>;
 export type PluginConfiguration = z.infer<typeof pluginConfigurationSchema>;
+export type NativeMcpServerDefinition = z.infer<typeof nativeMcpServerSchema>;
+export type NativeMcpConfiguration = z.infer<typeof nativeMcpConfigurationSchema>;
+export type NativeBundleDefinition = z.infer<typeof nativeBundleSchema>;
+export type NativePluginDefinition = z.infer<typeof nativePluginSchema>;
+export type NativePluginConfiguration = z.infer<typeof nativePluginConfigurationSchema>;
+export type AnyMcpConfiguration = McpConfiguration | NativeMcpConfiguration;
+export type AnyPluginConfiguration = PluginConfiguration | NativePluginConfiguration;
 
 export function parseMcpConfiguration(raw: string): McpConfiguration {
   const result = mcpConfigurationSchema.safeParse(decodeJson(raw, "mcp-config"));
@@ -506,6 +689,21 @@ export function parseMcpConfiguration(raw: string): McpConfiguration {
 export function parsePluginConfiguration(raw: string): PluginConfiguration {
   const result = pluginConfigurationSchema.safeParse(decodeJson(raw, "plugin-config"));
   if (!result.success) throw new Error(`Invalid plugin-config: ${z.prettifyError(result.error)}`);
+  return result.data;
+}
+
+export function parseNativeMcpConfiguration(raw: string): NativeMcpConfiguration {
+  const result = nativeMcpConfigurationSchema.safeParse(decodeJson(raw, "mcp-config"));
+  if (!result.success)
+    throw new Error(`Invalid native mcp-config: ${z.prettifyError(result.error)}`);
+  return result.data;
+}
+
+export function parseNativePluginConfiguration(raw: string): NativePluginConfiguration {
+  const result = nativePluginConfigurationSchema.safeParse(decodeJson(raw, "plugin-config"));
+  if (!result.success) {
+    throw new Error(`Invalid native plugin-config: ${z.prettifyError(result.error)}`);
+  }
   return result.data;
 }
 

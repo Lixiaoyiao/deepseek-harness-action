@@ -16,6 +16,18 @@ versioning for published action releases.
   Controller-owned requested/effective/denied tool policy. Native runs report
   `policyOwner: dsh` and the runtime-observed tool names as `observedTools`
   telemetry, with no Controller `effectiveTools` claim in that audit.
+- Added a composition-aware, definition-only native extension schema. Native
+  MCP definitions contain transport and owner/process requirements but no
+  declared tools, grants, call counts, output budgets, or Action manifests;
+  Bundle and Plugin definitions likewise declare only an exact package source,
+  owner-level network/workspace-write requirements, and direct-Plugin config.
+- Native now composes MCP through official
+  `@deepseek-ai/dsh-mcp-client@0.1.1-rc.2`, configured Bundles as official
+  Profile layers, and direct Plugins through Cordis. DSH remains responsible
+  for discovery, registration, invocation, and the final model-visible
+  inventory. Repository `.dsh/skills` and `.agents/skills` are discoverable in
+  the Action's `.git`-less workspace, while the locked native Skill, Subagent,
+  and Workflow capabilities remain part of the official graph.
 
 ### Security and compatibility
 
@@ -27,16 +39,35 @@ versioning for published action releases.
   and actor trust, the Controller GitHub Gateway, validation/revalidation,
   deferred mutation, deadlines, cancellation, and secret redaction remain
   outside the DSH composition.
-- Action-managed MCP, Bundle, and Plugin configuration fails closed in native
-  mode during this experimental phase. Controller-owned `command.*` and
-  `github.*` capabilities remain mode-independent and retain their existing
-  authority and write gates.
+- Native extension admission still requires trusted workflow configuration and
+  Action policy. Third-party packages require an exact semver or immutable
+  GitHub commit, install with lifecycle scripts disabled, and pass installed
+  identity, lock, and pre-existing runtime-package inventory audits. Extension
+  credentials are masked and represented only by value-free authority-source
+  records; values and hashes never enter the public audit. The real DeepSeek
+  key and Action GitHub token remain forbidden in worker extension config.
+- Native MCP and direct Plugin credentials may use explicit `credentialEnv`,
+  `credentialHeaders`, and `credentialConfig` maps. Their values are merged into
+  only the corresponding extension config, masked regardless of key name, and
+  represented only by a value-free owner record. Immediately before Profile
+  rendering, admitted definitions are also rescanned against ambient withheld
+  GitHub, OIDC, and DeepSeek values so aliasing a Controller credential fails
+  closed.
+- Native `network` and `workspaceWrite` declarations request process-level
+  outer authority. If any admitted native owner needs bridge networking, the
+  entire native worker shares that bridge path; a writable repository mount is
+  likewise a worker boundary, not a per-tool sandbox or Controller grant.
+- Controller-owned `github.*` capabilities remain mode-independent and retain
+  GitHub Gateway binding, revalidation, validation, and deferred-mutation
+  gates. A user-configured GitHub MCP with its own credential is instead a
+  trusted external extension; its direct effects are not protected by those
+  Gateway guarantees. No Action-owned GitHub MCP backend is added.
 
 ### Deferred and out of scope
 
-- Complete Skills, Plugin, Bundle, and MCP ecosystem compatibility for native
-  mode remains deferred to Codex 6. This change does not publish v0.8.0, create
-  or move a release tag, or change the locked DSH version.
+- This change does not publish v0.8.0, create or move a release tag, change the
+  locked DSH version, add an Action-owned GitHub MCP backend, or implement
+  Session/Resume. Full v0.8 qualification remains a separate follow-up.
 
 ## [0.7.0] - 2026-08-25
 

@@ -12,7 +12,7 @@ import type { SecurityPolicy } from "../security/policy.js";
 import { removeMarkdownImages } from "../security/redaction.js";
 import type { EffectiveTools } from "../tools/registry.js";
 import type { AgentEngine, AgentToolManifest, AgentTurnRequest } from "../agent/contracts.js";
-import type { EffectiveExtensionPlan } from "../extensions/plan.js";
+import type { AnyExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
 import { nativeToolSchema, type NativeToolId } from "../tools/schema.js";
 import type { DshComposition } from "../dsh/composition.js";
 import { selectDshComposition } from "../dsh/select-composition.js";
@@ -36,7 +36,7 @@ export interface RunAgentTaskOptions {
 export interface DshTurnMetadata {
   readonly isolationReport: DshIsolationReport;
   readonly rawStdout?: string;
-  readonly extensionAudit?: EffectiveExtensionPlan["audit"];
+  readonly extensionAudit?: AnyExtensionAudit;
   readonly toolReceipts?: readonly DshToolReceipt[];
   readonly observedTools?: readonly string[];
 }
@@ -75,7 +75,7 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
     private readonly inputs: ActionInputs,
     private readonly policy: SecurityPolicy,
     private readonly runtime?: DshRuntime,
-    private readonly extensions?: EffectiveExtensionPlan,
+    private readonly extensions?: ExtensionPlan,
     composition?: DshComposition,
   ) {
     this.version = inputs.dshVersion;
@@ -85,9 +85,13 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
   public async runTurn(request: AgentTurnRequest) {
     const { nativeTools, controllerTools, extensionTools } = partitionDshToolPlanes(request.tools);
     const actualExtensionIds = extensionTools.map(({ id }) => id).sort();
-    const plannedExtensionIds = (this.extensions?.manifests ?? []).map(({ id }) => id).sort();
-    if (JSON.stringify(actualExtensionIds) !== JSON.stringify(plannedExtensionIds)) {
-      throw new Error("DSH extension manifest set does not match the Controller plan");
+    if (this.extensions?.profileName === "github-action") {
+      const plannedExtensionIds = this.extensions.manifests.map(({ id }) => id).sort();
+      if (JSON.stringify(actualExtensionIds) !== JSON.stringify(plannedExtensionIds)) {
+        throw new Error("DSH extension manifest set does not match the Controller plan");
+      }
+    } else if (actualExtensionIds.length > 0) {
+      throw new Error("Native DSH extensions must not be represented as Controller manifests");
     }
     const result = await runDsh(
       {

@@ -447,11 +447,15 @@ function workerModulePath(workerProfilePath: string, relativeEntry: string): str
     : join(workerProfilePath, ...parts);
 }
 
-/** Resolve approved direct plugins from the controlled Profile installation root. */
+/** Resolve admitted direct plugins from the run-scoped Profile installation root. */
 export async function resolveInstalledPluginModuleSpecifiers(options: {
   readonly packageRoot: string;
   readonly workerProfilePath: string;
-  readonly plan: Pick<EffectiveExtensionPlan, "plugins">;
+  readonly plan: {
+    readonly plugins: readonly {
+      readonly definition: { readonly id: string; readonly package: string };
+    }[];
+  };
 }): Promise<Readonly<Record<string, string>>> {
   const packageRootReal = await realpath(options.packageRoot);
   const resolved: Record<string, string> = {};

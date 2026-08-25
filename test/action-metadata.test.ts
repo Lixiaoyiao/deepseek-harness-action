@@ -43,7 +43,7 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
     expect(metadata).toMatch(/dsh-mode:[\s\S]*?default: "controlled"/u);
     expect(metadata).toMatch(
-      /dsh-mode:[\s\S]*?experimental native uses the official DSH headless composition inside the Action's Docker safety boundary/iu,
+      /dsh-mode:[\s\S]*?experimental native uses the official DSH headless Profile, MCP, Bundle, Plugin, Skill, Subagent, and Workflow graph inside the Action's Docker safety boundary/iu,
     );
     expect(metadata).toMatch(/permission-profile:[\s\S]*?default: "strict"/u);
     expect(metadata).toMatch(/allowed-tools:[\s\S]*?default: "\[\]"/u);
@@ -56,13 +56,17 @@ describe("Marketplace action metadata", () => {
     expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
     expect(metadata).toContain(`default: "${DSH_VERSION}"`);
     expect(metadata).toMatch(/extensions and writes require a full name@sha256 digest/iu);
-    expect(metadata).toMatch(/mcp-config:[\s\S]*?stdio startup executes trusted worker code/iu);
+    expect(metadata).toMatch(
+      /mcp-config:[\s\S]*?controlled declares exact tools\/budgets; native declares the server, owner-level workspaceWrite\/network, toolCallTimeoutMs, and explicit credentialEnv\/credentialHeaders because DSH discovers tools/iu,
+    );
     expect(metadata).toMatch(/plugin-config:[\s\S]*?startup executes trusted worker code/iu);
     expect(metadata).toMatch(/extension-profile-digest:[\s\S]*?SHA-256 digest/u);
     expect(metadata).toMatch(
       /tool-receipts:[\s\S]*?bounded controller\/DSH receipt arrays and truncation metadata/u,
     );
-    expect(metadata).toMatch(/effective-tools:[\s\S]*?granted by the Controller/u);
+    expect(metadata).toMatch(
+      /effective-tools:[\s\S]*?never describes native DSH inventory; use result-json\.toolPolicy\.observedTools/iu,
+    );
     expect(metadata).toMatch(/result-json:[\s\S]*?tool-policy ownership audit/u);
     expect(metadata).toMatch(/result-json:[\s\S]*?known-authority audit/u);
     expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
@@ -121,7 +125,7 @@ describe("Marketplace action metadata", () => {
     expect(new Set(lockedDshVersions)).toEqual(new Set([DSH_VERSION]));
   });
 
-  it("keeps active CI on the locked app-boot and MCP runtime smoke", async () => {
+  it("keeps active CI on the frozen-SHA locked native ecosystem smoke", async () => {
     const workflowsDirectory = new URL("../.github/workflows/", import.meta.url);
     const activeWorkflows = (await readdir(workflowsDirectory, { withFileTypes: true })).filter(
       (entry) => entry.isFile() && /\.ya?ml$/u.test(entry.name),
@@ -132,6 +136,14 @@ describe("Marketplace action metadata", () => {
     }
 
     const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    const profileFixture = await readFile(
+      new URL("./fixtures/prepare-native-ecosystem-profile.mjs", import.meta.url),
+      "utf8",
+    );
+    const llmFixture = await readFile(
+      new URL("./fixtures/native-ecosystem-llm-server.mjs", import.meta.url),
+      "utf8",
+    );
     expect(ci).toContain("cp package.json package-lock.json");
     expect(ci).toContain("npm ci --no-audit --no-fund --omit=dev --ignore-scripts");
     expect(ci).toContain(`const expectedVersion = "${DSH_VERSION}"`);
@@ -142,14 +154,58 @@ describe("Marketplace action metadata", () => {
     expect(ci).toContain("native-launcher.mjs");
     expect(ci).toContain("action-policy.mjs");
     expect(ci).toContain("Verify exact candidate checkout");
-    expect(ci).toContain("native headless Docker read-only smoke ok");
+    expect(ci).toContain("Linux Docker frozen-SHA DSH rc.2 native ecosystem smoke");
+    expect(ci).toContain("CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}");
+    expect(ci).toContain('git diff --exit-code "$CANDIDATE_SHA"');
+    expect(ci).toContain("persist-credentials: false");
+    expect(ci).toContain("prepare-native-ecosystem-profile.mjs");
+    expect(ci).toContain("native-ecosystem-llm-server.mjs");
+    expect(ci).toContain("/dsh-home/profiles/github-action,readonly");
+    expect(ci).toContain("native frozen-SHA ecosystem Docker smoke ok");
     expect(ci).toContain('"ctx.tools.schemas(agent)"');
-    expect(ci).toContain('index("read") != null');
+    expect(ci).toContain('has("effectiveTools") | not');
+    expect(ci).toContain('index("skill") != null');
+    expect(ci).toContain('index("subagent") != null');
+    expect(ci).toContain('index("workflow") != null');
+    expect(ci).toContain('index("mcp__fixture__add") != null');
+    expect(ci).toContain('index("native_bundle_echo") != null');
+    expect(ci).toContain('index("native_plugin_echo") != null');
     expect(ci).toContain("--security-opt no-new-privileges \\");
+    expect(ci).toContain(
+      "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+    );
     expect(ci).not.toMatch(/no-new-privileges \+\s+--pids-limit/u);
     expect(ci).not.toContain("lib/bin.js");
     expect(ci).not.toContain("--dump-config");
     expect(ci).not.toContain("policy.patch.yml");
+
+    expect(profileFixture).toContain('join(home, "profiles", "github-action")');
+    expect(profileFixture).toContain('join(workspace, ".dsh", "skills", "native-dsh")');
+    expect(profileFixture).toContain('join(workspace, ".agents", "skills", "native-agents")');
+    expect(profileFixture).toContain('"@deepseek-ai/dsh-base"');
+    expect(profileFixture).toContain('"@deepseek-ai/dsh-headless"');
+    expect(profileFixture).toContain("bundlePackage");
+    expect(profileFixture).toContain('name: "@deepseek-ai/dsh-mcp-client"');
+    expect(profileFixture).toContain('transport: "stdio"');
+    expect(profileFixture).toContain('command: "/opt/dsh-action/package/native-mcp-fixture"');
+    expect(profileFixture).toContain("#!/bin/sh\\nexec node");
+    expect(profileFixture).toContain('chmod(join(runtime, "native-mcp-fixture"), 0o700)');
+    expect(profileFixture).toContain("native-ecosystem-plugin/index.mjs");
+    expect(profileFixture).toContain("NATIVE_DSH_SKILL_BODY_MARKER");
+    expect(profileFixture).toContain("NATIVE_AGENTS_SKILL_BODY_MARKER");
+
+    for (const marker of [
+      '"skill"',
+      '"mcp__fixture__add"',
+      '"native_bundle_echo"',
+      '"native_plugin_echo"',
+      '"subagent"',
+      '"workflow"',
+      "CHILD_NATIVE_MARKER_OK",
+      "NATIVE_WORKFLOW_MARKER",
+    ]) {
+      expect(llmFixture).toContain(marker);
+    }
   });
 
   it("ships the rc.2 extension contract in dist without older release-candidate drift", async () => {

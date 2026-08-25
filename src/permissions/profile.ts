@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import type { AgentToolManifest } from "../agent/contracts.js";
-import type { ExtensionAudit } from "../extensions/plan.js";
+import type { AnyExtensionAudit } from "../extensions/plan.js";
 import {
   autonomyToolSchema,
   type AllowedToolId,
@@ -135,7 +135,7 @@ export function buildPermissionAudit(options: {
   readonly resolution: PermissionResolution;
   readonly manifests: readonly AgentToolManifest[];
   readonly additionalDenials?: readonly ToolDenial[];
-  readonly extensions?: ExtensionAudit;
+  readonly extensions?: AnyExtensionAudit;
   readonly mediatedWeb?: boolean;
 }): PermissionAudit {
   const effectiveTools = sortedUnique(options.manifests.map(({ id }) => id));
@@ -155,21 +155,37 @@ export function buildPermissionAudit(options: {
   const commandBridge = options.manifests.some(
     ({ provider, permissions }) => provider === "command" && permissions.includes("network"),
   );
-  const bridge = commandBridge || options.extensions?.network === true;
+  const extensionBridge =
+    options.extensions?.profile === "github-action"
+      ? options.extensions.network
+      : options.extensions?.workerNetwork === true;
+  const bridge = commandBridge || extensionBridge;
   const mediatedWeb = options.mediatedWeb ?? effective.has("native.web-search");
   const network: PermissionAudit["network"] = bridge
     ? "bridge"
     : mediatedWeb
       ? "mediated-web"
       : "host-gateway";
-  const trustedExtensions = (options.extensions?.entries ?? []).map(
-    ({ id, kind, network, tools }) => ({
-      id,
-      kind,
-      network,
-      workspaceWrite: tools.some(({ permissions }) => permissions.includes("workspace-write")),
-    }),
-  );
+  const nativeExtensions =
+    options.extensions?.profile === "headless-native" ? options.extensions : undefined;
+  const controlledExtensions =
+    options.extensions?.profile === "github-action" ? options.extensions : undefined;
+  const trustedExtensions =
+    nativeExtensions !== undefined
+      ? nativeExtensions.entries.map(({ id, kind }) => ({
+          id,
+          kind,
+          network: nativeExtensions.workerNetwork,
+          workspaceWrite: options.manifests.some(({ permissions }) =>
+            permissions.includes("write"),
+          ),
+        }))
+      : (controlledExtensions?.entries ?? []).map(({ id, kind, network, tools }) => ({
+          id,
+          kind,
+          network,
+          workspaceWrite: tools.some(({ permissions }) => permissions.includes("workspace-write")),
+        }));
   const auditWithoutDigest = {
     schemaVersion: 1 as const,
     profile: options.resolution.profile,

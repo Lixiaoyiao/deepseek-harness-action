@@ -10,9 +10,11 @@ import {
 } from "@deepseek-ai/dsh-launch-environment";
 
 const NAME = "dsh-action-native";
-const PROFILE = "headless";
+// The Action installs the locked runtime and any admitted out-of-tree packages
+// in this run-scoped Profile directory. Its ordered Bundle layers still begin
+// with the official rc.2 headless template.
+const PROFILE = "github-action";
 const PROFILE_ROOT_FILENAME = "action-native-root.yml";
-const OBSERVATION_PATH = "/dsh-home/action-state/native-observed-tools.jsonl";
 const INSTALL_ANCHOR = createRequire(import.meta.url).resolve("@deepseek-ai/dsh/package.json");
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,128}$/u;
 
@@ -22,7 +24,7 @@ function inheritedEnvironment() {
   );
 }
 
-function observeRootAgent(host) {
+function observeRootAgent(host, observationPath) {
   let observed = false;
   host.on("agent/created", ({ agent }) => {
     if (observed) return;
@@ -44,7 +46,7 @@ function observeRootAgent(host) {
       throw new Error("native tool observation received an invalid DSH inventory");
     }
     appendFileSync(
-      OBSERVATION_PATH,
+      observationPath,
       `${JSON.stringify({
         schemaVersion: 1,
         source: "ctx.tools.schemas(agent)",
@@ -65,6 +67,7 @@ async function main() {
   }
 
   const profile = loadProfile(NAME, PROFILE, INSTALL_ANCHOR, dshHome);
+  const observationPath = join(dshHome, "action-state", "native-observed-tools.jsonl");
   const patches = [
     ...profile.layers.flatMap((layer) => layer.patches),
     ...profile.patches,
@@ -117,7 +120,7 @@ async function main() {
       globalThis.structuredClone(patches),
       (host) => {
         root = host;
-        observeRootAgent(host);
+        observeRootAgent(host, observationPath);
         const signal = (code) => {
           if (exitStarted) process.exit(code);
           requestExit(code);

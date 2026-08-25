@@ -1,0 +1,6 @@
+{
+  "name": "@dsh-action/native-ecosystem-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": "./index.mjs"
+}

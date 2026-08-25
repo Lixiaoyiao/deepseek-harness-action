@@ -1,8 +1,7 @@
 import {
-  configuredHttpSecrets,
-  configuredPluginSecrets,
-  configuredStdioSecrets,
-  type EffectiveExtensionPlan,
+  configuredMcpDefinitionSecrets,
+  configuredPluginDefinitionSecrets,
+  type ExtensionPlan,
 } from "../extensions/plan.js";
 
 export type ControllerAuthoritySource =
@@ -64,15 +63,12 @@ function compareExtensionSources(
 }
 
 function extensionCredentialSources(
-  extensions: EffectiveExtensionPlan | undefined,
+  extensions: ExtensionPlan | undefined,
 ): readonly ExtensionAuthoritySource[] {
   if (extensions === undefined) return [];
   const sources: ExtensionAuthoritySource[] = [];
   for (const server of extensions.mcpServers) {
-    const credentials =
-      server.definition.transport === "stdio"
-        ? configuredStdioSecrets(server.definition.args, server.definition.env)
-        : configuredHttpSecrets(server.definition.url, server.definition.headers);
+    const credentials = configuredMcpDefinitionSecrets(server.definition);
     if (credentials.length > 0) {
       sources.push({
         kind: "extension-credential",
@@ -84,7 +80,7 @@ function extensionCredentialSources(
     }
   }
   for (const plugin of extensions.plugins) {
-    if (configuredPluginSecrets(plugin.definition.config).length > 0) {
+    if (configuredPluginDefinitionSecrets(plugin.definition).length > 0) {
       sources.push({
         kind: "extension-credential",
         extensionKind: "plugin",
@@ -98,7 +94,7 @@ function extensionCredentialSources(
 }
 
 /** Build a value-only audit of Action-known authority sources without credential material. */
-export function buildAuthorityAudit(extensions?: EffectiveExtensionPlan): AuthorityAudit {
+export function buildAuthorityAudit(extensions?: ExtensionPlan): AuthorityAudit {
   return {
     schemaVersion: 1,
     scope: "action-known-sources",

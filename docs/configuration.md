@@ -123,12 +123,25 @@ the same Action-owned outer boundaries:
 - overall deadlines, phase timeouts, cancellation, cleanup, bounded outputs,
   and secret redaction remain Action-owned.
 
-Native currently rejects `isolation: none`. It also fails closed when
-Action-managed MCP, Bundle, or Plugin configuration is non-empty. Complete
-native Skills/Plugin/Bundle/MCP ecosystem compatibility is deliberately
-deferred to Codex 6. Maintainer-defined `command.*` tools and the closed
-Controller `github.*` catalog are a separate execution plane and are not tied
-to either DSH composition.
+Native rejects `isolation: none`, but accepts a separate definition-only native
+extension schema. MCP servers load through official
+`@deepseek-ai/dsh-mcp-client`; configured Bundles become official Profile
+layers; and direct Plugins load through Cordis. The locked base/headless graph
+continues to own repository Skills, Subagents, Workflows, discovery,
+registration, invocation, and final model-visible inventory. The Action does
+not turn those capabilities into controlled providers, manifests, grants, or
+per-tool budgets.
+
+Native extension definitions still pass Action-owned outer admission. They
+must come from trusted workflow configuration; package sources remain exact
+pins; package acquisition disables lifecycle scripts and preserves the runtime
+package inventory audit; and real Controller credentials remain forbidden.
+Owner-level `network` and `workspaceWrite` fields request process authority. If
+one owner requests bridge networking, every capability in the native worker
+shares bridge egress. A read/write mount likewise belongs to the complete
+worker and follows Action trust/write policy; neither setting is a per-tool
+sandbox. Maintainer-defined `command.*` tools and the closed Controller
+`github.*` catalog remain a separate execution plane in both compositions.
 
 ### Validation
 
@@ -145,20 +158,23 @@ with deterministic validation commands for your repository.
 
 ### Agent tools and extensions
 
-| Input                  | Default                                         | Purpose                                                                                                                            |
-| ---------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `permission-profile`   | `strict`                                        | Agent tool preset: `strict`, `standard`, or `custom`. This does not grant GitHub authority.                                        |
-| `allowed-tools`        | `[]`                                            | JSON array of exact canonical tool IDs requested in addition to preset expansion. Configuration alone does not authorize a tool.   |
-| `disallowed-tools`     | `[]`                                            | JSON array of exact canonical tool IDs. Deny always wins.                                                                          |
-| `tool-config`          | `{"schemaVersion":1,"commands":[]}`             | Versioned manifest of maintainer-owned, fixed-argv `command.*` tools.                                                              |
-| `mcp-config`           | `{"schemaVersion":1,"servers":[]}`              | Versioned allowlist for official DSH MCP servers and their tools.                                                                  |
-| `plugin-config`        | `{"schemaVersion":1,"bundles":[],"plugins":[]}` | Versioned allowlist for DSH Bundles and direct Cordis plugins.                                                                     |
-| `allow-plugin-install` | `false`                                         | Separate startup gate for an effective third-party Bundle or plugin package. Installation and startup execute trusted worker code. |
+| Input                  | Default                                         | Purpose                                                                                                                                              |
+| ---------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `permission-profile`   | `strict`                                        | Agent tool preset: `strict`, `standard`, or `custom`. This does not grant GitHub authority.                                                          |
+| `allowed-tools`        | `[]`                                            | JSON array of exact canonical tool IDs requested in addition to preset expansion. Configuration alone does not authorize a tool.                     |
+| `disallowed-tools`     | `[]`                                            | JSON array of exact canonical tool IDs. Deny always wins.                                                                                            |
+| `tool-config`          | `{"schemaVersion":1,"commands":[]}`             | Versioned manifest of maintainer-owned, fixed-argv `command.*` tools.                                                                                |
+| `mcp-config`           | `{"schemaVersion":1,"servers":[]}`              | Versioned official DSH MCP config. Controlled declares exact tools/budgets; native declares only server transport and owner/process requirements.    |
+| `plugin-config`        | `{"schemaVersion":1,"bundles":[],"plugins":[]}` | Versioned DSH Bundle/direct Cordis Plugin config. Controlled declares tools; native entries are definition-only official Profile/Cordis composition. |
+| `allow-plugin-install` | `false`                                         | Separate startup gate for a controlled-effective or native-admitted Bundle/Plugin package. Installation and startup execute trusted worker code.     |
 
 All three manifests require `schemaVersion: 1`; unknown fields and unsupported
-versions fail closed. MCP, Bundle, and Plugin configuration uses the advanced
-`custom` profile path. `strict` remains accepted for v0.4 compatibility, but
-`standard` with extension configuration is rejected.
+versions fail closed. In controlled mode, MCP, Bundle, and Plugin configuration
+uses the advanced `custom` profile path. `strict` remains accepted for v0.4
+compatibility, but `standard` with controlled extension configuration is
+rejected. Native uses its separate definition-only schema and does not accept
+`mcp.*` or `plugin.*` entries in `allowed-tools` / `disallowed-tools`, because
+those would misrepresent DSH-discovered inventory as Controller grants.
 
 ## Permission model
 
@@ -213,6 +229,12 @@ complete capability graph. The existing profile and exact canonical IDs still
 resolve the Action-owned Controller tool plane and its audit; observation of a
 DSH-native tool is not a grant from that profile.
 
+In particular, native `mcp-config` / `plugin-config` entries must not be paired
+with `mcp.*` or `plugin.*` allow/deny IDs. Native definitions do not list tools,
+so such an ID would be a fabricated Controller inventory and is rejected.
+Use `observedTools` after the real DSH graph starts to inspect dynamic native
+MCP, Bundle, and Plugin names.
+
 Canonical Action tool IDs are:
 
 - `workspace.read`, `workspace.search`, and `workspace.edit`;
@@ -261,17 +283,25 @@ deterministically ordered `knownSources` distinguish:
   the worker;
 - the Controller-owned DeepSeek credential, whose real key is not exposed to
   the worker and is mediated through a run-scoped proxy; and
-- one generic `extension-credential` record for each effective MCP server or
-  direct plugin configured with credential-like explicit workflow data.
+- one generic `extension-credential` record for each controlled-effective or
+  native-admitted MCP server or direct plugin configured with credential-like
+  explicit workflow data.
 
-Extension entries identify only the effective owner kind and ID. They never
+Extension entries identify only the admitted owner kind and ID. They never
 contain or classify a secret value, hash, header, argv/env value, URL
-path/query, or secret count. A configured extension with no effective tool is
-not reported. The entry records an accepted configuration plan, not observed
-extension startup or credential use. The audit is intentionally incomplete: it
-records only sources the Action knows, configures, or mediates and does not
-prove that trusted worker or extension code lacks network, runner ambient
-state, or other authority. It is observability, not authorization.
+path/query, or secret count. Controlled owners with no effective tool are not
+reported; native has no predicted tool grant, so an admitted definition is the
+plan fact. The entry does not prove extension startup or credential use. The
+audit is intentionally incomplete: it records only sources the Action knows,
+configures, or mediates and does not prove that trusted worker or extension
+code lacks network, runner ambient state, or other authority. It is
+observability, not authorization.
+
+A user-configured GitHub MCP and its own credential are an external extension
+authority. Calls made directly by that extension do not pass through the
+Controller `github.*` Gateway and do not receive its repository/entity/head
+binding, revalidation, Controller validation, deferred mutation, or receipts.
+The Action does not provide a GitHub MCP backend.
 
 ### Controlled native tool IDs
 
@@ -360,9 +390,7 @@ redacted, and returned to the model only as untrusted data.
 
 ## MCP
 
-This section applies to controlled mode. Native currently rejects any non-empty
-`mcp-config` rather than claiming compatibility with DSH's full native MCP
-ecosystem.
+### Controlled MCP
 
 In controlled mode, `mcp-config` is a strict server-and-tool allowlist for the official DSH MCP
 client. Defining a server does not grant any tool. Each selected tool must also
@@ -420,10 +448,70 @@ See [`examples/controlled-extensions.yml`](../examples/controlled-extensions.yml
 for both configuration families and [Extension contracts](extension-contracts.md)
 for identifier normalization, inventory checks, limits, and receipt behavior.
 
+### Native MCP
+
+Native uses the same official rc.2 MCP client but a deliberately different
+schema. The workflow defines a server owner and connection; DSH discovers,
+registers, and exposes its tools at runtime.
+
+```yaml
+with:
+  dsh-mode: native
+  isolation: docker
+  mcp-config: |
+    {
+      "schemaVersion": 1,
+      "servers": [{
+        "id": "repo-index",
+        "transport": "stdio",
+        "command": "/opt/dsh-extensions/bin/repository-index-mcp",
+        "args": ["--stdio"],
+        "cwd": ".",
+        "env": {},
+        "credentialEnv": {"SERVICE_VALUE": "${{ secrets.REPO_INDEX_KEY }}"},
+        "network": false,
+        "workspaceWrite": false,
+        "toolCallTimeoutMs": 15000
+      }]
+    }
+```
+
+The native server fields are `id`, `transport`, the transport connection
+fields, owner-level `network` and `workspaceWrite`, server-level
+`toolCallTimeoutMs`, reconnect settings, and the explicit `credentialEnv` or
+`credentialHeaders` map when that owner needs a credential. There is no `tools` array,
+`permissions`, canonical `mcp.*` grant, `maxCalls`, `maxOutputBytes`, or
+per-tool timeout. `toolCallTimeoutMs` is an official-client server execution
+limit, not an Action grant or prediction of inventory. Adding a native
+`mcp.*` ID to `allowed-tools` or `disallowed-tools` fails closed.
+
+Native stdio commands retain the same executable/path restrictions documented
+above. A Streamable HTTP definition uses an HTTP(S) `url`, ordinary `headers`,
+and an explicit `credentialHeaders` map for credential values,
+and always has `network: true`. If any native MCP, Bundle, or Plugin requests
+network, Docker bridge egress belongs to the entire native worker, not only to
+that server. Likewise, `workspaceWrite: true` requests outer trusted-write
+admission but cannot create it; any actual writable mount is shared by the
+whole worker.
+
+An MCP server may receive its own explicit credential through `credentialEnv`
+or `credentialHeaders`. Those values are merged into the official client's
+`env` or `headers`, registered for masking regardless of key name, and emit only
+a value-free known-authority record—never a value or hash. Credential-like
+legacy values in ordinary fields retain the compatible detector, but new native
+definitions should use the explicit channel. The
+real DeepSeek key and Action GitHub token remain forbidden. If this is a GitHub
+MCP using a user-supplied credential, its direct effects are external extension
+authority and are outside the Controller GitHub Gateway's binding,
+revalidation, validation, deferred-mutation, and receipt guarantees.
+
+Native MCP names discovered by DSH, including dynamically registered tools,
+appear in `result-json.toolPolicy.observedTools`. That inventory is telemetry;
+native never produces a Controller `effectiveTools` inventory for it.
+
 ## Bundle, Plugin, and Profile loading
 
-This section applies to controlled mode. Native currently rejects non-empty
-Bundle or Plugin configuration; support remains deferred to Codex 6.
+### Controlled Bundle and Plugin loading
 
 In controlled mode, `plugin-config` declares DSH Bundles and direct Cordis plugins. There is no
 separate user-provided Profile input: after validating trusted workflow inputs,
@@ -480,6 +568,72 @@ configuration says `network: false`.
 > immutably, and use runner-level filesystem/network isolation appropriate for
 > trusted code.
 
+### Native Bundle, Plugin, Skill, Subagent, and Workflow loading
+
+Native `plugin-config` is definition-only. A Bundle is appended to the locked
+official Profile's Bundle layers; a direct Plugin is resolved from its
+installed exact package and inserted as a Cordis row. Neither is translated
+into an Action provider or controlled tool manifest.
+
+```yaml
+with:
+  dsh-mode: native
+  isolation: docker
+  allow-plugin-install: "true"
+  plugin-config: |
+    {
+      "schemaVersion": 1,
+      "bundles": [{
+        "id": "repo-audit",
+        "package": "@example/dsh-repository-audit-bundle",
+        "source": "1.2.3",
+        "network": false,
+        "workspaceWrite": false
+      }],
+      "plugins": [{
+        "id": "lint",
+        "package": "@example/dsh-lint-plugin",
+        "source": "2.3.4",
+        "network": false,
+        "workspaceWrite": false,
+        "config": {"mode": "safe-json"},
+        "credentialConfig": {"connection": "${{ secrets.LINT_SERVICE_KEY }}"}
+      }]
+    }
+```
+
+Native package entries contain no tool names, permission arrays, timeouts,
+output/call budgets, or `plugin.*` grants. DSH and Cordis decide what registers
+and becomes model-visible; the resulting names can only be audited through
+runtime `observedTools`. Package sources still require an exact semver or a
+GitHub `git+https` URL pinned to a lowercase 40-character commit, and
+`allow-plugin-install: "true"` remains an independent trusted-workflow gate.
+Acquisition uses `--ignore-scripts`; after installation the Action verifies the
+package identity/pin, lock provenance, and preservation of every pre-existing
+top-level runtime package before starting DSH.
+
+For a direct Plugin, `credentialConfig` is merged into its Cordis `config`
+object after validation; its top-level keys cannot overlap ordinary `config`.
+Every explicit value is masked and represented only by the Plugin owner's
+value-free authority record. Use `credentialConfig` even when the Plugin's key
+is named something generic such as `connection`.
+
+The locked official base/headless graph also keeps native Skill, Subagent, and
+Workflow semantics. In particular, project Skills under `.dsh/skills` and
+`.agents/skills` are discovered from the run-scoped `.git`-less Action
+workspace. They are not copied into an Action extension registry or wrapped as
+controlled providers. Subagent and Workflow capabilities likewise remain DSH
+graph capabilities and appear in `observedTools` when visible to the root
+Agent.
+
+`network` and `workspaceWrite` are owner-level admission declarations, not
+per-tool isolation. One native owner requesting network puts the complete
+native worker on Docker bridge networking. A writable mount is also shared by
+the entire worker and remains subject to the Action's trusted-write gates.
+Bundle patches and Plugin startup are trusted code even with lifecycle scripts
+disabled, so review the complete transitive graph and enforce runner-level
+filesystem and network controls.
+
 ## Docker, workspace, and network
 
 - Workers use a disposable, run-scoped `.git`-less workspace. DSH home, npm
@@ -491,9 +645,12 @@ configuration says `network: false`.
   through an inspected `host.docker.internal` gateway. This is not a port
   allowlist; runner firewall policy protects other host services.
 - A network-enabled extension gives the co-hosted DSH process Docker bridge
-  egress. It is not a destination allowlist.
+  egress. It is not a destination allowlist. In native mode, one requesting
+  owner gives that path to every capability in the native worker.
 - Network namespaces and mounts apply to the complete DSH process, not one tool.
-  All co-hosted extension owners must agree on network and workspace-write mode.
+  Controlled owners must agree on network and workspace-write mode. Native
+  owner declarations are outer admission requests; the actual bridge and
+  read/write mount remain whole-worker capabilities selected by Action policy.
 - The validation container currently uses bridge networking for validation
   commands, including dependency installation. On a self-hosted or
   corporate-network runner, repository validation code may reach services
@@ -589,14 +746,14 @@ The Action writes outputs on success, neutral completion, and failure paths.
 | `dsh-composition`          | Stable composition identity: `github-action-controlled`, `dsh-native-headless`, or `none`.                                                                                   |
 | `permission-profile`       | Resolved `strict`, `standard`, `custom`, or `none` Agent profile.                                                                                                            |
 | `effective-tools`          | Backward-compatible JSON array from Action permission resolution. In native mode it is not the DSH inventory; use `result-json.toolPolicy.observedTools` for that telemetry. |
-| `network-access`           | Effective `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` worker path.                                                                                        |
-| `workspace-write`          | Whether the effective Agent tools can modify the disposable workspace.                                                                                                       |
-| `trusted-extensions`       | JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for the run.                                                                                         |
+| `network-access`           | Effective `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` worker path. A native `bridge` path belongs to the whole worker.                                    |
+| `workspace-write`          | Whether Action policy enables a writable disposable workspace. In native mode the mount is a whole-worker boundary, not a per-tool grant.                                    |
+| `trusted-extensions`       | JSON array of Action-admitted MCP, Bundle, and Plugin owners. Native network/write values describe shared worker authority, not per-tool grants.                             |
 | `duration-ms`              | Total Controller duration in milliseconds.                                                                                                                                   |
 | `comment-id`               | Sticky progress/result comment ID when tracking was available.                                                                                                               |
 | `error-code`               | Stable failure code; empty on success or neutral completion.                                                                                                                 |
 | `error-message`            | Redacted and bounded failure message.                                                                                                                                        |
-| `extension-profile-digest` | SHA-256 digest of the redacted Controller-generated extension audit Profile; empty when unavailable.                                                                         |
+| `extension-profile-digest` | SHA-256 digest of the redacted controlled extension Profile or native admission audit; empty when unavailable.                                                               |
 | `tool-receipts`            | JSON object with bounded Controller/DSH receipt arrays and truncation metadata. Receipts are telemetry, never authorization.                                                 |
 | `task-output`              | JSON-encoded Controller-validated value for a configured task schema; otherwise empty.                                                                                       |
 | `result-json`              | Versioned structured envelope described below.                                                                                                                               |
@@ -611,7 +768,7 @@ composition as `dsh-mode`, `dsh-composition`, and `result-json.dsh`.
 `result-json` is a `schemaVersion: 1` envelope containing the applicable status,
 operation, summary, selected DSH mode and composition at `.dsh.mode` and
 `.dsh.composition`, policy and permission
-audit, effective controlled-extension audit, bounded receipts,
+audit, composition-aware extension admission audit, bounded receipts,
 loop timing/counts, actual isolation report, publication, Controller validation,
 validation integrity, write result, comment ID, and error. The additive
 top-level `authority` audit records the Action-known
@@ -624,7 +781,9 @@ Native mode has `policyOwner: dsh`, the runtime-derived `observedTools`
 telemetry, and no Controller `effectiveTools` claim. The existing `permissions`
 object and scalar `permission-profile` and `effective-tools` outputs retain
 their backward-compatible Action-policy shape; they must not be read as the
-native DSH inventory. A validated task may add an optional `taskOutput` field without
+native DSH inventory. Native extension audit entries record admitted owners and
+their whole-worker network/write requests; they do not predict tool inventory
+or grant a capability. A validated task may add an optional `taskOutput` field without
 changing the fixed envelope or schema version. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
 `validation_failed`, or `denied`. Known errors expose stable `error.code`,
 `error.category`, and `error.retryable` identity. `error.phase` separately

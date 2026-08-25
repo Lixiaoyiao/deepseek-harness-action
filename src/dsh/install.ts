@@ -1,7 +1,7 @@
 import { copyFile, readFile, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { EffectiveExtensionPlan } from "../extensions/plan.js";
+import type { ExtensionPlan } from "../extensions/plan.js";
 import {
   assertExtensionPackagesAbsentFromRuntimeLock,
   auditExtensionRuntimeLock,
@@ -41,7 +41,7 @@ function insideDirectory(parent: string, child: string): boolean {
 
 export async function verifyInstalledExtensions(
   packageRoot: string,
-  plan: EffectiveExtensionPlan,
+  plan: ExtensionPlan,
 ): Promise<void> {
   const installed = [
     ...plan.bundles.map((extension) => ({ extension, bundle: true })),
@@ -143,7 +143,7 @@ export async function installedTopLevelPackageInventory(
 
 /** @internal Reject direct extension identities that collide with the locked runtime. */
 export function assertExtensionPackagesDoNotShadowRuntime(
-  plan: Pick<EffectiveExtensionPlan, "packageDependencies">,
+  plan: Pick<ExtensionPlan, "packageDependencies">,
   inventory: Readonly<Record<string, string>>,
 ): void {
   const collision = Object.keys(plan.packageDependencies).find(
@@ -173,7 +173,7 @@ export function assertInstalledRuntimeInventoryUnchanged(
 /** Capture the Controller-owned inventory before any extension package is installed. */
 export async function captureExtensionInstallBaseline(
   runtime: DshRuntime,
-  plan: EffectiveExtensionPlan,
+  plan: ExtensionPlan,
 ): Promise<void> {
   if (Object.keys(plan.packageDependencies).length === 0) return;
   runtime.installedPackageInventory = await installedTopLevelPackageInventory(runtime.packageRoot);
@@ -183,10 +183,7 @@ export async function captureExtensionInstallBaseline(
 }
 
 /** Validate the pre-install inventory and lock before npm may resolve extensions. */
-export function assertExtensionInstallBaseline(
-  runtime: DshRuntime,
-  plan: EffectiveExtensionPlan,
-): void {
+export function assertExtensionInstallBaseline(runtime: DshRuntime, plan: ExtensionPlan): void {
   const baseline = runtime.installedPackageInventory;
   const lockBaseline = runtime.installedPackageLockBaseline;
   if (baseline === undefined || lockBaseline === undefined) {
@@ -201,7 +198,7 @@ export function assertExtensionInstallBaseline(
 /** Verify post-install package identity, inventory preservation, and lock provenance. */
 export async function auditFreshExtensionInstallation(
   runtime: DshRuntime,
-  plan: EffectiveExtensionPlan,
+  plan: ExtensionPlan,
 ): Promise<void> {
   const baseline = runtime.installedPackageInventory;
   const lockBaseline = runtime.installedPackageLockBaseline;
@@ -219,14 +216,17 @@ export async function auditFreshExtensionInstallation(
     lockText: await readFile(join(runtime.packageRoot, "package-lock.json"), "utf8"),
     baseline: lockBaseline,
     extensionDependencies: plan.packageDependencies,
-    expectedRootName: "dsh-profile-github-action",
+    expectedRootName:
+      plan.profileName === "github-action"
+        ? "dsh-profile-github-action"
+        : "dsh-profile-headless-native",
   });
 }
 
 /** Re-audit a reused extension lock before another worker receives it. */
 export async function auditReusedExtensionInstallation(
   runtime: DshRuntime,
-  plan: EffectiveExtensionPlan,
+  plan: ExtensionPlan,
 ): Promise<void> {
   const lockBaseline = runtime.installedPackageLockBaseline;
   const installedLock = runtime.installedExtensionRuntimeLock;
@@ -239,7 +239,10 @@ export async function auditReusedExtensionInstallation(
     lockText: await readFile(join(runtime.packageRoot, "package-lock.json"), "utf8"),
     baseline: lockBaseline,
     extensionDependencies: plan.packageDependencies,
-    expectedRootName: "dsh-profile-github-action",
+    expectedRootName:
+      plan.profileName === "github-action"
+        ? "dsh-profile-github-action"
+        : "dsh-profile-headless-native",
   });
   if (currentLock.digest !== installedLock.digest) {
     throw new DshConfigurationError("Reused extension runtime package-lock digest changed");

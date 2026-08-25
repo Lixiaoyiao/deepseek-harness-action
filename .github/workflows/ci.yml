@@ -32,10 +32,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Linux Docker locked DSH rc.2 runtime smoke
+      - name: Linux Docker frozen-SHA DSH rc.2 native ecosystem smoke
         shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          git diff --exit-code "$CANDIDATE_SHA" -- \
+            .github/workflows/ci.yml assets/dsh package.json package-lock.json test/fixtures
           runtime_dir="$(mktemp -d)"
           smoke_dir="$(mktemp -d)"
           smoke_network="dsh-native-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -47,7 +53,19 @@ jobs:
               wait "$server_pid" 2>/dev/null || true
             fi
             docker network rm "$smoke_network" >/dev/null 2>&1 || true
-            docker run --rm --mount "type=bind,source=$runtime_dir,target=/runtime" --mount "type=bind,source=$smoke_dir,target=/smoke" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /runtime/node_modules /runtime/package.json /runtime/package-lock.json /runtime/action-launcher.mjs /runtime/native-launcher.mjs /smoke/home /smoke/workspace /smoke/native.stdout /smoke/native.stderr /smoke/endpoint.json /smoke/server.log || true
+            docker run --rm \
+              --mount "type=bind,source=$runtime_dir,target=/runtime" \
+              --mount "type=bind,source=$smoke_dir,target=/smoke" \
+              docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
+              rm -rf -- \
+                /runtime/node_modules /runtime/package.json /runtime/package-lock.json \
+                /runtime/action-launcher.mjs /runtime/native-launcher.mjs \
+                /runtime/native-mcp-server.mjs /runtime/native-mcp-fixture \
+                /runtime/cordis.patch.yml \
+                /runtime/action-native-root.yml /runtime/pnpm-workspace.yaml \
+                /smoke/home /smoke/workspace /smoke/native.stdout \
+                /smoke/native.stderr /smoke/endpoint.json /smoke/server.log \
+                /smoke/native-requests.jsonl || true
             rmdir "$runtime_dir" "$smoke_dir" || true
           }
           trap cleanup EXIT
@@ -155,50 +173,15 @@ jobs:
           process.stdout.write("locked DSH rc.2 app-boot/MCP runtime ok\n");
           NODE
 
-          SMOKE_ROOT="$smoke_dir" node --input-type=module <<'NODE'
-          import { randomUUID } from "node:crypto";
-          import { mkdir, writeFile } from "node:fs/promises";
-          import { join } from "node:path";
-
-          const root = process.env.SMOKE_ROOT;
-          if (root === undefined) throw new Error("SMOKE_ROOT is required");
-          const home = join(root, "home");
-          const profile = join(home, "profiles", "headless");
-          for (const directory of [
-            profile,
-            join(home, "action-state"),
-            join(home, "sessions"),
-            join(home, "attachments"),
-            join(root, "workspace"),
-          ]) {
-            await mkdir(directory, { recursive: true, mode: 0o700 });
-          }
-          await writeFile(
-            join(profile, "package.json"),
-            `${JSON.stringify(
-              {
-                name: "dsh-profile-headless",
-                private: true,
-                dependencies: {},
-                dsh: {
-                  profile: {
-                    bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"],
-                  },
-                },
-              },
-              undefined,
-              2,
-            )}\n`,
-          );
-          await writeFile(join(profile, "cordis.patch.yml"), "[]\n");
-          await writeFile(join(profile, "action-native-root.yml"), "[]\n");
-          await writeFile(join(home, ".anonymous-user-id"), `${randomUUID()}\n`);
-          await writeFile(join(home, "action-state", "native-observed-tools.jsonl"), "");
-          await writeFile(join(root, "workspace", "README.md"), "native smoke workspace\n");
-          NODE
+          SMOKE_ROOT="$smoke_dir" RUNTIME_ROOT="$runtime_dir" \
+            node test/fixtures/prepare-native-ecosystem-profile.mjs
+          [[ ! -e "$smoke_dir/workspace/.git" ]]
 
           endpoint="$smoke_dir/endpoint.json"
-          DSH_FIXTURE_HOST=0.0.0.0 node test/fixtures/llm-server.mjs >"$endpoint" 2>"$smoke_dir/server.log" &
+          request_log="$smoke_dir/native-requests.jsonl"
+          DSH_FIXTURE_HOST=0.0.0.0 DSH_NATIVE_REQUEST_LOG="$request_log" \
+            node test/fixtures/native-ecosystem-llm-server.mjs \
+            >"$endpoint" 2>"$smoke_dir/server.log" &
           server_pid=$!
           for _ in {1..60}; do
             [[ -s "$endpoint" ]] && break
@@ -221,6 +204,7 @@ jobs:
             --mount "type=bind,source=$smoke_dir/home/action-state,target=/dsh-home/action-state" \
             --mount "type=bind,source=$smoke_dir/home/sessions,target=/dsh-home/sessions" \
             --mount "type=bind,source=$smoke_dir/home/attachments,target=/dsh-home/attachments" \
+            --mount "type=bind,source=$runtime_dir,target=/dsh-home/profiles/github-action,readonly" \
             --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
             --workdir /workspace \
             --env CI=true --env HOME=/dsh-home --env DSH_HOME=/dsh-home \
@@ -230,21 +214,37 @@ jobs:
             --env "DEEPSEEK_SEARCH_BASE_URL=http://host.docker.internal:$fixture_port" \
             docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
             node --expose-internals /opt/dsh-action/package/native-launcher.mjs \
-            'Return the required review JSON for this read-only native smoke.' \
+            'Use the requested native ecosystem capabilities and return review JSON.' \
             >"$smoke_dir/native.stdout" 2>"$smoke_dir/native.stderr"
 
           [[ ! -s "$smoke_dir/native.stderr" ]]
           jq -e '
             .protocolVersion == 1 and .operation == "review" and
-            .state == "final" and .summary == "controlled profile booted"
+            .state == "final" and .summary == "native ecosystem booted"
           ' "$smoke_dir/native.stdout" >/dev/null
           jq -s -e '
             length == 1 and .[0].schemaVersion == 1 and
             .[0].source == "ctx.tools.schemas(agent)" and
-            (.[0].observedTools | length > 0) and
-            (.[0].observedTools | index("read") != null) and
-            (.[0].observedTools | index("glob") != null) and
-            (.[0].observedTools | index("grep") != null) and
+            (.[0] | has("effectiveTools") | not) and
+            (.[0].observedTools | index("skill") != null) and
+            (.[0].observedTools | index("subagent") != null) and
+            (.[0].observedTools | index("workflow") != null) and
+            (.[0].observedTools | index("mcp__fixture__add") != null) and
+            (.[0].observedTools | index("native_bundle_echo") != null) and
+            (.[0].observedTools | index("native_plugin_echo") != null) and
             (.[0].observedTools | index("workspace.read") == null)
           ' "$smoke_dir/home/action-state/native-observed-tools.jsonl" >/dev/null
-          echo "native headless Docker read-only smoke ok"
+          jq -s -e '
+            map(tostring) | join("\n") as $transcript |
+            ($transcript | contains("native-dsh")) and
+            ($transcript | contains("native-agents")) and
+            ($transcript | contains("NATIVE_DSH_SKILL_BODY_MARKER")) and
+            ($transcript | contains("NATIVE_AGENTS_SKILL_BODY_MARKER")) and
+            ($transcript | contains("mcp__fixture__add")) and
+            ($transcript | contains("42")) and
+            ($transcript | contains("NATIVE_BUNDLE_MARKER")) and
+            ($transcript | contains("NATIVE_PLUGIN_MARKER:CORDIS_NATIVE_CI")) and
+            ($transcript | contains("CHILD_NATIVE_MARKER_OK")) and
+            ($transcript | contains("NATIVE_WORKFLOW_MARKER"))
+          ' "$request_log" >/dev/null
+          echo "native frozen-SHA ecosystem Docker smoke ok"

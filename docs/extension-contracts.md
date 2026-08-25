@@ -21,9 +21,16 @@ define a second plugin system:
   matching exact requested/effective/denied audit.
 - Experimental `NativeComposition` uses the locked official DSH
   `0.1.1-rc.2` headless composition without constructing the controlled
-  `github-action` Profile or its ToolRuntime policy adapter. DSH owns the
-  internal capability graph and the Action reports its runtime-observed tool
-  names as telemetry.
+  `github-action` grant Profile or its ToolRuntime policy adapter. Its native
+  Profile composes configured Bundles as official layers, official MCP client
+  rows, and direct Cordis Plugins. DSH owns discovery, registration, the
+  internal capability graph, and final inventory; the Action reports its
+  runtime-observed tool names as telemetry.
+- The native schema is definition-only and owner/process-shaped. It contains no
+  declared tools, Action manifests, grants, per-tool budgets, or controlled
+  receipts. Repository `.dsh/skills` / `.agents/skills` plus rc.2 Subagent and
+  Workflow capabilities remain native DSH graph inputs rather than Action
+  providers.
 - The v0.3 placeholder `ExtensionProvider` seam has been removed. MCP and
   plugin tools are not routed through a parallel Action plugin registry.
 
@@ -51,9 +58,11 @@ the existing Controller result.
 
 `dsh-mode` is independent of those schema versions. `controlled` is the
 compatible default; `native` selects the official headless composition and is
-currently Docker-only. A native run fails closed if Action-managed MCP, Bundle,
-or Plugin configuration is non-empty. Complete native ecosystem compatibility
-is deferred to Codex 6 rather than approximated with controlled Profile rows.
+currently Docker-only. Controlled and native parse different schema-v1
+extension shapes: controlled declares exact canonical tools and budgets, while
+native declares only owners, official loading definitions, and process-level
+network/workspace requirements. A controlled-shaped native configuration fails
+closed instead of being reinterpreted.
 
 The Controller accepts only `@deepseek-ai/dsh@0.1.1-rc.2` and the matching
 official package family. Every directly used DSH package is an exact top-level
@@ -168,6 +177,87 @@ official normalization and hash contract. Package tools must declare a unique
 runtime name beginning with `plugin__<extension-id>__`. A model-facing runtime
 name never replaces the canonical Action ID as an authorization key.
 
+## Native official-ecosystem composition
+
+This section applies only to `dsh-mode: native`. Native prepares a run-scoped
+official Profile over the exact `0.1.1-rc.2` package family. Its manifest keeps
+the locked `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-headless` layers and
+appends each admitted Bundle package to `dsh.profile.bundles`. Its Cordis patch
+inserts each MCP owner as an official `@deepseek-ai/dsh-mcp-client` row and each
+direct Plugin as the verified installed module plus its JSON `config`. There is
+no Action plugin/provider registry in this path.
+
+The native schema is definition-only:
+
+- A stdio MCP owner declares `id`, `transport`, `command`, optional `args`,
+  ordinary `env`, explicit `credentialEnv`, and repository-relative `cwd`,
+  owner-level `network` and `workspaceWrite`, server-level `toolCallTimeoutMs`,
+  and reconnect settings.
+- A Streamable HTTP MCP owner declares the same common fields plus HTTP(S)
+  `url`, ordinary `headers`, and explicit `credentialHeaders`; its `network` is
+  necessarily `true`.
+- A Bundle declares `id`, `package`, exact `source`, `network`, and
+  `workspaceWrite`.
+- A direct Plugin declares the Bundle fields plus a JSON `config` object and an
+  explicit string-valued `credentialConfig` map.
+
+None of those definitions contains a `tools` list, canonical `mcp.*` or
+`plugin.*` grants, permission arrays, `maxCalls`, `maxOutputBytes`, per-tool
+timeouts, Action manifests, or controlled receipts. The MCP
+`toolCallTimeoutMs` is the official client's server-wide execution limit, not a
+Controller prediction or grant. Native `mcp.*` / `plugin.*` values in
+`allowed-tools` or `disallowed-tools` are rejected because DSH owns that
+inventory.
+
+At boot, official DSH/Cordis code performs discovery, registration, and
+dispatch. Configured Bundle and Plugin capabilities therefore join the same
+native graph as the base/headless ecosystem. The official Skill system also
+discovers project Skills under `.dsh/skills` and `.agents/skills` directly from
+the disposable `.git`-less Action workspace. The locked Subagent and Workflow
+services remain graph-native and can register their normal capabilities. None
+of Skills, Subagents, or Workflows is repackaged as an Action extension or
+placed behind the controlled ToolRuntime adapter.
+
+The Action observes the root Agent's actual model-facing schema after that
+graph exists. Dynamic MCP, Bundle, and Plugin names are therefore reported only
+in `toolPolicy.observedTools`, alongside native Skill/Subagent/Workflow names
+when visible. Observation is inventory telemetry, not invocation evidence or a
+Controller grant; native has no `effectiveTools`, requested/denied inventory,
+or synthetic receipt policy for those DSH tools.
+
+Outer admission remains Action-owned. Any non-empty native extension plan
+requires eligible trusted same-repository authority, repository access, and
+extension loading authority. An owner requesting network additionally requires
+Action network authority; an owner requesting `workspaceWrite` requires
+trusted-write and modify-workspace authority. These declarations cannot elevate
+the run. They are process requirements: one `network: true` owner selects
+Docker bridge egress for the entire native worker, and a read/write repository
+mount is likewise shared by every capability in that worker. Neither is a
+per-owner or per-tool sandbox.
+
+Bundle and Plugin packages still require an exact npm semver or a GitHub source
+pinned to a lowercase 40-character commit, plus the separate
+`allow-plugin-install=true` gate.
+Installation uses `--ignore-scripts`, rejects shadowing the locked runtime,
+verifies installed identity/pin and lock provenance, and rejects any removal or
+version change in the pre-existing top-level runtime package inventory. Those
+checks do not sandbox Bundle patches or Plugin startup; admitted packages and
+stdio MCP executables remain trusted worker code.
+
+An MCP or direct Plugin may receive its own credential-like workflow values.
+Native definitions put arbitrary-name secrets in `credentialEnv`,
+`credentialHeaders`, or `credentialConfig`. The Action merges those values into
+the official extension config, masks them without relying on name heuristics,
+and represents them in `result-json.authority`
+only as one generic owner record, without values, hashes, counts, headers,
+argv/env fields, or URL path/query material. The real DeepSeek key, Action
+GitHub token, their reserved names, and GitHub Actions OIDC variables remain
+forbidden in configuration and absent from the worker. A user-configured GitHub
+MCP with its own credential is therefore trusted external extension authority:
+its direct calls do not inherit the Controller `github.*` Gateway's binding,
+revalidation, Controller validation, deferred mutation, postconditions, or
+receipts. This Action does not implement a GitHub MCP backend.
+
 ## Controlled Profile, Bundle, and Cordis loading
 
 This section applies only to `dsh-mode: controlled`. For Docker execution, the Controller generates
@@ -238,10 +328,13 @@ without publishing configuration data. The GitHub and DeepSeek records are
 Controller-owned credentials whose real bytes are not exposed to the worker;
 DeepSeek access is mediated by the run-scoped proxy. A generic
 `extension-credential` record is emitted once for an effective MCP server or
-direct plugin when the existing credential-like detector finds explicit
-workflow configuration for that owner. It carries only the extension kind and
+direct Plugin in controlled mode when the compatible credential-like detector
+finds a value, or for an admitted native MCP/direct Plugin when either that
+detector or an explicit native credential channel supplies a value. It carries only the extension kind and
 ID: no secret type, value, hash, count, header, argv/env field, or URL
-path/query is included. Configured but non-effective extensions are omitted.
+path/query is included. Controlled configured-but-non-effective extensions are
+omitted; native has no predicted effective-tool set, so admission is the
+reported plan fact.
 
 This is an Action-known-source audit, not a claim of complete worker authority.
 Trusted extension startup/background code may still use its network grant,
@@ -250,15 +343,16 @@ Neither this audit nor extension receipts prove the absence of those paths.
 
 The Controller-secret rejection scan walks all nested object keys and string
 values in both manifests and checks percent-decoded variants, including encoded
-URL path and query material. The extension-secret masking set is intentionally
-narrower: beyond withheld HTTP URL path/query candidates, only credential-like
-stdio argv fields, env/header entries, and plugin configuration values nested
-under credential-like keys are included. Ordinary plugin values such as `read`
-and `safe-json` are not registered as secrets or masked.
+URL path and query material. It runs again immediately before Profile rendering
+against ambient GitHub, OIDC, and DeepSeek Controller values, so renaming one of
+those values under an extension key does not expose it. Controlled secret
+masking retains its narrower compatible heuristic. Native additionally masks
+every explicit `credentialEnv`, `credentialHeaders`, and `credentialConfig`
+value regardless of its key name. Ordinary plugin values such as `read` and
+`safe-json` are not registered as secrets or masked.
 
-The following registration and restriction contract applies to controlled mode;
-native rejects Action-managed MCP, Bundle, and Plugin configuration before
-worker startup. Every selected controlled server starts with
+The following registration and restriction contract applies only to controlled
+mode. Every selected controlled server starts with
 `failOnStartupError: true`. Only a tool that
 is selected by `allowed-tools` and survives Controller policy to become
 effective is required to appear in the runtime inventory; its absence fails
@@ -272,19 +366,32 @@ that the global restriction could not hide. The monotonic ToolRuntime guard also
 denies every invocation without an effective Controller rule. MCP results remain
 untrusted data even when the server and workflow configuration are trusted.
 
-The official client exposes a server-wide `toolCallTimeoutMs`. The Action sets
+Native also sets `failOnStartupError: true`, but then leaves discovery,
+registration, model visibility, and dispatch to the official client and DSH
+graph. It does not run the controlled known/allowed/visible equality checks,
+because its workflow definition contains no predicted tool list. The actual
+root inventory is recorded as `observedTools` only.
+
+For a controlled server, the official client exposes a server-wide
+`toolCallTimeoutMs`. The Action sets
 it to the largest timeout among that server's effective, allowed tools so a
 slower approved tool is not cut off by a faster sibling. The Action-owned
 ToolRuntime policy then applies each tool's own timeout as an additional,
 potentially tighter upper bound.
 
+For a native server, `toolCallTimeoutMs` is provided directly by the
+definition-only owner schema and remains one official-client server-wide
+timeout. There is no Action per-tool timeout or call/output budget layered on
+the DSH-native inventory.
+
 ## Process-level permission compatibility
 
-`read`, `workspace-write`, and `network` are declared on every extension tool,
-but filesystem mounts and network namespaces belong to the whole DSH process.
-Every extension tool must include `read`, because all co-hosted extension code
-shares the Agent's repository view. The Controller therefore rejects unsafe
-co-tenancy rather than pretending to provide per-tool process isolation:
+In controlled mode, `read`, `workspace-write`, and `network` are declared on
+every extension tool, but filesystem mounts and network namespaces belong to
+the whole DSH process. Every controlled extension tool must include `read`,
+because all co-hosted extension code shares the Agent's repository view. The
+Controller therefore rejects unsafe controlled co-tenancy rather than
+pretending to provide per-tool process isolation:
 
 - all configured tools from one MCP server or package must agree on
   `workspace-write`;
@@ -295,11 +402,15 @@ co-tenancy rather than pretending to provide per-tool process isolation:
 - any effective MCP, Bundle, or plugin requires Docker isolation. The host-only
   `dsh-executable` compatibility path never loads extensions.
 
-Experimental native mode does not attempt this Action-managed extension
-co-tenancy calculation: any non-empty MCP, Bundle, or Plugin configuration is
-rejected. Native itself also requires Docker, even for trusted-read work. The
-same Action code still selects the read-only/read-write mount and Docker network
-from outer trust and write policy.
+Native does not copy that tool-shaped co-tenancy calculation. Its owner-level
+flags are outer admission and audit facts, not DSH tool permissions. Any native
+owner with `network: true` selects bridge egress for the entire worker; if no
+owner requests it, the worker uses the internal-network path. Any owner with
+`workspaceWrite: true` requires trusted-write authority, but the actual
+read-only/read-write repository mount is selected for the complete native
+worker by Action trust/write policy. A `false` value cannot sandbox one owner
+from a mount or network path available to another capability. Native itself
+always requires Docker, including trusted-read work.
 
 `network=false` does not mean that the worker has no network path. When no owner
 requests network, the worker uses an internal Docker network that blocks

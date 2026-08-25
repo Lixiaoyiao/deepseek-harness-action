@@ -6,7 +6,7 @@ import type {
   ToolProvider,
 } from "../agent/contracts.js";
 import type { SecurityPolicy } from "../security/policy.js";
-import type { EffectiveExtensionPlan } from "../extensions/plan.js";
+import type { ExtensionPlan } from "../extensions/plan.js";
 import {
   resolvePermissionRequest,
   type PermissionProfile,
@@ -60,7 +60,7 @@ export interface EffectiveTools {
   readonly github: readonly GitHubToolId[];
   readonly permission: PermissionResolution;
   readonly permissionDenials: readonly ToolDenial[];
-  readonly extensions?: EffectiveExtensionPlan;
+  readonly extensions?: ExtensionPlan;
 }
 
 export function resolveEffectiveTools(

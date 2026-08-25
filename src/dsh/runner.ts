@@ -32,11 +32,12 @@ import type { TaskOutputSchema } from "./task-output.js";
 import type { DshOperation, DshOutput } from "./schema.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
 import {
-  configuredHttpSecrets,
-  configuredPluginSecrets,
-  configuredStdioSecrets,
+  assertControllerCredentialsAbsentFromExtensionPlan,
+  configuredMcpDefinitionSecrets,
+  configuredPluginDefinitionSecrets,
+  emptyNativeExtensionPlan,
 } from "../extensions/plan.js";
-import type { EffectiveExtensionPlan, ExtensionAudit } from "../extensions/plan.js";
+import type { AnyExtensionAudit, ExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
 import type { NativeToolId } from "../tools/schema.js";
 import { DSH_VERSION } from "../release.js";
 import {
@@ -117,7 +118,7 @@ export interface DshRunRequest {
   readonly nativeTools?: readonly NativeToolId[];
   /** Trusted maintainer schema. It affects task result validation only. */
   readonly taskOutputSchema?: TaskOutputSchema;
-  readonly extensions?: EffectiveExtensionPlan;
+  readonly extensions?: ExtensionPlan;
   readonly signal?: AbortSignal;
 }
 
@@ -128,7 +129,7 @@ export interface DshIsolationReport {
   readonly processIsolated: boolean;
   readonly networkIsolated: boolean;
   readonly workspaceAccess: "read-only" | "read-write";
-  readonly extensionProfile: "github-action" | "none";
+  readonly extensionProfile: "github-action" | "headless-native" | "none";
   readonly extensionDigest?: string;
   readonly limitations: readonly string[];
 }
@@ -138,7 +139,7 @@ export interface DshRunResult {
   readonly rawStdout?: string;
   readonly durationMs: number;
   readonly isolationReport: DshIsolationReport;
-  readonly extensionAudit?: ExtensionAudit;
+  readonly extensionAudit?: AnyExtensionAudit;
   readonly toolReceipts?: readonly DshToolReceipt[];
   /** DSH-owned model-visible inventory observed from the actual Agent scope. */
   readonly observedTools?: readonly string[];
@@ -207,8 +208,12 @@ const EMPTY_EXTENSION_CONFIGURATION_DIGEST = createHash("sha256")
   )
   .digest("hex");
 
-function effectiveExtensionPlan(request: DshRunRequest): EffectiveExtensionPlan {
+function effectiveExtensionPlan(
+  request: DshRunRequest,
+  composition: DshComposition,
+): ExtensionPlan {
   if (request.extensions !== undefined) return request.extensions;
+  if (composition.extensionPlanProfile === "headless-native") return emptyNativeExtensionPlan();
   const audit: ExtensionAudit = {
     schemaVersion: 1,
     profile: "github-action",
@@ -282,11 +287,12 @@ async function resolveHostDshExecutableIdentity(
 
 function isolationReport(request: DshRunRequest, composition: DshComposition): DshIsolationReport {
   const nativeTools = effectiveNativeTools(request);
-  const plan = effectiveExtensionPlan(request);
+  const plan = effectiveExtensionPlan(request, composition);
   const metadata = composition.isolationMetadata({
     isolation: request.isolation,
     nativeTools,
     extensionNetwork: plan.network,
+    extensionsConfigured: plan.mcpServers.length + plan.bundles.length + plan.plugins.length > 0,
   });
   if (request.isolation === "docker") {
     return {
@@ -295,9 +301,11 @@ function isolationReport(request: DshRunRequest, composition: DshComposition): D
       repoToolsEnabled: metadata.repoToolsEnabled,
       processIsolated: true,
       networkIsolated: !plan.network,
-      workspaceAccess: workerWorkspaceWrite(request) ? "read-write" : "read-only",
+      workspaceAccess: workerWorkspaceWrite(request, composition) ? "read-write" : "read-only",
       extensionProfile: metadata.extensionProfile,
-      ...(composition.actionManagedExtensionProfile ? { extensionDigest: plan.digest } : {}),
+      ...(composition.actionManagedExtensionProfile || plan.audit.entries.length > 0
+        ? { extensionDigest: plan.digest }
+        : {}),
       limitations: metadata.limitations,
     };
   }
@@ -307,7 +315,7 @@ function isolationReport(request: DshRunRequest, composition: DshComposition): D
     repoToolsEnabled: metadata.repoToolsEnabled,
     processIsolated: false,
     networkIsolated: false,
-    workspaceAccess: workerWorkspaceWrite(request) ? "read-write" : "read-only",
+    workspaceAccess: workerWorkspaceWrite(request, composition) ? "read-write" : "read-only",
     extensionProfile: metadata.extensionProfile,
     limitations: metadata.limitations,
   };
@@ -335,40 +343,44 @@ function effectiveNativeTools(request: DshRunRequest): readonly NativeToolId[] {
   );
 }
 
-function workerWorkspaceWrite(request: DshRunRequest): boolean {
+function workerWorkspaceWrite(request: DshRunRequest, composition: DshComposition): boolean {
+  if (composition.toolPolicyOwner === "dsh") return request.trust === "trusted-write";
+  const plan = effectiveExtensionPlan(request, composition);
+  if (plan.profileName !== "github-action") {
+    throw new DshConfigurationError(
+      "Controlled workspace authority requires a github-action extension plan",
+    );
+  }
   return (
     effectiveNativeTools(request).includes("workspace.edit") ||
-    effectiveExtensionPlan(request).tools.some((tool) =>
-      tool.permissions.includes("workspace-write"),
-    )
+    plan.tools.some((tool) => tool.permissions.includes("workspace-write"))
   );
 }
 
-function controllerSecrets(
+function withheldControllerSecrets(
   request: DshRunRequest,
   environment: NodeJS.ProcessEnv,
 ): readonly string[] {
-  const extensionValues =
-    request.extensions === undefined
-      ? []
-      : [
-          ...request.extensions.mcpServers.flatMap((server) =>
-            server.definition.transport === "stdio"
-              ? configuredStdioSecrets(server.definition.args, server.definition.env)
-              : configuredHttpSecrets(server.definition.url, server.definition.headers),
-          ),
-          ...request.extensions.plugins.flatMap((plugin) =>
-            configuredPluginSecrets(plugin.definition.config),
-          ),
-        ];
   return [
     ...new Set([
       request.apiKey,
       ...(request.controllerCredentials ?? []),
       ...collectControllerSecrets(environment),
-      ...extensionValues,
     ]),
   ].filter((secret) => secret.length >= 4);
+}
+
+function extensionSecrets(extensions: ExtensionPlan): readonly string[] {
+  return [
+    ...new Set([
+      ...extensions.mcpServers.flatMap(({ definition }) =>
+        configuredMcpDefinitionSecrets(definition),
+      ),
+      ...extensions.plugins.flatMap(({ definition }) =>
+        configuredPluginDefinitionSecrets(definition),
+      ),
+    ]),
+  ];
 }
 
 function assertWorkerLaunchHasNoControllerCredentials(
@@ -418,11 +430,12 @@ async function runControllerPhase<T>(options: {
 
 function runtimeExtensionAudit(
   request: DshRunRequest,
-  extensions: EffectiveExtensionPlan,
+  extensions: ExtensionPlan,
   runtime: DshRuntime,
   composition: DshComposition,
-): ExtensionAudit | undefined {
-  if (request.isolation !== "docker" || !composition.actionManagedExtensionProfile) {
+): AnyExtensionAudit | undefined {
+  if (request.isolation !== "docker") return undefined;
+  if (!composition.actionManagedExtensionProfile && extensions.audit.entries.length === 0) {
     return undefined;
   }
   return runtime.installedExtensionRuntimeLock === undefined
@@ -446,10 +459,24 @@ export async function runDsh(
   if (request.trust === "trusted-write" && request.isolation !== "docker") {
     throw new DshIsolationUnavailableError("Trusted-write DSH execution requires Docker isolation");
   }
-  const extensions = effectiveExtensionPlan(request);
   const composition: DshComposition =
     dependencies.composition ?? PRODUCTION_DSH_COMPOSITION.create();
+  const extensions = effectiveExtensionPlan(request, composition);
   composition.assertCompatible?.({ isolation: request.isolation, extensions });
+  const extensionCount =
+    extensions.mcpServers.length + extensions.bundles.length + extensions.plugins.length;
+  if (extensionCount > 0 && request.trust === "untrusted") {
+    throw new DshConfigurationError("MCP, Bundle, and Plugin extensions require trusted authority");
+  }
+  if (
+    extensions.profileName === "headless-native" &&
+    extensions.workspaceWrite &&
+    request.trust !== "trusted-write"
+  ) {
+    throw new DshConfigurationError(
+      "Native extension workspace-write requires trusted-write Action authority",
+    );
+  }
   if (
     request.isolation !== "docker" &&
     (extensions.mcpServers.length > 0 ||
@@ -504,7 +531,16 @@ export async function runDsh(
       setupBudgetMs = Math.max(0, setupBudgetMs - Math.max(0, now() - phaseStartedAt));
     }
   };
-  const secrets = controllerSecrets(request, environment);
+  const controllerSecrets = withheldControllerSecrets(request, environment);
+  try {
+    assertControllerCredentialsAbsentFromExtensionPlan(extensions, controllerSecrets);
+  } catch (error: unknown) {
+    throw new DshConfigurationError(
+      error instanceof Error ? error.message : "Extension credential validation failed",
+      { cause: error },
+    );
+  }
+  const secrets = [...new Set([...controllerSecrets, ...extensionSecrets(extensions)])];
   const requestedWorkspace = resolve(request.workspacePath ?? process.cwd());
   const workspace = await runSetup(async () => {
     await assertDirectory(requestedWorkspace, "workspacePath");
@@ -555,7 +591,11 @@ export async function runDsh(
   let executeForCleanup:
     ((spec: DshProcessSpec, limits: DshProcessLimits) => Promise<DshProcessResult>) | undefined;
   try {
-    if (extensions.network && effectiveTools.includes("native.bash")) {
+    if (
+      composition.toolPolicyOwner === "controller" &&
+      extensions.network &&
+      effectiveTools.includes("native.bash")
+    ) {
       throw new DshConfigurationError(
         "native.bash cannot share a worker with a bridge-networked extension; remove native.bash or the networked extension",
       );
@@ -572,7 +612,7 @@ export async function runDsh(
       ...(dshExecutableIdentity === undefined ? {} : { dshExecutableIdentity }),
       extensionConfigurationDigest: extensions.configurationDigest,
       nativeRuntimeTools: composition.runtimeToolNames(effectiveTools),
-      workspaceWrite: workerWorkspaceWrite(request),
+      workspaceWrite: workerWorkspaceWrite(request, composition),
       network: extensions.network,
       profileSchemaVersion: composition.profileSchemaVersion,
     });
@@ -660,7 +700,7 @@ export async function runDsh(
         plan: extensions,
         nativeTools: effectiveTools,
         trust: request.trust,
-        workspaceWrite: workerWorkspaceWrite(request),
+        workspaceWrite: workerWorkspaceWrite(request, composition),
         expectedOperation: request.operation,
         task: prompt,
         workspacePath: workspace,
@@ -739,7 +779,7 @@ export async function runDsh(
     const workerEnvironment = buildDshWorkerEnvironment({
       source: environment,
       dshHome: localDshHome,
-      permissionMode: workerWorkspaceWrite(request) ? "workspace-write" : "read-only",
+      permissionMode: workerWorkspaceWrite(request, composition) ? "workspace-write" : "read-only",
       proxyBaseUrl: proxy.workerBaseUrl,
       proxyToken: proxy.workerToken,
       realDeepSeekApiKey: request.apiKey,
@@ -769,7 +809,7 @@ export async function runDsh(
         environment,
         workerEnvironment,
         proxy,
-        workspaceWrite: workerWorkspaceWrite(request),
+        workspaceWrite: workerWorkspaceWrite(request, composition),
       });
     } else {
       spec = { ...preparedComposition.launchPlan, env: workerEnvironment };
