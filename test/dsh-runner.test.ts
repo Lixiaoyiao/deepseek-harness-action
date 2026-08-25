@@ -357,6 +357,7 @@ describe("runDsh", () => {
     const runtimeToolNames = vi.fn(() => ["read"]);
     const composition = {
       id: "test-composition",
+      toolPolicyOwner: "controller",
       profileSchemaVersion: 7,
       runtimeToolNames,
       prepareBasePatch,
@@ -456,6 +457,7 @@ describe("runDsh", () => {
     const prepareDocker = vi.fn(() => Promise.resolve(prepared));
     const composition = {
       id: "test-docker-composition",
+      toolPolicyOwner: "controller",
       profileSchemaVersion: 9,
       runtimeToolNames: vi.fn(() => ["glob", "grep", "read", "read_image"]),
       prepareBasePatch: vi.fn(() => Promise.resolve({ patchPath: customPatchPath })),

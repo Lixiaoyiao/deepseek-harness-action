@@ -184,6 +184,23 @@ Canonical Action tool IDs are:
 The DSH runtime may use a different model-facing name. Authorization always uses
 the canonical Action ID.
 
+The tool-policy audit uses four deliberately distinct terms:
+
+- `requestedTools` are the canonical capabilities requested by preset expansion
+  and `allowed-tools`, including requests later denied.
+- `effectiveTools` exist only when `policyOwner` is `controller`. They are the
+  exact canonical set the Controller finally granted and exposed to the model
+  after every deny, trust, provider, and extension intersection.
+- `deniedTools` are requested capabilities that were not granted, paired with
+  the Controller's reason. `disallowedTools` remains the narrower raw explicit
+  deny input and is not a synonym.
+- `observedTools` is reserved for a future `policyOwner: dsh` composition and
+  would report names actually observed by that DSH runtime. Observation is
+  telemetry, not a Controller grant, so it must never be labeled effective.
+
+`ControlledComposition` is the only production composition today, and its
+`policyOwner` is always `controller`. There is no native or DSH-owned run mode.
+
 ### Native tools
 
 - `workspace.read` and `workspace.search` operate on the run-scoped `.git`-less
@@ -484,7 +501,7 @@ The Action writes outputs on success, neutral completion, and failure paths.
 | `commit-sha`               | Commit created by a successful fix; empty when not applicable.                                                               |
 | `trust`                    | Resolved `untrusted`, `trusted-read`, `trusted-write`, or `none` execution trust.                                            |
 | `permission-profile`       | Resolved `strict`, `standard`, `custom`, or `none` Agent profile.                                                            |
-| `effective-tools`          | JSON array left after preset, deny, trust, extension, and policy intersection.                                               |
+| `effective-tools`          | Backward-compatible JSON array of exact canonical tools granted by the current Controller policy.                            |
 | `network-access`           | Effective `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` worker path.                                        |
 | `workspace-write`          | Whether the effective Agent tools can modify the disposable workspace.                                                       |
 | `trusted-extensions`       | JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for the run.                                         |
@@ -507,8 +524,13 @@ no-change outcomes.
 operation, summary, policy and permission audit, effective extension audit,
 bounded receipts, loop timing/counts, actual isolation report, publication,
 Controller validation, validation integrity, write result, comment ID, and
-error. A validated task may add an optional `taskOutput` field without changing
-the fixed envelope or schema version. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
+error. When permissions resolve, the additive top-level `toolPolicy` audit has
+`schemaVersion: 1`, `policyOwner: controller`, and the current
+`requestedTools`, `effectiveTools`, and `deniedTools`. It deliberately has no
+`observedTools`. The existing `permissions` object and the scalar
+`permission-profile` and `effective-tools` outputs retain their prior shape and
+meaning. A validated task may add an optional `taskOutput` field without
+changing the fixed envelope or schema version. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
 `validation_failed`, or `denied`. Known errors expose stable `error.code`,
 `error.category`, and `error.retryable` identity. `error.phase` separately
 records the Controller lifecycle location where the error surfaced; it does not

@@ -90,6 +90,8 @@ export type ToolConfiguration = z.infer<typeof toolConfigurationSchema>;
 export type CommandToolId = `command.${string}`;
 export type McpToolId = `mcp.${string}.${string}`;
 export type PluginToolId = `plugin.${string}.${string}`;
+export const toolPolicyOwnerSchema = z.enum(["controller", "dsh"]);
+export type ToolPolicyOwner = z.infer<typeof toolPolicyOwnerSchema>;
 export const githubToolSchema = z.enum([
   "github.issue.labels.set",
   "github.issue.assignees.set",

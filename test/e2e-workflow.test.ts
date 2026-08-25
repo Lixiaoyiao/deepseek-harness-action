@@ -48,6 +48,23 @@ describe("trusted core E2E workflow", () => {
     expect(integrity).not.toContain("permission-profile: standard");
   });
 
+  it("locks controlled tool-policy semantics into the strict and MCP golden paths", () => {
+    const strict = stepBlock(workflow, "Assert strict/Profile/Bundle result");
+    const mcp = stepBlock(workflow, "Assert MCP allow/deny and receipts");
+
+    for (const assertion of [strict, mcp]) {
+      expect(assertion).toContain('.toolPolicy.policyOwner == "controller"');
+      expect(assertion).toContain(".toolPolicy.effectiveTools == .permissions.effectiveTools");
+      expect(assertion).toContain('(.toolPolicy | has("observedTools") | not)');
+    }
+    expect(strict).toContain(
+      '.toolPolicy.requestedTools == ["workspace.edit","workspace.read","workspace.search"]',
+    );
+    expect(mcp).toContain(
+      '.toolPolicy.requestedTools == ["mcp.fixture.echo","mcp.fixture.hidden","workspace.read","workspace.search"]',
+    );
+  });
+
   it("requires an authoritative blocked integrity result without a write envelope", () => {
     const assertion = stepBlock(workflow, "Assert integrity failure");
 

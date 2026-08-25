@@ -31,7 +31,13 @@ import { inspectWorkspaceChanges } from "./write/workspace.js";
 import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
-import { buildPermissionAudit, type PermissionAudit } from "./permissions/profile.js";
+import { PRODUCTION_DSH_COMPOSITION } from "./dsh/controlled-composition.js";
+import {
+  buildControllerToolPolicyAudit,
+  buildPermissionAudit,
+  type PermissionAudit,
+  type ToolPolicyAudit,
+} from "./permissions/profile.js";
 import { CommandToolProvider, resolveEffectiveTools } from "./tools/registry.js";
 import {
   GitHubToolFlushError,
@@ -95,6 +101,7 @@ interface RunState {
   agent?: AgentRunSummary;
   validationCommandCount?: number;
   permission?: PermissionAudit;
+  toolPolicy?: ToolPolicyAudit;
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
   validationPassed?: boolean;
@@ -357,6 +364,7 @@ function outcomeContext(state: RunState, startedAt: number) {
     ...(state.policy === undefined ? {} : { policy: state.policy }),
     ...(state.agent === undefined ? {} : { agent: state.agent }),
     ...(state.permission === undefined ? {} : { permission: state.permission }),
+    ...(state.toolPolicy === undefined ? {} : { toolPolicy: state.toolPolicy }),
     ...(state.progress?.commentId === undefined ? {} : { commentId: state.progress.commentId }),
   };
 }
@@ -619,6 +627,10 @@ async function runActionInternal(
       extensions: extensions.audit,
     });
     state.permission = permission;
+    state.toolPolicy = buildControllerToolPolicyAudit(
+      permission,
+      PRODUCTION_DSH_COMPOSITION.toolPolicyOwner,
+    );
     const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
     const githubMutationTools = tools.github.filter((id) => id !== "github.checks.read");
     let githubValidationFingerprint: string | undefined;

@@ -16,7 +16,11 @@ import {
   type ActionPhase,
   type RunOutcome,
 } from "../src/result.js";
-import type { PermissionAudit } from "../src/permissions/profile.js";
+import {
+  buildControllerToolPolicyAudit,
+  type PermissionAudit,
+  type ToolPolicyAudit,
+} from "../src/permissions/profile.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import {
   ValidationIntegrityError,
@@ -83,6 +87,8 @@ const permission: PermissionAudit = {
   ],
 };
 
+const toolPolicy = buildControllerToolPolicyAudit(permission, "controller");
+
 const integrity: ValidationIntegritySummary = {
   schemaVersion: 1,
   mode: "strict",
@@ -138,6 +144,7 @@ describe("versioned action results", () => {
       runUrl: "https://github.com/octo/repo/actions/runs/10",
       policy,
       permission,
+      toolPolicy,
       agent: {
         durationMs: 3_100,
         turns: 3,
@@ -189,6 +196,7 @@ describe("versioned action results", () => {
     });
     const result = JSON.parse(String(outputs["result-json"])) as {
       readonly permissions: unknown;
+      readonly toolPolicy: unknown;
       readonly validation: { readonly integrity: unknown };
     };
     expect(result).toMatchObject({
@@ -205,6 +213,12 @@ describe("versioned action results", () => {
       },
       policy: { trust: "trusted-write", allowed: true },
       permissions: { profile: "custom", network: "bridge", workspaceWrite: true },
+      toolPolicy: {
+        policyOwner: "controller",
+        requestedTools: permission.requestedTools,
+        effectiveTools: permission.effectiveTools,
+        deniedTools: permission.deniedTools,
+      },
       validation: {
         status: "passed",
         commandCount: 2,
@@ -223,6 +237,7 @@ describe("versioned action results", () => {
       commentId: 99,
     });
     expect(result.permissions).toEqual(permission);
+    expect(result.toolPolicy).toEqual(toolPolicy);
     expect(result.validation.integrity).toEqual(integrity);
   });
 
@@ -501,6 +516,12 @@ describe("versioned action results", () => {
   });
 
   it("reports effective permission and validation-integrity details in the step summary", () => {
+    const deniedTools = [
+      {
+        id: "native.subagent" as const,
+        reason: "Denied for @team ![pixel](https://tracker.invalid) `policy`",
+      },
+    ];
     const outcome: RunOutcome = {
       schemaVersion: 1,
       conclusion: "success",
@@ -510,19 +531,17 @@ describe("versioned action results", () => {
       durationMs: 1_500,
       permission: {
         ...permission,
-        deniedTools: [
-          {
-            id: "native.subagent",
-            reason: "Denied for @team ![pixel](https://tracker.invalid) `policy`",
-          },
-        ],
+        deniedTools,
       },
+      toolPolicy: { ...toolPolicy, deniedTools },
       validation: { status: "passed", commandCount: 2, integrity },
     };
 
     const summary = formatStepSummary(outcome);
     expect(summary).toContain("### Effective Agent permissions");
     expect(summary).toContain("**Profile:** `custom`");
+    expect(summary).toContain("**Tool policy owner:** `Controller`");
+    expect(summary).toContain("**Requested tools:**");
     expect(summary).toContain("`native.web-search`");
     expect(summary).toContain("**Network:** `bridge`");
     expect(summary).toContain("**Workspace write:** `enabled`");
@@ -534,6 +553,38 @@ describe("versioned action results", () => {
       "**Definition changes:** 2 total · 0 dangerous · 1 control-plane · 1 test",
     );
     expect(summary).toContain("**Baseline replay:** `passed` (2 command(s))");
+  });
+
+  it("labels a future DSH-owned runtime inventory as observed rather than effective", () => {
+    const observedToolPolicy = {
+      schemaVersion: 1,
+      policyOwner: "dsh",
+      requestedTools: ["workspace.read"],
+      observedTools: ["read", "grep"],
+      deniedTools: [],
+    } satisfies ToolPolicyAudit;
+    const outcome: RunOutcome = {
+      schemaVersion: 1,
+      conclusion: "success",
+      operation: "task",
+      summary: "Observed runtime inventory",
+      findingsCount: 0,
+      durationMs: 10,
+      permission,
+      toolPolicy: observedToolPolicy,
+    };
+    const summary = formatStepSummary(outcome);
+    const outputs = buildActionOutputs(outcome);
+    const result = JSON.parse(String(outputs["result-json"])) as {
+      readonly toolPolicy: Record<string, unknown>;
+    };
+
+    expect(summary).toContain("**Tool policy owner:** `DSH`");
+    expect(summary).toContain("**Observed tools:** `read`, `grep`");
+    expect(summary).not.toContain("**Effective tools:**");
+    expect(JSON.parse(String(outputs["effective-tools"]))).toEqual(permission.effectiveTools);
+    expect(result.toolPolicy).toEqual(observedToolPolicy);
+    expect(result.toolPolicy).not.toHaveProperty("effectiveTools");
   });
 
   it("redacts failures and sanitizes user-visible step summaries", () => {

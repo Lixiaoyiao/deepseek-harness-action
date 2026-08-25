@@ -1,5 +1,5 @@
 import type { EffectiveExtensionPlan } from "../extensions/plan.js";
-import type { NativeToolId } from "../tools/schema.js";
+import type { NativeToolId, ToolPolicyOwner } from "../tools/schema.js";
 import type { DshRuntime } from "./runtime.js";
 import type { DshOperation } from "./schema.js";
 
@@ -72,6 +72,8 @@ export interface PreparedDockerDshComposition {
 export interface DshComposition {
   /** Stable authorization identity; distinct implementations must use distinct IDs. */
   readonly id: string;
+  /** Identifies whether granted tools are Controller-effective or only DSH-observed. */
+  readonly toolPolicyOwner: ToolPolicyOwner;
   readonly profileSchemaVersion: number;
 
   runtimeToolNames(nativeTools: readonly NativeToolId[]): readonly string[];
@@ -83,4 +85,10 @@ export interface DshComposition {
   prepareLocal(options: PrepareLocalDshCompositionOptions): Promise<PreparedLocalDshComposition>;
 
   prepareDocker(options: PrepareDockerDshCompositionOptions): Promise<PreparedDockerDshComposition>;
+}
+
+/** One production selection point keeps execution and audit ownership in sync. */
+export interface DshCompositionSelection<TOwner extends ToolPolicyOwner = ToolPolicyOwner> {
+  readonly toolPolicyOwner: TOwner;
+  create(): DshComposition & { readonly toolPolicyOwner: TOwner };
 }

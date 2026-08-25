@@ -17,7 +17,9 @@ define a second plugin system:
   installs one positive ToolRuntime policy adapter.
 - The DSH runner reaches that construction through the internal
   `DshComposition` boundary. `ControlledComposition` is the sole current
-  implementation; this boundary does not add another Profile or run mode.
+  implementation and declares the Controller as its tool-policy owner. The
+  Controller orchestration records the matching exact requested/effective/denied
+  audit. This boundary does not add another Profile or run mode.
 - The v0.3 placeholder `ExtensionProvider` seam has been removed. MCP and
   plugin tools are not routed through a parallel Action plugin registry.
 
@@ -112,6 +114,14 @@ ID is also in `allowed-tools` and every requested permission is allowed by the
 current actor/origin/event policy. This limits the model-facing dispatcher; it
 does not sandbox already-approved stdio, Bundle, or plugin code that performs
 startup, background, or direct process I/O.
+
+The public tool-policy audit keeps authorization separate from observation.
+For the sole current controlled composition, `policyOwner: controller` means
+`effectiveTools` is exactly the final canonical manifest set. The discriminated
+audit model reserves `policyOwner: dsh` plus `observedTools` for a future
+DSH-owned composition; observed runtime names would be telemetry and could not
+be represented as Controller-effective grants. No DSH-owned or native
+composition is implemented in this release.
 
 Canonical Action IDs are:
 

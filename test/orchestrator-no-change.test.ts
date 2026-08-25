@@ -364,6 +364,13 @@ describe("orchestrator task no-change publication", () => {
       commentId: 4242,
       validation: { status: "not-applicable", commandCount: 0 },
       taskOutput: { status: "already-complete" },
+      toolPolicy: {
+        schemaVersion: 1,
+        policyOwner: "controller",
+        requestedTools: ["workspace.edit", "workspace.read", "workspace.search"],
+        effectiveTools: ["workspace.edit", "workspace.read", "workspace.search"],
+        deniedTools: [],
+      },
     });
 
     expect(mocks.finishAutomationTask).not.toHaveBeenCalled();

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildControllerToolPolicyAudit,
   buildPermissionAudit,
   STANDARD_PERMISSION_TOOLS,
   STRICT_PERMISSION_TOOLS,
   resolvePermissionRequest,
+  type ToolPolicyAudit,
 } from "../src/permissions/profile.js";
 import type { AllowedToolId } from "../src/tools/schema.js";
 
@@ -68,6 +70,72 @@ describe("permission profile presets", () => {
         reason: "Explicit disallowed-tools entry; deny always wins",
       },
     ]);
+  });
+
+  it("separates Controller-requested, effective, and denied tool policy semantics", () => {
+    const resolution = resolvePermissionRequest(
+      "custom",
+      ["workspace.read", "native.bash", "native.web-search"],
+      ["native.bash"],
+    );
+    const permission = buildPermissionAudit({
+      resolution,
+      manifests: [
+        {
+          id: "workspace.read",
+          description: "Read workspace files",
+          provider: "builtin",
+          permissions: ["read"],
+          inputSchema: {},
+        },
+      ],
+      additionalDenials: [
+        {
+          id: "native.web-search",
+          reason: "Web search requires a trusted same-repository actor and Docker",
+        },
+      ],
+    });
+
+    expect(permission.digest).toBe(
+      "30861de79313e93a4ca8ee3c12240babeb562323365fc89031024f4b70b63693",
+    );
+    expect(buildControllerToolPolicyAudit(permission, "controller")).toEqual({
+      schemaVersion: 1,
+      policyOwner: "controller",
+      requestedTools: ["native.bash", "native.web-search", "workspace.read"],
+      effectiveTools: ["workspace.read"],
+      deniedTools: [
+        {
+          id: "native.bash",
+          reason: "Explicit disallowed-tools entry; deny always wins",
+        },
+        {
+          id: "native.web-search",
+          reason: "Web search requires a trusted same-repository actor and Docker",
+        },
+      ],
+    });
+    expect(buildControllerToolPolicyAudit(permission, "controller")).not.toHaveProperty(
+      "observedTools",
+    );
+    expect(() => buildControllerToolPolicyAudit(permission, "dsh")).toThrow(
+      /must report observed tools/u,
+    );
+  });
+
+  it("reserves observed tools for a future DSH-owned policy without calling them effective", () => {
+    const audit = {
+      schemaVersion: 1,
+      policyOwner: "dsh",
+      requestedTools: ["workspace.read"],
+      observedTools: ["read", "grep"],
+      deniedTools: [],
+    } satisfies ToolPolicyAudit;
+
+    expect(audit.policyOwner).toBe("dsh");
+    expect(audit.observedTools).toEqual(["read", "grep"]);
+    expect(audit).not.toHaveProperty("effectiveTools");
   });
 
   it("reports the physical host-gateway path instead of claiming zero worker networking", () => {
