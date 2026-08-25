@@ -25,7 +25,7 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.6.0 adds maintainer-controlled triggers, actor/comment filters, safe branch configuration, typed Controller-owned GitHub tools, and optional structured task output without changing defaults or authority. GitHub image attachments remain deferred because the exact audited DSH headless contract is text-only; the DSH pin remains `0.1.1-rc.2`.
+v0.7.0 establishes four architecture foundations without widening the public capability surface: the internal `DshComposition` seam (still backed only by `ControlledComposition`), explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam (still backed by Octokit). It does not add `NativeComposition`, a native DSH ecosystem mode, a GitHub MCP backend, or Session/Resume; the DSH pin remains `0.1.1-rc.2`.
 
 ## Live runs
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.6.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.7.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 

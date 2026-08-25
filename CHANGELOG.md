@@ -3,6 +3,48 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.7.0] - 2026-08-25
+
+### Changed
+
+- Added the internal `DshComposition` seam around DSH launch construction.
+  `ControlledComposition` remains the sole production implementation and keeps
+  the existing controlled Profile, Bundle/Cordis, local policy, runtime-asset,
+  and Docker preparation behavior.
+- Made tool-policy ownership explicit in the public audit. The current
+  Controller-owned composition reports canonical requested, effective, and
+  denied tools; the distinct DSH-owned shape reserves observed runtime names
+  as telemetry rather than mislabeling them as Controller grants.
+- Added an additive, value-free `result-json.authority` audit for
+  Action-known sources: the Controller-held GitHub and proxied DeepSeek
+  credentials, plus effective MCP or direct-plugin owners configured with
+  credential-like workflow data. This is bounded observability, not an
+  authorization decision or a claim of complete worker authority.
+- Isolated the six existing typed GitHub operations behind the transport-only
+  `GitHubToolBackend` contract and the production Octokit adapter. Repository,
+  entity, head, policy, trust, validation, retry, reconciliation, and receipt
+  ownership remain in the Controller-side GitHub tool gateway.
+
+### Security and compatibility
+
+- Existing Action inputs, canonical tool IDs, routing defaults, permission
+  gates, and write behavior remain compatible. The structured result adds the
+  tool-policy ownership and known-authority audit surfaces described above.
+- The audited DSH family remains exactly `0.1.1-rc.2`; the standalone
+  `create-deepseek-harness-action@0.1.1` package and its immutable v0.6.0
+  Action binding remain unchanged.
+- Unit and integration tests cover the seams and audit semantics; metadata and
+  Core E2E assertions bind the applicable public tool-policy surface. Standard
+  release-contract and reproducible-`dist` checks remain in force, and the
+  committed bundle is regenerated from the release source.
+
+### Deferred and out of scope
+
+- This release does not implement `NativeComposition`, a native DSH ecosystem
+  mode, a GitHub MCP backend, or Session/Resume. It adds no new GitHub operation
+  and does not widen model, worker, extension, credential, or mutation
+  authority.
+
 ## Installer 0.1.1 - 2026-08-24
 
 - Updated the standalone `create-deepseek-harness-action` package so its
@@ -620,6 +662,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.7.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.1...v0.5.2

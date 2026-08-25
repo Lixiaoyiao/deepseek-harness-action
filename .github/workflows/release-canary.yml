@@ -1,4 +1,4 @@
-name: v0.6.0 release canary
+name: v0.7.0 release canary
 
 on:
   workflow_dispatch:
@@ -67,7 +67,7 @@ jobs:
     environment: core-e2e
     timeout-minutes: 15
     env:
-      RELEASE_TAG: v0.6.0
+      RELEASE_TAG: v0.7.0
       RELEASE_SHA: ${{ vars.DSH_RELEASE_CANARY_SHA }}
     steps:
       - name: Validate protected canary secret

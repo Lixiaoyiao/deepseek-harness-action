@@ -25,7 +25,7 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具      | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
 | 结构化结果    | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.6.0 新增维护者控制的触发器、actor/comment 过滤、安全分支配置、Controller-owned typed GitHub Tools，以及可选的结构化 task output；默认行为和 authority 不变。由于精确审计的 DSH headless 契约仍只支持文本，GitHub 图片附件明确 defer；DSH pin 仍为 `0.1.1-rc.2`。
+v0.7.0 建立四项架构基础，但不扩大公开能力面：内部 `DshComposition` seam（生产环境仍只有 `ControlledComposition`）、明确的 Controller-owned tool-policy 审计语义、不含凭据值的 Action-known authority source 审计，以及 transport-only `GitHubToolBackend` seam（生产环境仍由 Octokit 实现）。本版本不包含 `NativeComposition`、native DSH ecosystem 模式、GitHub MCP backend 或 Session/Resume；DSH pin 仍为 `0.1.1-rc.2`。
 
 ## 真实运行
 
@@ -88,7 +88,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.6.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.7.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -96,7 +96,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.6.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.7.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 
