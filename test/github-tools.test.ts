@@ -4,14 +4,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SecurityPolicy } from "../src/security/policy.js";
 import type { GitHubClient } from "../src/github/client.js";
+import { issueContentFingerprint } from "../src/github/issue-identity.js";
+import { createOctokitGitHubToolBackend } from "../src/github/octokit-tool-backend.js";
 import {
-  createGitHubToolApi,
   GitHubToolFlushError,
   GitHubToolProvider,
+  githubToolManifest,
   resolveGitHubTools,
-  type GitHubToolApi,
   type GitHubToolBinding,
 } from "../src/tools/github.js";
+import type {
+  GitHubIssueSnapshot,
+  GitHubPullSnapshot,
+  GitHubToolBackend,
+} from "../src/tools/github-backend.js";
 import { ToolRouter } from "../src/tools/router.js";
 import {
   githubToolSchema,
@@ -21,6 +27,15 @@ import {
 import { resolveEffectiveTools } from "../src/tools/registry.js";
 
 const HEAD = "a".repeat(40);
+const ISSUE_TITLE = "bound issue title";
+const ISSUE_BODY = "bound issue body";
+const ISSUE_AUTHOR_ID = 101;
+const ISSUE_FINGERPRINT = issueContentFingerprint({
+  number: 7,
+  title: ISSUE_TITLE,
+  body: ISSUE_BODY,
+  authorId: ISSUE_AUTHOR_ID,
+});
 const issueBinding: GitHubToolBinding = {
   repositoryId: 42,
   owner: "trusted-owner",
@@ -29,7 +44,7 @@ const issueBinding: GitHubToolBinding = {
   entityNumber: 7,
   state: "open",
   updatedAt: "2026-08-23T00:00:00Z",
-  contentFingerprint: "f".repeat(64),
+  contentFingerprint: ISSUE_FINGERPRINT,
 };
 const pullBinding: GitHubToolBinding = {
   ...issueBinding,
@@ -70,24 +85,65 @@ function policy(
   };
 }
 
-function fakeApi(overrides: Partial<GitHubToolApi> = {}): GitHubToolApi {
+function issueSnapshot(overrides: Partial<GitHubIssueSnapshot> = {}): GitHubIssueSnapshot {
   return {
-    revalidateEntity: () => Promise.resolve(),
-    getIssue: () =>
-      Promise.resolve({ labels: [], assignees: [], state: "open", stateReason: null }),
+    kind: "issue",
+    number: 7,
+    title: ISSUE_TITLE,
+    body: ISSUE_BODY,
+    authorId: ISSUE_AUTHOR_ID,
+    labels: [],
+    assignees: [],
+    state: "open",
+    stateReason: null,
+    ...overrides,
+  };
+}
+
+function pullSnapshot(overrides: Partial<GitHubPullSnapshot> = {}): GitHubPullSnapshot {
+  return {
+    number: 7,
+    title: "title",
+    body: "body",
+    state: "open",
+    maintainerCanModify: false,
+    headSha: HEAD,
+    headRef: "feature",
+    headRepositoryId: 42,
+    baseSha: "b".repeat(40),
+    baseRef: "main",
+    baseRepositoryId: 42,
+    ...overrides,
+  };
+}
+
+const issueIdentityDrifts: readonly (readonly [string, Partial<GitHubIssueSnapshot>])[] = [
+  ["entity number", { number: 8 }],
+  ["entity kind", { kind: "pull_request" }],
+  ["content fingerprint", { title: "changed title" }],
+];
+
+const pullIdentityDrifts: readonly (readonly [string, Partial<GitHubPullSnapshot>])[] = [
+  ["entity number", { number: 8 }],
+  ["head SHA", { headSha: "c".repeat(40) }],
+  ["head ref", { headRef: "other-feature" }],
+  ["head repository", { headRepositoryId: 43 }],
+  ["missing head repository", { headRepositoryId: null }],
+  ["base SHA", { baseSha: "d".repeat(40) }],
+  ["base ref", { baseRef: "release" }],
+  ["base repository", { baseRepositoryId: 43 }],
+];
+
+function fakeBackend(overrides: Partial<GitHubToolBackend> = {}): GitHubToolBackend {
+  return {
+    getRepository: () => Promise.resolve({ id: 42 }),
+    getIssue: () => Promise.resolve(issueSnapshot()),
     setLabels: () => Promise.resolve(),
     setAssignees: () => Promise.resolve(),
     updateIssueState: () => Promise.resolve(),
     listRecentComments: () => Promise.resolve([]),
     createComment: () => Promise.resolve(),
-    getPull: () =>
-      Promise.resolve({
-        title: "title",
-        body: "body",
-        state: "open",
-        base: "main",
-        maintainerCanModify: false,
-      }),
+    getPull: () => Promise.resolve(pullSnapshot()),
     updatePull: () => Promise.resolve(),
     readChecks: () =>
       Promise.resolve({
@@ -106,7 +162,7 @@ function provider(options: {
   readonly binding?: GitHubToolBinding;
   readonly securityPolicy?: SecurityPolicy;
   readonly allowWrite?: boolean;
-  readonly api?: GitHubToolApi;
+  readonly backend?: GitHubToolBackend;
   readonly expectedAuthorId?: number;
 }): GitHubToolProvider {
   return new GitHubToolProvider({
@@ -115,7 +171,7 @@ function provider(options: {
     policy: options.securityPolicy ?? policy(),
     allowWrite: options.allowWrite ?? true,
     expectedAuthorId: options.expectedAuthorId ?? 41898282,
-    api: options.api ?? fakeApi(),
+    backend: options.backend ?? fakeBackend(),
   });
 }
 
@@ -128,6 +184,103 @@ describe("Controller-owned typed GitHub tools", () => {
     );
     expect(() => parseAllowedTools('["github.request"]')).toThrow(/allowed-tools/u);
     expect(() => parseAllowedTools('["github.issue.labels.set.extra"]')).toThrow(/allowed-tools/u);
+  });
+
+  it("keeps all six public GitHub capability manifests exact", () => {
+    expect(githubToolSchema.options.map((id) => githubToolManifest(id))).toEqual([
+      {
+        id: "github.issue.labels.set",
+        description: "Replace labels on the current issue or pull request.",
+        provider: "github",
+        permissions: ["github-write"],
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["labels"],
+          properties: {
+            labels: {
+              type: "array",
+              maxItems: 20,
+              uniqueItems: true,
+              items: { type: "string" },
+            },
+          },
+        },
+      },
+      {
+        id: "github.issue.assignees.set",
+        description: "Replace assignees on the current issue or pull request.",
+        provider: "github",
+        permissions: ["github-write"],
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["assignees"],
+          properties: {
+            assignees: {
+              type: "array",
+              maxItems: 10,
+              uniqueItems: true,
+              items: { type: "string" },
+            },
+          },
+        },
+      },
+      {
+        id: "github.issue.state.update",
+        description: "Update the state of the current issue.",
+        provider: "github",
+        permissions: ["github-write"],
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["state"],
+          properties: {
+            state: { type: "string", enum: ["open", "closed"] },
+            stateReason: {
+              type: "string",
+              enum: ["completed", "not_planned", "reopened"],
+            },
+          },
+        },
+      },
+      {
+        id: "github.comment.create",
+        description: "Create one idempotent comment on the current issue or pull request.",
+        provider: "github",
+        permissions: ["github-write"],
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["body"],
+          properties: { body: { type: "string", minLength: 1, maxLength: 32_665 } },
+        },
+      },
+      {
+        id: "github.pull.metadata.update",
+        description: "Update bounded metadata on the current pull request.",
+        provider: "github",
+        permissions: ["github-write"],
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            title: { type: "string", minLength: 1, maxLength: 256 },
+            body: { type: "string", maxLength: 65_536 },
+            state: { type: "string", enum: ["open", "closed"] },
+            maintainerCanModify: { type: "boolean" },
+          },
+        },
+      },
+      {
+        id: "github.checks.read",
+        description: "Read bounded checks and commit statuses for the immutable bound head SHA.",
+        provider: "github",
+        permissions: ["github-read"],
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+    ]);
   });
 
   it("intersects exact IDs with trusted target, write, and readCi authority", () => {
@@ -181,13 +334,12 @@ describe("Controller-owned typed GitHub tools", () => {
   });
 
   it("strictly rejects model-supplied repository identity and defers all mutation API calls", async () => {
-    const getIssue = vi.fn(() =>
-      Promise.resolve({ labels: [], assignees: [], state: "open" as const, stateReason: null }),
-    );
+    const getRepository = vi.fn(() => Promise.resolve({ id: 42 }));
+    const getIssue = vi.fn(() => Promise.resolve(issueSnapshot()));
     const setLabels = vi.fn(() => Promise.resolve());
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({ getIssue, setLabels }),
+      backend: fakeBackend({ getRepository, getIssue, setLabels }),
     });
     await expect(
       tools.invoke(
@@ -209,6 +361,7 @@ describe("Controller-owned typed GitHub tools", () => {
       attempts: 0,
       reconciled: false,
     });
+    expect(getRepository).not.toHaveBeenCalled();
     expect(getIssue).not.toHaveBeenCalled();
     expect(setLabels).not.toHaveBeenCalled();
     expect(tools.hasPendingMutations()).toBe(true);
@@ -228,14 +381,22 @@ describe("Controller-owned typed GitHub tools", () => {
 
   it("flushes a deferred mutation with a postcondition and bounded receipt", async () => {
     let labels: readonly string[] = [];
-    const api = fakeApi({
-      getIssue: () => Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
-      setLabels: (_binding, desired) => {
-        labels = desired;
-        return Promise.resolve();
-      },
+    const getRepository = vi.fn<GitHubToolBackend["getRepository"]>(() =>
+      Promise.resolve({ id: 42 }),
+    );
+    const getIssue = vi.fn<GitHubToolBackend["getIssue"]>(() =>
+      Promise.resolve(issueSnapshot({ labels })),
+    );
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>((_target, desired) => {
+      labels = desired;
+      return Promise.resolve();
     });
-    const tools = provider({ ids: ["github.issue.labels.set"], api });
+    const backend = fakeBackend({
+      getRepository,
+      getIssue,
+      setLabels,
+    });
+    const tools = provider({ ids: ["github.issue.labels.set"], backend });
     await tools.invoke(
       { callId: "call-labels", id: "github.issue.labels.set", input: { labels: ["bug"] } },
       invocation,
@@ -249,6 +410,22 @@ describe("Controller-owned typed GitHub tools", () => {
       reconciled: true,
       labels: ["bug"],
     });
+    expect(getRepository.mock.calls[0]?.[0]).toMatchObject({
+      owner: "trusted-owner",
+      repo: "trusted-repo",
+    });
+    expect(getIssue.mock.calls.every(([target]) => target.owner === "trusted-owner")).toBe(true);
+    expect(getIssue.mock.calls.every(([target]) => target.repo === "trusted-repo")).toBe(true);
+    expect(getIssue.mock.calls.every(([target]) => target.issueNumber === 7)).toBe(true);
+    expect(setLabels.mock.calls[0]?.[0]).toEqual({
+      owner: "trusted-owner",
+      repo: "trusted-repo",
+      issueNumber: 7,
+    });
+    expect(setLabels.mock.calls[0]?.[1]).toEqual(["bug"]);
+    expect(setLabels.mock.calls[0]?.[2].signal).toBeInstanceOf(AbortSignal);
+    expect(setLabels.mock.calls[0]?.[0]).not.toHaveProperty("repositoryId");
+    expect(setLabels.mock.calls[0]?.[0]).not.toHaveProperty("contentFingerprint");
     expect(tools.hasPendingMutations()).toBe(false);
   });
 
@@ -260,9 +437,8 @@ describe("Controller-owned typed GitHub tools", () => {
     });
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({
-        getIssue: () =>
-          Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
+      backend: fakeBackend({
+        getIssue: () => Promise.resolve(issueSnapshot({ labels })),
         setLabels,
       }),
     });
@@ -277,7 +453,10 @@ describe("Controller-owned typed GitHub tools", () => {
 
   it("performs at most one safe retry when reconciliation confirms no effect", async () => {
     let labels: readonly string[] = [];
-    const setLabels = vi.fn((_binding, desired: readonly string[]) => {
+    const getRepository = vi.fn<GitHubToolBackend["getRepository"]>(() =>
+      Promise.resolve({ id: 42 }),
+    );
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>((_target, desired) => {
       if (setLabels.mock.calls.length === 1) {
         return Promise.reject(Object.assign(new Error("gateway"), { status: 503 }));
       }
@@ -286,9 +465,9 @@ describe("Controller-owned typed GitHub tools", () => {
     });
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({
-        getIssue: () =>
-          Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
+      backend: fakeBackend({
+        getRepository,
+        getIssue: () => Promise.resolve(issueSnapshot({ labels })),
         setLabels,
       }),
     });
@@ -298,6 +477,13 @@ describe("Controller-owned typed GitHub tools", () => {
     );
     const [receipt] = await tools.flush(invocation);
     expect(setLabels).toHaveBeenCalledTimes(2);
+    expect(getRepository).toHaveBeenCalledTimes(3);
+    expect(getRepository.mock.invocationCallOrder[1]).toBeLessThan(
+      setLabels.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(getRepository.mock.invocationCallOrder[2]).toBeLessThan(
+      setLabels.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
     expect(receipt?.result.output).toMatchObject({ attempts: 2, labels: ["bug"] });
   });
 
@@ -309,7 +495,7 @@ describe("Controller-owned typed GitHub tools", () => {
     });
     const tools = provider({
       ids: ["github.comment.create"],
-      api: fakeApi({
+      backend: fakeBackend({
         listRecentComments: () => Promise.resolve(comments),
         createComment,
       }),
@@ -343,7 +529,7 @@ describe("Controller-owned typed GitHub tools", () => {
     });
     const tools = provider({
       ids: ["github.comment.create"],
-      api: fakeApi({ listRecentComments: () => Promise.resolve(comments), createComment }),
+      backend: fakeBackend({ listRecentComments: () => Promise.resolve(comments), createComment }),
     });
     await tools.invoke(
       { callId: "call-wrong-bot", id: "github.comment.create", input: { body: "Done" } },
@@ -372,12 +558,12 @@ describe("Controller-owned typed GitHub tools", () => {
       Promise.reject(Object.assign(new Error("lost response"), { status: 503 })),
     );
     const listRecentComments = vi
-      .fn<GitHubToolApi["listRecentComments"]>()
+      .fn<GitHubToolBackend["listRecentComments"]>()
       .mockResolvedValueOnce([])
       .mockRejectedValueOnce(new Error("reconciliation unavailable"));
     const tools = provider({
       ids: ["github.comment.create"],
-      api: fakeApi({ listRecentComments, createComment }),
+      backend: fakeBackend({ listRecentComments, createComment }),
     });
     await tools.invoke(
       { callId: "call-comment-unknown", id: "github.comment.create", input: { body: "Done" } },
@@ -401,7 +587,7 @@ describe("Controller-owned typed GitHub tools", () => {
       let published: { id: number; body: string; authorId: number } | undefined;
       const tools = provider({
         ids: ["github.comment.create"],
-        api: fakeApi({
+        backend: fakeBackend({
           listRecentComments: () => Promise.resolve(published === undefined ? [] : [published]),
           createComment: (_binding, value) => {
             published = { id: 99, body: value, authorId: 41898282 };
@@ -445,9 +631,8 @@ describe("Controller-owned typed GitHub tools", () => {
     const setLabels = vi.fn(() => Promise.resolve());
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({
-        getIssue: () =>
-          Promise.resolve({ labels: [], assignees: [], state: "open", stateReason: null }),
+      backend: fakeBackend({
+        getIssue: () => Promise.resolve(issueSnapshot()),
         setLabels,
       }),
     });
@@ -477,9 +662,8 @@ describe("Controller-owned typed GitHub tools", () => {
     );
     const tools = provider({
       ids: ["github.issue.labels.set", "github.issue.assignees.set"],
-      api: fakeApi({
-        getIssue: () =>
-          Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
+      backend: fakeBackend({
+        getIssue: () => Promise.resolve(issueSnapshot({ labels })),
         setLabels,
         setAssignees,
       }),
@@ -528,21 +712,15 @@ describe("Controller-owned typed GitHub tools", () => {
       ),
     ).rejects.toThrow(/reserved Controller marker/u);
 
-    let current = {
-      title: "old",
-      body: "old",
-      state: "open" as const,
-      base: "main",
-      maintainerCanModify: false,
-    };
-    const updatePull = vi.fn((_binding, input: { title?: string; body?: string }) => {
-      current = { ...current, ...input };
+    let current = pullSnapshot({ title: "old", body: "old" });
+    const updatePull = vi.fn<GitHubToolBackend["updatePull"]>((_target, input) => {
+      current = pullSnapshot({ ...current, ...input });
       return Promise.resolve();
     });
     const pull = provider({
       ids: ["github.pull.metadata.update"],
       binding: pullBinding,
-      api: fakeApi({ getPull: () => Promise.resolve(current), updatePull }),
+      backend: fakeBackend({ getPull: () => Promise.resolve(current), updatePull }),
     });
     await pull.invoke(
       {
@@ -559,105 +737,200 @@ describe("Controller-owned typed GitHub tools", () => {
     });
   });
 
-  it("revalidates the full bound entity before a queued mutation and fails with a negative receipt", async () => {
-    const revalidateEntity = vi.fn<GitHubToolApi["revalidateEntity"]>(() =>
-      Promise.reject(new Error("head changed")),
-    );
-    const setLabels = vi.fn(() => Promise.resolve());
+  it.each(issueIdentityDrifts)(
+    "keeps issue %s trust decisions in the Gateway",
+    async (_name, drift) => {
+      const setLabels = vi.fn<GitHubToolBackend["setLabels"]>(() => Promise.resolve());
+      const tools = provider({
+        ids: ["github.issue.labels.set"],
+        backend: fakeBackend({
+          getIssue: () => Promise.resolve(issueSnapshot(drift)),
+          setLabels,
+        }),
+      });
+      await tools.invoke(
+        {
+          callId: `call-issue-drift-${_name}`,
+          id: "github.issue.labels.set",
+          input: { labels: ["bug"] },
+        },
+        invocation,
+      );
+
+      const failure = await tools.flush(invocation).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(GitHubToolFlushError);
+      expect(setLabels).not.toHaveBeenCalled();
+      expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
+    },
+  );
+
+  it("revalidates again immediately before an actual mutation attempt", async () => {
+    const events: string[] = [];
+    const getRepository = vi
+      .fn<GitHubToolBackend["getRepository"]>()
+      .mockImplementationOnce(() => {
+        events.push("repository:flush");
+        return Promise.resolve({ id: 42 });
+      })
+      .mockImplementationOnce(() => {
+        events.push("repository:attempt");
+        return Promise.resolve({ id: 99 });
+      });
+    const getIssue = vi.fn<GitHubToolBackend["getIssue"]>(() => {
+      events.push(`issue:${String(getIssue.mock.calls.length)}`);
+      return Promise.resolve(issueSnapshot());
+    });
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>(() => {
+      events.push("write");
+      return Promise.resolve();
+    });
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({ revalidateEntity, setLabels }),
+      backend: fakeBackend({ getRepository, getIssue, setLabels }),
     });
     await tools.invoke(
-      { callId: "call-stale", id: "github.issue.labels.set", input: { labels: ["bug"] } },
+      { callId: "call-attempt-drift", id: "github.issue.labels.set", input: { labels: ["bug"] } },
       invocation,
     );
+
     const failure = await tools.flush(invocation).catch((error: unknown) => error);
-    expect(revalidateEntity).toHaveBeenCalledOnce();
-    expect(revalidateEntity.mock.calls[0]?.[0]).toMatchObject({
-      repositoryId: 42,
-      entityNumber: 7,
-      contentFingerprint: "f".repeat(64),
-    });
-    expect(revalidateEntity.mock.calls[0]?.[1]).toBe(false);
-    expect(revalidateEntity.mock.calls[0]?.[2].signal).toBeInstanceOf(AbortSignal);
+
+    expect(events).toEqual([
+      "repository:flush",
+      "issue:1",
+      "issue:2",
+      "repository:attempt",
+      "issue:3",
+    ]);
     expect(setLabels).not.toHaveBeenCalled();
     expect((failure as GitHubToolFlushError).receipts[0]?.result).toMatchObject({
-      callId: "call-stale",
+      callId: "call-attempt-drift",
       ok: false,
+      output: { effect: "scheduled", attempts: 1, reconciled: false },
     });
     expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
   });
 
-  it("the Octokit adapter rejects PR head, base, or origin drift", async () => {
-    const client = {
-      rest: {
-        pulls: {
-          get: vi.fn(() =>
-            Promise.resolve({
-              data: {
-                number: 7,
-                state: "open",
-                head: { sha: "c".repeat(40), ref: "feature", repo: { id: 42 } },
-                base: { sha: "b".repeat(40), ref: "main", repo: { id: 42 } },
-              },
-            }),
-          ),
-        },
-      },
-    } as unknown as GitHubClient;
-    await expect(
-      createGitHubToolApi(client).revalidateEntity(pullBinding, false, {
-        timeoutMs: 1_000,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow(/identity or state changed/u);
-  });
-
-  it("the Octokit adapter rejects issue repository slug reuse by numeric id", async () => {
-    const getRepository = vi.fn(() => Promise.resolve({ data: { id: 99 } }));
-    const getIssue = vi.fn(() =>
+  it("the Octokit backend returns drifted PR state without making the trust decision", async () => {
+    const getPull = vi.fn(() =>
       Promise.resolve({
         data: {
           number: 7,
           title: "title",
           body: "body",
           state: "open",
-          user: { id: 101 },
+          maintainer_can_modify: false,
+          head: { sha: "c".repeat(40), ref: "feature", repo: { id: 42 } },
+          base: { sha: "b".repeat(40), ref: "main", repo: { id: 42 } },
+        },
+      }),
+    );
+    const client = { rest: { pulls: { get: getPull } } } as unknown as GitHubClient;
+    const control = { timeoutMs: 1_000, signal: new AbortController().signal };
+
+    await expect(
+      createOctokitGitHubToolBackend(client).getPull(
+        { owner: "trusted-owner", repo: "trusted-repo", pullNumber: 7 },
+        control,
+      ),
+    ).resolves.toEqual(pullSnapshot({ headSha: "c".repeat(40) }));
+    expect(getPull).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "trusted-owner",
+        repo: "trusted-repo",
+        pull_number: 7,
+        request: { timeout: 1_000, signal: control.signal },
+      }),
+    );
+  });
+
+  it.each(pullIdentityDrifts)(
+    "keeps PR %s trust decisions in the Gateway",
+    async (_name, drift) => {
+      const updatePull = vi.fn<GitHubToolBackend["updatePull"]>(() => Promise.resolve());
+      const tools = provider({
+        ids: ["github.pull.metadata.update"],
+        binding: pullBinding,
+        backend: fakeBackend({
+          getPull: () => Promise.resolve(pullSnapshot(drift)),
+          updatePull,
+        }),
+      });
+      await tools.invoke(
+        {
+          callId: `call-pull-drift-${_name}`,
+          id: "github.pull.metadata.update",
+          input: { title: "new title" },
+        },
+        invocation,
+      );
+
+      const failure = await tools.flush(invocation).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(GitHubToolFlushError);
+      expect(updatePull).not.toHaveBeenCalled();
+      expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
+    },
+  );
+
+  it("the Octokit backend returns repository and issue state without deciding slug reuse", async () => {
+    const getRepository = vi.fn(() => Promise.resolve({ data: { id: 99 } }));
+    const getIssue = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          number: 7,
+          title: ISSUE_TITLE,
+          body: ISSUE_BODY,
+          state: "open",
+          state_reason: null,
+          user: { id: ISSUE_AUTHOR_ID },
+          labels: [],
+          assignees: [],
         },
       }),
     );
     const client = {
       rest: { repos: { get: getRepository }, issues: { get: getIssue } },
     } as unknown as GitHubClient;
+    const backend = createOctokitGitHubToolBackend(client);
+    const control = { timeoutMs: 1_000, signal: new AbortController().signal };
 
     await expect(
-      createGitHubToolApi(client).revalidateEntity(issueBinding, false, {
-        timeoutMs: 1_000,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow(/identity or state changed/u);
+      backend.getRepository({ owner: "trusted-owner", repo: "trusted-repo" }, control),
+    ).resolves.toEqual({ id: 99 });
+    await expect(
+      backend.getIssue({ owner: "trusted-owner", repo: "trusted-repo", issueNumber: 7 }, control),
+    ).resolves.toEqual(issueSnapshot());
     expect(getRepository).toHaveBeenCalledWith(
       expect.objectContaining({ owner: "trusted-owner", repo: "trusted-repo" }),
     );
-    expect(getIssue).toHaveBeenCalledOnce();
+    expect(getIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "trusted-owner",
+        repo: "trusted-repo",
+        issue_number: 7,
+      }),
+    );
   });
 
   it("advances only the trusted same-PR head after a validated Controller write", async () => {
     const nextHead = "c".repeat(40);
     let labels: readonly string[] = [];
-    const revalidateEntity = vi.fn<GitHubToolApi["revalidateEntity"]>(() => Promise.resolve());
+    const getPull = vi.fn<GitHubToolBackend["getPull"]>(() =>
+      Promise.resolve(pullSnapshot({ headSha: nextHead })),
+    );
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>((_target, desired) => {
+      labels = desired;
+      return Promise.resolve();
+    });
     const tools = provider({
       ids: ["github.issue.labels.set"],
       binding: pullBinding,
-      api: fakeApi({
-        revalidateEntity,
-        getIssue: () =>
-          Promise.resolve({ labels, assignees: [], state: "open", stateReason: null }),
-        setLabels: (_binding, desired) => {
-          labels = desired;
-          return Promise.resolve();
-        },
+      backend: fakeBackend({
+        getPull,
+        getIssue: () => Promise.resolve(issueSnapshot({ labels })),
+        setLabels,
       }),
     });
     await tools.invoke(
@@ -667,29 +940,20 @@ describe("Controller-owned typed GitHub tools", () => {
     expect(() => tools.advancePullHead(nextHead, "other-ref")).toThrow(/head ref/u);
     tools.advancePullHead(nextHead, "feature");
     await tools.flush(invocation);
-    expect(revalidateEntity.mock.calls.at(-1)?.[0]).toMatchObject({
-      headSha: nextHead,
-      headRef: "feature",
-      baseSha: "b".repeat(40),
-      headRepositoryId: 42,
-      baseRepositoryId: 42,
-    });
+    expect(getPull).toHaveBeenCalledTimes(2);
+    expect(setLabels).toHaveBeenCalledOnce();
   });
 
   it("allows only explicit state-transition tools to reconcile a closed entity", async () => {
     const closedBinding: GitHubToolBinding = { ...issueBinding, state: "closed" };
     let state: "open" | "closed" = "closed";
     let stateReason: "completed" | "not_planned" | "reopened" | null = null;
-    const revalidateEntity = vi.fn<GitHubToolApi["revalidateEntity"]>((_binding, allowClosed) =>
-      allowClosed ? Promise.resolve() : Promise.reject(new Error("entity is closed")),
-    );
     const stateTools = provider({
       ids: ["github.issue.state.update"],
       binding: closedBinding,
-      api: fakeApi({
-        revalidateEntity,
-        getIssue: () => Promise.resolve({ labels: [], assignees: [], state, stateReason }),
-        updateIssueState: (_binding, input) => {
+      backend: fakeBackend({
+        getIssue: () => Promise.resolve(issueSnapshot({ state, stateReason })),
+        updateIssueState: (_target, input) => {
           state = input.state;
           stateReason = input.stateReason ?? null;
           return Promise.resolve();
@@ -705,14 +969,16 @@ describe("Controller-owned typed GitHub tools", () => {
       invocation,
     );
     const [receipt] = await stateTools.flush(invocation);
-    expect(revalidateEntity.mock.calls.every((call) => call[1])).toBe(true);
     expect(receipt?.result.output).toMatchObject({ state: "open", attempts: 1 });
 
-    const setLabels = vi.fn(() => Promise.resolve());
+    const setLabels = vi.fn<GitHubToolBackend["setLabels"]>(() => Promise.resolve());
     const labelsTools = provider({
       ids: ["github.issue.labels.set"],
       binding: closedBinding,
-      api: fakeApi({ revalidateEntity, setLabels }),
+      backend: fakeBackend({
+        getIssue: () => Promise.resolve(issueSnapshot({ state: "closed" })),
+        setLabels,
+      }),
     });
     await labelsTools.invoke(
       { callId: "call-closed-label", id: "github.issue.labels.set", input: { labels: ["x"] } },
@@ -722,8 +988,51 @@ describe("Controller-owned typed GitHub tools", () => {
     expect(setLabels).not.toHaveBeenCalled();
   });
 
+  it("allows a closed PR only when metadata explicitly requests a state transition", async () => {
+    let current = pullSnapshot({ state: "closed" });
+    const updatePull = vi.fn<GitHubToolBackend["updatePull"]>((_target, input) => {
+      current = pullSnapshot({ ...current, ...input });
+      return Promise.resolve();
+    });
+    const backend = fakeBackend({ getPull: () => Promise.resolve(current), updatePull });
+    const blocked = provider({
+      ids: ["github.pull.metadata.update"],
+      binding: pullBinding,
+      backend,
+    });
+    await blocked.invoke(
+      {
+        callId: "call-closed-pull-title",
+        id: "github.pull.metadata.update",
+        input: { title: "new title" },
+      },
+      invocation,
+    );
+
+    await expect(blocked.flush(invocation)).rejects.toBeInstanceOf(GitHubToolFlushError);
+    expect(updatePull).not.toHaveBeenCalled();
+
+    const transition = provider({
+      ids: ["github.pull.metadata.update"],
+      binding: pullBinding,
+      backend,
+    });
+    await transition.invoke(
+      {
+        callId: "call-reopen-pull",
+        id: "github.pull.metadata.update",
+        input: { state: "open" },
+      },
+      invocation,
+    );
+    const [receipt] = await transition.flush(invocation);
+
+    expect(updatePull).toHaveBeenCalledOnce();
+    expect(receipt?.result.output).toMatchObject({ state: "open", attempts: 1 });
+  });
+
   it("binds checks to the immutable trusted head and bounds returned data", async () => {
-    const readChecks = vi.fn<GitHubToolApi["readChecks"]>(() =>
+    const readChecks = vi.fn<GitHubToolBackend["readChecks"]>(() =>
       Promise.resolve({
         totalCount: 50,
         statusCount: 75,
@@ -745,14 +1054,13 @@ describe("Controller-owned typed GitHub tools", () => {
       binding: pullBinding,
       securityPolicy: policy("trusted-read"),
       allowWrite: false,
-      api: fakeApi({ readChecks }),
+      backend: fakeBackend({ readChecks }),
     });
     const result = await tools.invoke(
       { callId: "call-checks", id: "github.checks.read", input: {} },
       invocation,
     );
-    expect(readChecks.mock.calls[0]?.[0]).toMatchObject({
-      repositoryId: 42,
+    expect(readChecks.mock.calls[0]?.[0]).toEqual({
       owner: "trusted-owner",
       repo: "trusted-repo",
       headSha: HEAD,
@@ -768,6 +1076,7 @@ describe("Controller-owned typed GitHub tools", () => {
         invocation,
       ),
     ).rejects.toThrow(/Invalid input/u);
+    expect(readChecks).toHaveBeenCalledOnce();
   });
 
   it("hard-bounds a GitHub API call even when a client ignores its abort signal", async () => {
@@ -776,7 +1085,7 @@ describe("Controller-owned typed GitHub tools", () => {
       binding: pullBinding,
       securityPolicy: policy("trusted-read"),
       allowWrite: false,
-      api: fakeApi({ readChecks: () => new Promise(() => undefined) }),
+      backend: fakeBackend({ readChecks: () => new Promise(() => undefined) }),
     });
     await expect(
       tools.invoke(
@@ -816,7 +1125,7 @@ describe("Controller-owned typed GitHub tools", () => {
     const setLabels = vi.fn(() => Promise.resolve());
     const tools = provider({
       ids: ["github.issue.labels.set"],
-      api: fakeApi({ setLabels }),
+      backend: fakeBackend({ setLabels }),
     });
     await tools.invoke(
       { callId: "call-discard", id: "github.issue.labels.set", input: { labels: ["bug"] } },

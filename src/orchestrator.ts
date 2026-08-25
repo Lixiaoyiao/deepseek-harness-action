@@ -15,6 +15,7 @@ import { AgentDeadlineError, runAgentLoop, type AgentToolReceipt } from "./agent
 import { DshAbortedError } from "./dsh/errors.js";
 import { PolicyDeniedError } from "./errors.js";
 import { createGitHubClient } from "./github/client.js";
+import { createOctokitGitHubToolBackend } from "./github/octokit-tool-backend.js";
 import { fetchEntitySnapshot, type EntitySnapshot } from "./github/fetch.js";
 import { parseGitHubContext } from "./github/context.js";
 import { isFailedWorkflowRun, readEventPayload } from "./github/payload.js";
@@ -607,7 +608,7 @@ async function runActionInternal(
             policy,
             allowWrite: inputs.allowWrite,
             expectedAuthorId: inputs.botUserId,
-            client,
+            backend: createOctokitGitHubToolBackend(client),
           });
     const controllerProviders = [commandToolProvider, githubToolProvider].filter(
       (provider): provider is CommandToolProvider | GitHubToolProvider => provider !== undefined,
