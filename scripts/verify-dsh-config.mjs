@@ -12,12 +12,14 @@ const headlessPackage = require.resolve("@deepseek-ai/dsh-headless/package.json"
 const headlessRunner = join(headlessPackage, "..", "lib", "index.js");
 const headlessStartup = join(headlessPackage, "..", "lib", "startup.js");
 const projectRoot = join(import.meta.dirname, "..");
+const nativeLauncher = join(projectRoot, "assets", "dsh", "native-launcher.mjs");
 const dshHome = await mkdtemp(join(tmpdir(), "dsh-action-config-"));
 
 try {
-  const [runnerSource, startupSource] = await Promise.all([
+  const [runnerSource, startupSource, nativeLauncherSource] = await Promise.all([
     readFile(headlessRunner, "utf8"),
     readFile(headlessStartup, "utf8"),
+    readFile(nativeLauncher, "utf8"),
   ]);
   assert.match(
     runnerSource,
@@ -38,6 +40,31 @@ try {
     startupSource,
     /\.argument\(\s*"\[task\.\.\.\]"/u,
     "the audited headless startup must continue to expose only the task positional",
+  );
+  assert.match(
+    nativeLauncherSource,
+    /loadProfile\(NAME, PROFILE, INSTALL_ANCHOR, dshHome\)/u,
+    "native mode must load the official DSH headless Profile",
+  );
+  assert.match(
+    nativeLauncherSource,
+    /host\.on\("agent\/created", \(\{ agent \}\) =>/u,
+    "native tool observation must sample the actual published Agent scope",
+  );
+  assert.match(
+    nativeLauncherSource,
+    /tools\.schemas\(agent\)/u,
+    "native observedTools must come from the public DSH ToolRuntime schema view",
+  );
+  assert.match(
+    nativeLauncherSource,
+    /\{ id: "session-telemetry-otel", disabled: true \}/u,
+    "the programmatic native launcher must preserve default-off DSH telemetry",
+  );
+  assert.doesNotMatch(
+    nativeLauncherSource,
+    /\.restrict\(|action-policy|action-workspace/u,
+    "native observation must not install or imitate the controlled ToolRuntime policy",
   );
 
   for (const patch of [

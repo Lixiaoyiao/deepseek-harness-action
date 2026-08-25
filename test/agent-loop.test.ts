@@ -482,6 +482,50 @@ describe("controller-owned agent loop", () => {
     ]);
   });
 
+  it("unions native observed inventory across fresh multi-turn DSH workers", async () => {
+    let turn = 0;
+    const provider: ToolProvider = {
+      id: "command",
+      manifest: () => [],
+      invoke: (call) =>
+        Promise.resolve({ callId: call.callId, id: call.id, ok: true, output: { passed: true } }),
+    };
+    const result = await runAgentLoop(
+      task(),
+      inputs({ dshMode: "native", maxTurns: 2 }),
+      {
+        deadlineMs: Date.now() + 60_000,
+        toolProvider: provider,
+        blocked: () => Promise.resolve("blocked"),
+        finalize: () => Promise.resolve("done"),
+      },
+      {
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => ({
+          id: "fake-native",
+          version: "1",
+          runTurn: () => {
+            turn += 1;
+            return Promise.resolve({
+              output:
+                turn === 1
+                  ? output("needs_tool", { toolRequest: { id: "command.test", input: {} } })
+                  : output("final"),
+              durationMs: 10,
+              metadata: {
+                isolationReport: isolation,
+                observedTools: turn === 1 ? ["read", "glob"] : ["grep", "read"],
+              },
+            });
+          },
+        }),
+      },
+    );
+
+    expect(result.agent.observedTools).toEqual(["glob", "grep", "read"]);
+  });
+
   it("detects no progress from stable failure identity and workspace despite noisy logs", async () => {
     const requests: AgentTurnRequest[] = [];
     let attempt = 0;
@@ -851,6 +895,7 @@ describe("controller-owned agent loop", () => {
     const error = new DshProcessError(9, null, "crashed").attachTelemetry({
       durationMs: 25,
       isolationReport: isolation,
+      observedTools: ["read", "glob"],
       toolReceipts: [
         {
           schemaVersion: 1,
@@ -890,6 +935,7 @@ describe("controller-owned agent loop", () => {
     expect(onEngineFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         durationMs: 25,
+        observedTools: ["glob", "read"],
         toolReceipts: [expect.objectContaining({ callId: "mcp-crash", completed: false })],
       }),
       expect.objectContaining({ turns: 1 }),

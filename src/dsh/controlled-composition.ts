@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { stat, writeFile } from "node:fs/promises";
+import { copyFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 import {
@@ -16,17 +16,16 @@ import {
   CONTAINER_WORKSPACE,
   CONTAINER_WORKSPACE_PLUGIN,
 } from "./docker-policy.js";
+import type { NativeToolId } from "../tools/schema.js";
 import { DshConfigurationError } from "./errors.js";
 import type {
-  DshBasePatch,
-  DshBasePatchOptions,
   DshComposition,
   DshCompositionSelection,
-  DshRuntimeAssetsOptions,
-  PrepareDockerDshCompositionOptions,
+  DshCompositionIsolationMetadata,
+  DshPromptToolPolicy,
+  PrepareDshCompositionOptions,
   PreparedDockerDshComposition,
-  PrepareLocalDshCompositionOptions,
-  PreparedLocalDshComposition,
+  PreparedDshComposition,
   RunDshCompositionPreparation,
 } from "./composition.js";
 import type { DshRuntime } from "./runtime.js";
@@ -45,7 +44,7 @@ async function assertFile(path: string, description: string): Promise<void> {
 
 async function writeToolPolicy(
   runtime: DshRuntime,
-  nativeTools: PrepareLocalDshCompositionOptions["nativeTools"],
+  nativeTools: PrepareDshCompositionOptions["nativeTools"],
 ): Promise<string> {
   const enabled = new Set(nativeTools);
   const rows: string[] = [];
@@ -81,6 +80,7 @@ export class ControlledComposition implements DshComposition {
   public readonly id = "github-action-controlled";
   public readonly toolPolicyOwner = "controller";
   public readonly profileSchemaVersion = CONTROLLED_PROFILE_SCHEMA_VERSION;
+  public readonly actionManagedExtensionProfile = true;
   private validatedAssetsDirectory: string | undefined;
 
   public runtimeToolNames(
@@ -89,7 +89,50 @@ export class ControlledComposition implements DshComposition {
     return nativeRuntimeToolNames(nativeTools);
   }
 
-  public async prepareBasePatch(options: DshBasePatchOptions): Promise<DshBasePatch> {
+  public promptToolPolicy(nativeTools: readonly NativeToolId[]): DshPromptToolPolicy {
+    return { policyOwner: "controller", nativeTools };
+  }
+
+  public requiresWebSearchProxy(nativeTools: readonly NativeToolId[]): boolean {
+    return nativeTools.includes("native.web-search");
+  }
+
+  public isolationMetadata(options: {
+    readonly isolation: "docker" | "none";
+    readonly nativeTools: readonly NativeToolId[];
+    readonly extensionNetwork: boolean;
+  }): DshCompositionIsolationMetadata {
+    if (options.isolation === "none") {
+      return {
+        repoToolsEnabled: options.nativeTools.length > 0,
+        extensionProfile: "none",
+        limitations: [
+          "No operating-system or container boundary surrounds the DSH process.",
+          "Host-only mode is retained for v0.3 compatibility and never loads MCP, Bundle, or Plugin extensions.",
+        ],
+      };
+    }
+    return {
+      repoToolsEnabled: options.nativeTools.length > 0,
+      extensionProfile: "github-action",
+      limitations: [
+        ...(options.extensionNetwork
+          ? ["Explicitly network-enabled extensions share the worker's Docker bridge egress."]
+          : [
+              "The worker's internal Docker network blocks ordinary external egress; host-gateway access still depends on runner firewall policy.",
+            ]),
+        "The configured container image is supplied by the workflow and should be pinned by digest.",
+        "Third-party Bundle and Plugin startup code is trusted worker code, outside per-tool invocation guards.",
+        "Same-process Plugin timeouts are cooperative; the overall controller deadline hard-stops the worker.",
+      ],
+    };
+  }
+
+  private async prepareBasePatch(options: {
+    readonly assetsDirectory: string;
+    readonly trust: "untrusted" | "trusted-read" | "trusted-write";
+    readonly isolation: "docker" | "none";
+  }): Promise<string> {
     const patchName =
       options.trust === "trusted-write"
         ? "trusted-write.patch.yml"
@@ -98,10 +141,12 @@ export class ControlledComposition implements DshComposition {
           : "strict-untrusted.patch.yml";
     const patchPath = join(options.assetsDirectory, patchName);
     await assertFile(patchPath, "DSH patch profile");
-    return { patchPath };
+    return patchPath;
   }
 
-  public async validateRuntimeAssets(options: DshRuntimeAssetsOptions): Promise<void> {
+  private async validateRuntimeAssets(options: {
+    readonly assetsDirectory: string;
+  }): Promise<void> {
     const assets = controlledAssets(options.assetsDirectory);
     await Promise.all([
       assertFile(assets.policyPluginPath, "DSH Action policy plugin"),
@@ -111,29 +156,54 @@ export class ControlledComposition implements DshComposition {
     this.validatedAssetsDirectory = options.assetsDirectory;
   }
 
-  public async prepareLocal(
-    options: PrepareLocalDshCompositionOptions,
-  ): Promise<PreparedLocalDshComposition> {
+  public async prepare(options: PrepareDshCompositionOptions): Promise<PreparedDshComposition> {
     if (this.validatedAssetsDirectory !== options.assetsDirectory) {
       await this.validateRuntimeAssets({ assetsDirectory: options.assetsDirectory });
     }
+    const patchPath = await this.prepareBasePatch({
+      assetsDirectory: options.assetsDirectory,
+      trust: options.trust,
+      isolation: options.isolation,
+    });
+    if (options.isolation === "docker") {
+      if (options.manifestBase === undefined) {
+        throw new DshConfigurationError(
+          "Controlled Docker composition requires a runtime manifest",
+        );
+      }
+      return await this.prepareDockerProfile(
+        { ...options, manifestBase: options.manifestBase },
+        options.runtime.verifiedPluginModuleSpecifiers,
+      );
+    }
+    if (options.dshExecutableIdentity === undefined) {
+      throw new DshConfigurationError("Controlled host composition requires a DSH executable");
+    }
+    const toolPolicyPath = await writeToolPolicy(options.runtime, options.nativeTools);
     return {
       isolation: "none",
-      toolPolicyPath: await writeToolPolicy(options.runtime, options.nativeTools),
+      launchPlan: {
+        command: process.execPath,
+        args: [
+          "--expose-internals",
+          options.dshExecutableIdentity,
+          "--profile",
+          "headless",
+          "--patch",
+          patchPath,
+          "--patch",
+          toolPolicyPath,
+          options.task,
+        ],
+        cwd: options.workspacePath,
+      },
     };
   }
 
-  public async prepareDocker(
-    options: PrepareDockerDshCompositionOptions,
-  ): Promise<PreparedDockerDshComposition> {
-    if (this.validatedAssetsDirectory !== options.assetsDirectory) {
-      await this.validateRuntimeAssets({ assetsDirectory: options.assetsDirectory });
-    }
-    return await this.prepareDockerProfile(options, options.runtime.verifiedPluginModuleSpecifiers);
-  }
-
   private async prepareDockerProfile(
-    options: PrepareDockerDshCompositionOptions,
+    options: PrepareDshCompositionOptions & {
+      readonly manifestBase: Readonly<Record<string, unknown>>;
+    },
     pluginModuleSpecifiers: Readonly<Record<string, string>> | undefined,
   ): Promise<PreparedDockerDshComposition> {
     const assets = controlledAssets(options.assetsDirectory);
@@ -159,25 +229,51 @@ export class ControlledComposition implements DshComposition {
     }
     const needsPostInstallPreparation =
       options.plan.plugins.length > 0 && pluginModuleSpecifiers === undefined;
+    const launcherDestinationPath = join(profile.profileDir, basename(CONTAINER_LAUNCHER));
+    await copyFile(assets.launcherPath, launcherDestinationPath);
     const prepared: PreparedDockerDshComposition = {
       isolation: "docker",
-      policyPluginPath: assets.policyPluginPath,
-      workspacePluginPath: assets.workspacePluginPath,
-      launcherSourcePath: assets.launcherPath,
-      launcherDestinationPath: join(profile.profileDir, basename(CONTAINER_LAUNCHER)),
-      statePath: profile.statePath,
-      auditPath: profile.auditPath,
-      rules: profile.rules,
-      finalizeAfterInstall: async (runPreparation) => {
-        if (!needsPostInstallPreparation) return prepared;
-        return await this.finalizeInstalledPlugins(options, runPreparation);
+      launchPlan: {
+        command: "node",
+        args: ["--expose-internals", CONTAINER_LAUNCHER, options.task],
+        workdir: "/tmp",
+        mounts: [
+          {
+            sourcePath: options.runtime.packageRoot,
+            destinationPath: CONTAINER_PROFILE_ROOT,
+            readOnly: true,
+          },
+          {
+            sourcePath: assets.policyPluginPath,
+            destinationPath: CONTAINER_POLICY_PLUGIN,
+            readOnly: true,
+          },
+          {
+            sourcePath: assets.workspacePluginPath,
+            destinationPath: CONTAINER_WORKSPACE_PLUGIN,
+            readOnly: true,
+          },
+        ],
       },
+      receipts: {
+        statePath: profile.statePath,
+        auditPath: profile.auditPath,
+        rules: profile.rules,
+      },
+      ...(needsPostInstallPreparation
+        ? {
+            finalizeAfterInstall: async (runPreparation: RunDshCompositionPreparation) =>
+              await this.finalizeInstalledPlugins(options, runPreparation),
+          }
+        : {}),
     };
     return prepared;
   }
 
   private async finalizeInstalledPlugins(
-    options: PrepareDockerDshCompositionOptions,
+    options: PrepareDshCompositionOptions & {
+      readonly manifestBase: Readonly<Record<string, unknown>>;
+    },
     runPreparation: RunDshCompositionPreparation,
   ): Promise<PreparedDockerDshComposition> {
     let pluginModuleSpecifiers: Readonly<Record<string, string>>;
@@ -204,6 +300,8 @@ export class ControlledComposition implements DshComposition {
 
 /** The sole production selection. Adding another owner requires an explicit audit path. */
 export const PRODUCTION_DSH_COMPOSITION = {
+  mode: "controlled",
+  id: "github-action-controlled",
   toolPolicyOwner: "controller",
   create: () => new ControlledComposition(),
 } satisfies DshCompositionSelection<"controller">;

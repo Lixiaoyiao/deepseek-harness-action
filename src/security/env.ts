@@ -116,7 +116,14 @@ export function collectControllerSecrets(environment: NodeJS.ProcessEnv): readon
 }
 
 export function assertNoSecretOutput(
-  channel: "prompt" | "argv" | "environment" | "stdout" | "stderr" | "tool receipt",
+  channel:
+    | "prompt"
+    | "argv"
+    | "environment"
+    | "stdout"
+    | "stderr"
+    | "tool receipt"
+    | "native tool observation",
   output: string,
   secrets: readonly string[],
 ): void {

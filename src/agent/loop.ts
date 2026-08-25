@@ -274,8 +274,9 @@ function turnContext(
 }
 
 /**
- * Controller-owned outer loop. DSH receives only the resolved native runtime
- * tools; controller command tools and mandatory validation remain trusted callbacks.
+ * Controller-owned outer loop. Controlled DSH receives the resolved runtime
+ * allowlist; native DSH owns its internal graph. Controller command tools and
+ * mandatory validation remain trusted callbacks in both modes.
  */
 export async function runAgentLoop<TFinal>(
   task: AgentTask,
@@ -307,6 +308,7 @@ export async function runAgentLoop<TFinal>(
   };
   let totalDurationMs = 0;
   const dshToolReceipts: DshToolReceipt[] = [];
+  const observedTools = new Set<string>();
   let toolCalls = 0;
   let validationRetries = 0;
   let lastValidationFingerprint: string | undefined;
@@ -353,10 +355,18 @@ export async function runAgentLoop<TFinal>(
         if (error instanceof DshError && error.telemetry !== undefined) {
           totalDurationMs += error.telemetry.durationMs;
           dshToolReceipts.push(...(error.telemetry.toolReceipts ?? []));
+          for (const name of error.telemetry.observedTools ?? []) observedTools.add(name);
           const aggregateFailure: DshFailureTelemetry = {
             ...error.telemetry,
             durationMs: totalDurationMs,
             ...(dshToolReceipts.length === 0 ? {} : { toolReceipts: [...dshToolReceipts] }),
+            ...(observedTools.size === 0
+              ? {}
+              : {
+                  observedTools: [...observedTools].sort((left, right) =>
+                    left.localeCompare(right),
+                  ),
+                }),
           };
           error.attachTelemetry(aggregateFailure);
           await hooks.onEngineFailure?.(aggregateFailure, stats(turn));
@@ -372,6 +382,7 @@ export async function runAgentLoop<TFinal>(
         task.operation === "task" ? inputs.taskOutputSchema : undefined,
       );
       dshToolReceipts.push(...(response.metadata.toolReceipts ?? []));
+      for (const name of response.metadata.observedTools ?? []) observedTools.add(name);
       const result: DshRunResult = {
         output: validatedOutput,
         durationMs: response.durationMs,
@@ -383,6 +394,9 @@ export async function runAgentLoop<TFinal>(
           ? {}
           : { extensionAudit: response.metadata.extensionAudit }),
         ...(dshToolReceipts.length === 0 ? {} : { toolReceipts: [...dshToolReceipts] }),
+        ...(observedTools.size === 0
+          ? {}
+          : { observedTools: [...observedTools].sort((left, right) => left.localeCompare(right)) }),
       };
       totalDurationMs += result.durationMs;
       const aggregate = { ...result, durationMs: totalDurationMs };

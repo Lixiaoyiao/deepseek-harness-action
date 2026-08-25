@@ -12,6 +12,7 @@ import { finishDiagnosis } from "./commands/diagnose.js";
 import { finishReview } from "./commands/review.js";
 import { publishTaskAnswer } from "./commands/task.js";
 import { AgentDeadlineError, runAgentLoop, type AgentToolReceipt } from "./agent/loop.js";
+import { DshAgentEngine } from "./review/run.js";
 import { DshAbortedError } from "./dsh/errors.js";
 import { PolicyDeniedError } from "./errors.js";
 import { createGitHubClient } from "./github/client.js";
@@ -33,9 +34,11 @@ import { evaluatePolicy, type SecurityPolicy } from "./security/policy.js";
 import { buildAuthorityAudit, type AuthorityAudit } from "./security/authority.js";
 import { redactKnownSecrets } from "./security/env.js";
 import { configuredExtensionSecrets, resolveExtensionPlan } from "./extensions/plan.js";
-import { PRODUCTION_DSH_COMPOSITION } from "./dsh/controlled-composition.js";
+import { selectDshComposition } from "./dsh/select-composition.js";
+import type { DshComposition, DshMode } from "./dsh/composition.js";
 import {
   buildControllerToolPolicyAudit,
+  buildDshToolPolicyAudit,
   buildPermissionAudit,
   type PermissionAudit,
   type ToolPolicyAudit,
@@ -108,6 +111,8 @@ interface RunState {
   validationIntegrity?: ValidationIntegritySummary;
   validationIntegrityWarning?: string;
   validationPassed?: boolean;
+  dsh?: { readonly mode: DshMode; readonly composition: string };
+  composition?: DshComposition;
   progressFailure?: ProgressFailureFinalization;
   partialWrite?: WriteOutcome;
 }
@@ -368,6 +373,7 @@ function outcomeContext(state: RunState, startedAt: number) {
     ...(state.agent === undefined ? {} : { agent: state.agent }),
     ...(state.permission === undefined ? {} : { permission: state.permission }),
     ...(state.toolPolicy === undefined ? {} : { toolPolicy: state.toolPolicy }),
+    ...(state.dsh === undefined ? {} : { dsh: state.dsh }),
     ...(state.authority === undefined ? {} : { authority: state.authority }),
     ...(state.progress?.commentId === undefined ? {} : { commentId: state.progress.commentId }),
   };
@@ -628,13 +634,20 @@ async function runActionInternal(
       resolution: resolvedTools.permission,
       manifests: agentTools.manifests,
       additionalDenials: resolvedTools.permissionDenials,
-      extensions: extensions.audit,
+      ...(state.composition?.actionManagedExtensionProfile === true
+        ? { extensions: extensions.audit }
+        : {}),
+      ...(state.composition === undefined
+        ? {}
+        : { mediatedWeb: state.composition.requiresWebSearchProxy(tools.native) }),
     });
     state.permission = permission;
-    state.toolPolicy = buildControllerToolPolicyAudit(
-      permission,
-      PRODUCTION_DSH_COMPOSITION.toolPolicyOwner,
-    );
+    if (state.composition?.toolPolicyOwner === "controller") {
+      state.toolPolicy = buildControllerToolPolicyAudit(
+        permission,
+        state.composition.toolPolicyOwner,
+      );
+    }
     const operationIdentity = taskIdentity(command, inputs, extensions.digest, permission.digest);
     const githubMutationTools = tools.github.filter((id) => id !== "github.checks.read");
     let githubValidationFingerprint: string | undefined;
@@ -754,6 +767,10 @@ async function runActionInternal(
     // plan and the Action is committed to entering the worker path.
     state.authority = buildAuthorityAudit(extensions);
     state.phase = "agent";
+    const selectedComposition = state.composition;
+    if (selectedComposition === undefined) {
+      throw new Error("DSH composition was not selected");
+    }
     const loop = await runAgentLoop(
       {
         operation: command.operation,
@@ -784,6 +801,9 @@ async function runActionInternal(
           );
         },
         onState: (agentResult, stats) => {
+          if (agentResult.observedTools !== undefined) {
+            state.toolPolicy = buildDshToolPolicyAudit(agentResult.observedTools);
+          }
           state.agent = {
             durationMs: agentResult.durationMs,
             isolation: agentResult.isolationReport,
@@ -800,6 +820,9 @@ async function runActionInternal(
           };
         },
         onEngineFailure: (failure, stats) => {
+          if (failure.observedTools !== undefined) {
+            state.toolPolicy = buildDshToolPolicyAudit(failure.observedTools);
+          }
           state.agent = {
             durationMs: failure.durationMs,
             isolation: failure.isolationReport,
@@ -811,7 +834,9 @@ async function runActionInternal(
               ? {}
               : { dshToolReceipts: failure.toolReceipts }),
             ...(failure.extensionAudit === undefined
-              ? { extensionAudit: extensions.audit }
+              ? selectedComposition.actionManagedExtensionProfile
+                ? { extensionAudit: extensions.audit }
+                : {}
               : { extensionAudit: failure.extensionAudit }),
           };
         },
@@ -1042,6 +1067,10 @@ async function runActionInternal(
           return { kind: "write", write };
         },
       },
+      {
+        createEngine: (runtime) =>
+          new DshAgentEngine(inputs, policy, runtime, extensions, selectedComposition),
+      },
     );
     const agentResult = loop.agent;
     const taskOutput =
@@ -1185,6 +1214,11 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
   try {
     throwIfCancelled(options.signal);
     const inputs = loadInputs();
+    const compositionSelection = selectDshComposition(inputs.dshMode);
+    const composition = compositionSelection.create();
+    state.composition = composition;
+    state.dsh = { mode: compositionSelection.mode, composition: composition.id };
+    core.info(`DSH mode ${compositionSelection.mode}; composition ${composition.id}`);
     state.authority = buildAuthorityAudit();
     deadline = createRunDeadline(startedAt, inputs.timeoutMinutes, options.signal);
     return await runActionInternal(state, startedAt, inputs, deadline.signal, deadline.deadlineMs);

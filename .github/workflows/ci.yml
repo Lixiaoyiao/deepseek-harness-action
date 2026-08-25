@@ -15,7 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact candidate checkout
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          ! git config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -27,10 +37,21 @@ jobs:
         run: |
           set -euo pipefail
           runtime_dir="$(mktemp -d)"
+          smoke_dir="$(mktemp -d)"
+          smoke_network="dsh-native-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          server_pid=""
           run_as="$(id -u):$(id -g)"
-          cleanup() { docker run --rm --mount "type=bind,source=$runtime_dir,target=/cleanup" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /cleanup/node_modules /cleanup/package.json /cleanup/package-lock.json /cleanup/action-launcher.mjs || true; rmdir "$runtime_dir" || true; }
+          cleanup() {
+            if [[ "$server_pid" =~ ^[1-9][0-9]*$ ]]; then
+              kill -TERM "$server_pid" 2>/dev/null || true
+              wait "$server_pid" 2>/dev/null || true
+            fi
+            docker network rm "$smoke_network" >/dev/null 2>&1 || true
+            docker run --rm --mount "type=bind,source=$runtime_dir,target=/runtime" --mount "type=bind,source=$smoke_dir,target=/smoke" docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 rm -rf -- /runtime/node_modules /runtime/package.json /runtime/package-lock.json /runtime/action-launcher.mjs /runtime/native-launcher.mjs /smoke/home /smoke/workspace /smoke/native.stdout /smoke/native.stderr /smoke/endpoint.json /smoke/server.log || true
+            rmdir "$runtime_dir" "$smoke_dir" || true
+          }
           trap cleanup EXIT
-          cp package.json package-lock.json assets/dsh/action-launcher.mjs "$runtime_dir/"
+          cp package.json package-lock.json assets/dsh/action-launcher.mjs assets/dsh/native-launcher.mjs "$runtime_dir/"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$run_as" \
             --memory 4g --cpus 2 \
@@ -101,6 +122,7 @@ jobs:
             "action-launcher.mjs",
             "action-policy.mjs",
             "action-workspace.mjs",
+            "native-launcher.mjs",
           ]) {
             const assetPath = `/opt/dsh-action/assets/${asset}`;
             const syntax = spawnSync(process.execPath, ["--check", assetPath], {
@@ -132,3 +154,97 @@ jobs:
           }
           process.stdout.write("locked DSH rc.2 app-boot/MCP runtime ok\n");
           NODE
+
+          SMOKE_ROOT="$smoke_dir" node --input-type=module <<'NODE'
+          import { randomUUID } from "node:crypto";
+          import { mkdir, writeFile } from "node:fs/promises";
+          import { join } from "node:path";
+
+          const root = process.env.SMOKE_ROOT;
+          if (root === undefined) throw new Error("SMOKE_ROOT is required");
+          const home = join(root, "home");
+          const profile = join(home, "profiles", "headless");
+          for (const directory of [
+            profile,
+            join(home, "action-state"),
+            join(home, "sessions"),
+            join(home, "attachments"),
+            join(root, "workspace"),
+          ]) {
+            await mkdir(directory, { recursive: true, mode: 0o700 });
+          }
+          await writeFile(
+            join(profile, "package.json"),
+            `${JSON.stringify(
+              {
+                name: "dsh-profile-headless",
+                private: true,
+                dependencies: {},
+                dsh: {
+                  profile: {
+                    bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"],
+                  },
+                },
+              },
+              undefined,
+              2,
+            )}\n`,
+          );
+          await writeFile(join(profile, "cordis.patch.yml"), "[]\n");
+          await writeFile(join(profile, "action-native-root.yml"), "[]\n");
+          await writeFile(join(home, ".anonymous-user-id"), `${randomUUID()}\n`);
+          await writeFile(join(home, "action-state", "native-observed-tools.jsonl"), "");
+          await writeFile(join(root, "workspace", "README.md"), "native smoke workspace\n");
+          NODE
+
+          endpoint="$smoke_dir/endpoint.json"
+          DSH_FIXTURE_HOST=0.0.0.0 node test/fixtures/llm-server.mjs >"$endpoint" 2>"$smoke_dir/server.log" &
+          server_pid=$!
+          for _ in {1..60}; do
+            [[ -s "$endpoint" ]] && break
+            kill -0 "$server_pid" 2>/dev/null || { cat "$smoke_dir/server.log" >&2; exit 1; }
+            sleep 1
+          done
+          [[ -s "$endpoint" ]]
+          fixture_port="$(jq -r '.baseUrl | capture(":(?<port>[0-9]+)$").port' "$endpoint")"
+          [[ "$fixture_port" =~ ^[1-9][0-9]*$ ]]
+
+          docker network create --internal "$smoke_network" >/dev/null
+          smoke_gateway="$(docker network inspect "$smoke_network" --format '{{(index .IPAM.Config 0).Gateway}}')"
+          [[ -n "$smoke_gateway" ]]
+          docker run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 256 --memory 2g --cpus 2 --user "$run_as" \
+            --network "$smoke_network" --add-host "host.docker.internal:$smoke_gateway" \
+            --tmpfs /tmp:rw,nosuid,nodev,size=536870912 \
+            --mount "type=bind,source=$smoke_dir/workspace,target=/workspace,readonly" \
+            --mount "type=bind,source=$smoke_dir/home,target=/dsh-home,readonly" \
+            --mount "type=bind,source=$smoke_dir/home/action-state,target=/dsh-home/action-state" \
+            --mount "type=bind,source=$smoke_dir/home/sessions,target=/dsh-home/sessions" \
+            --mount "type=bind,source=$smoke_dir/home/attachments,target=/dsh-home/attachments" \
+            --mount "type=bind,source=$runtime_dir,target=/opt/dsh-action/package,readonly" \
+            --workdir /workspace \
+            --env CI=true --env HOME=/dsh-home --env DSH_HOME=/dsh-home \
+            --env DSH_PERMISSION_MODE=read-only --env DSH_TELEMETRY_DISABLED=1 \
+            --env DSH_TOOLS_MODE=native --env DEEPSEEK_API_KEY=fixture-worker-token \
+            --env "DEEPSEEK_BASE_URL=http://host.docker.internal:$fixture_port" \
+            --env "DEEPSEEK_SEARCH_BASE_URL=http://host.docker.internal:$fixture_port" \
+            docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
+            node --expose-internals /opt/dsh-action/package/native-launcher.mjs \
+            'Return the required review JSON for this read-only native smoke.' \
+            >"$smoke_dir/native.stdout" 2>"$smoke_dir/native.stderr"
+
+          [[ ! -s "$smoke_dir/native.stderr" ]]
+          jq -e '
+            .protocolVersion == 1 and .operation == "review" and
+            .state == "final" and .summary == "controlled profile booted"
+          ' "$smoke_dir/native.stdout" >/dev/null
+          jq -s -e '
+            length == 1 and .[0].schemaVersion == 1 and
+            .[0].source == "ctx.tools.schemas(agent)" and
+            (.[0].observedTools | length > 0) and
+            (.[0].observedTools | index("read") != null) and
+            (.[0].observedTools | index("glob") != null) and
+            (.[0].observedTools | index("grep") != null) and
+            (.[0].observedTools | index("workspace.read") == null)
+          ' "$smoke_dir/home/action-state/native-observed-tools.jsonl" >/dev/null
+          echo "native headless Docker read-only smoke ok"

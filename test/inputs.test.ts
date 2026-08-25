@@ -30,6 +30,7 @@ describe("loadInputs", () => {
     expect(result.branchNameTemplate).toBe("");
     expect(result.taskAccess).toBe("read");
     expect(result.maxTurns).toBe(3);
+    expect(result.dshMode).toBe("controlled");
     expect(result.permissionProfile).toBe("strict");
     expect(result.allowedTools).toEqual([]);
     expect(result.disallowedTools).toEqual([]);
@@ -106,6 +107,7 @@ describe("loadInputs", () => {
     ["test-commands", '["npm test"]'],
     ["base-url", "not a url"],
     ["max-turns", "11"],
+    ["dsh-mode", "unsafe"],
     ["permission-profile", "superuser"],
     ["allowed-tools", '["native.terminal"]'],
     ["disallowed-tools", '["native.terminal"]'],
@@ -133,6 +135,132 @@ describe("loadInputs", () => {
         }),
       ),
     ).toThrow(/Invalid action inputs/u);
+  });
+
+  it("selects native without reinterpreting permission-profile or Controller command tools", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "dsh-mode": "native",
+        "permission-profile": "standard",
+        "allowed-tools": '["command.check"]',
+        "tool-config": JSON.stringify({
+          schemaVersion: 1,
+          commands: [{ name: "check", description: "Run the fixed check", argv: ["npm", "test"] }],
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      dshMode: "native",
+      isolation: "docker",
+      permissionProfile: "standard",
+      allowedTools: ["command.check"],
+    });
+    expect(result.toolConfig.commands[0]).toMatchObject({
+      name: "check",
+      argv: ["npm", "test"],
+    });
+  });
+
+  it.each([
+    ["host isolation", "isolation", "none"],
+    ["host executable", "dsh-executable", "/opt/dsh/bin.js"],
+  ])("fails closed for native with %s", (_label, name, value) => {
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          "dsh-mode": "native",
+          [name]: value,
+        }),
+      ),
+    ).toThrow(/dsh-mode native requires Docker isolation and does not accept dsh-executable/u);
+  });
+
+  it.each([
+    {
+      label: "MCP",
+      name: "mcp-config",
+      value: JSON.stringify({
+        schemaVersion: 1,
+        servers: [
+          {
+            id: "docs",
+            transport: "streamable-http",
+            url: "https://mcp.example.test/rpc",
+            tools: [
+              {
+                id: "lookup",
+                name: "lookup",
+                description: "Look up documentation",
+                permissions: ["read", "network"],
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    {
+      label: "Bundle",
+      name: "plugin-config",
+      value: JSON.stringify({
+        schemaVersion: 1,
+        bundles: [
+          {
+            id: "audit",
+            package: "dsh-audit-bundle",
+            source: "1.2.3",
+            tools: [
+              {
+                id: "scan",
+                name: "plugin__audit__scan",
+                description: "Scan the repository",
+                permissions: ["read"],
+              },
+            ],
+          },
+        ],
+        plugins: [],
+      }),
+    },
+    {
+      label: "Plugin",
+      name: "plugin-config",
+      value: JSON.stringify({
+        schemaVersion: 1,
+        bundles: [],
+        plugins: [
+          {
+            id: "audit",
+            package: "dsh-audit-plugin",
+            source: "1.2.3",
+            config: {},
+            tools: [
+              {
+                id: "scan",
+                name: "plugin__audit__scan",
+                description: "Scan the repository",
+                permissions: ["read"],
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  ])("fails closed for native Action-managed $label configuration", ({ name, value }) => {
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          "dsh-mode": "native",
+          [name]: value,
+        }),
+      ),
+    ).toThrow(/does not yet support Action-managed MCP, Bundle, or Plugin configuration/u);
   });
 
   it("enforces strict autonomy and reserves configured extensions for custom or v0.4 strict", () => {

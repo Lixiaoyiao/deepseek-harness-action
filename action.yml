@@ -73,6 +73,10 @@ inputs:
     description: "Optional bounded maintainer-owned JSON Schema for a Controller-validated taskOutput. It never replaces result-json or grants authority."
     required: false
     default: ""
+  dsh-mode:
+    description: "DSH composition ownership: controlled preserves the existing Controller-owned ToolRuntime policy; experimental native uses the official DSH headless composition inside the Action's Docker safety boundary."
+    required: false
+    default: "controlled"
   dsh-version:
     description: "Pinned @deepseek-ai/dsh version. v0.7.0 accepts only the audited 0.1.1-rc.2 runtime."
     required: false
@@ -158,6 +162,10 @@ inputs:
     required: false
     default: "false"
 outputs:
+  dsh-mode:
+    description: "Resolved DSH mode: controlled, native, or none"
+  dsh-composition:
+    description: "Stable selected DSH composition identity, or none"
   conclusion:
     description: "success, neutral, or failure"
   operation:

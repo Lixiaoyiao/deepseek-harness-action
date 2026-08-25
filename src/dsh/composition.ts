@@ -3,6 +3,8 @@ import type { NativeToolId, ToolPolicyOwner } from "../tools/schema.js";
 import type { DshRuntime } from "./runtime.js";
 import type { DshOperation } from "./schema.js";
 
+export type DshMode = "controlled" | "native";
+
 export interface DshPolicyRule {
   readonly id: string;
   readonly runtimeName: string;
@@ -14,81 +16,123 @@ export interface DshPolicyRule {
   readonly groupMaxCalls: number;
 }
 
-export interface DshBasePatchOptions {
-  readonly assetsDirectory: string;
-  readonly trust: "untrusted" | "trusted-read" | "trusted-write";
+export type DshPromptToolPolicy =
+  | {
+      readonly policyOwner: "controller";
+      readonly nativeTools: readonly NativeToolId[];
+    }
+  | {
+      readonly policyOwner: "dsh";
+    };
+
+export interface DshCompositionCompatibilityOptions {
   readonly isolation: "docker" | "none";
+  readonly extensions: EffectiveExtensionPlan;
 }
 
-export interface DshBasePatch {
-  readonly patchPath: string;
+export interface DshCompositionIsolationMetadata {
+  readonly repoToolsEnabled: boolean;
+  readonly extensionProfile: "github-action" | "none";
+  readonly limitations: readonly string[];
 }
 
-export interface DshRuntimeAssetsOptions {
-  readonly assetsDirectory: string;
-}
-
-export interface PrepareLocalDshCompositionOptions {
-  readonly isolation: "none";
-  readonly assetsDirectory: string;
-  readonly runtime: DshRuntime;
-  readonly nativeTools: readonly NativeToolId[];
-}
-
-export interface PrepareDockerDshCompositionOptions {
-  readonly isolation: "docker";
+export interface PrepareDshCompositionOptions {
+  readonly isolation: "docker" | "none";
   readonly assetsDirectory: string;
   readonly runtime: DshRuntime;
   readonly plan: EffectiveExtensionPlan;
   readonly nativeTools: readonly NativeToolId[];
+  readonly trust: "untrusted" | "trusted-read" | "trusted-write";
   readonly workspaceWrite: boolean;
   readonly expectedOperation: DshOperation;
   readonly task: string;
-  readonly manifestBase: Readonly<Record<string, unknown>>;
+  readonly workspacePath: string;
+  readonly manifestBase?: Readonly<Record<string, unknown>>;
+  readonly dshExecutableIdentity?: string;
+}
+
+export interface DshDockerMount {
+  readonly sourcePath: string;
+  readonly destinationPath: string;
+  readonly readOnly: boolean;
+}
+
+export interface DshLocalLaunchPlan {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+}
+
+export interface DshDockerLaunchPlan {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly workdir: string;
+  readonly mounts: readonly DshDockerMount[];
+}
+
+export interface DshReceiptPlan {
+  readonly statePath: string;
+  readonly auditPath: string;
+  readonly rules: readonly DshPolicyRule[];
+}
+
+export interface DshObservedToolPlan {
+  /** Read model-visible names observed from the actual DSH Agent scope. */
+  collect(): Promise<readonly string[]>;
 }
 
 export type RunDshCompositionPreparation = <T>(prepare: () => Promise<T>) => Promise<T>;
 
 export interface PreparedLocalDshComposition {
   readonly isolation: "none";
-  readonly toolPolicyPath: string;
+  readonly launchPlan: DshLocalLaunchPlan;
 }
 
 export interface PreparedDockerDshComposition {
   readonly isolation: "docker";
-  readonly policyPluginPath: string;
-  readonly workspacePluginPath: string;
-  readonly launcherSourcePath: string;
-  readonly launcherDestinationPath: string;
-  readonly statePath: string;
-  readonly auditPath: string;
-  readonly rules: readonly DshPolicyRule[];
-  finalizeAfterInstall(
+  readonly launchPlan: DshDockerLaunchPlan;
+  readonly receipts?: DshReceiptPlan;
+  readonly observedTools?: DshObservedToolPlan;
+  finalizeAfterInstall?(
     runPreparation: RunDshCompositionPreparation,
   ): Promise<PreparedDockerDshComposition>;
 }
 
-/** Prepare the DSH-owned launch configuration without choosing a user-visible run mode. */
+export type PreparedDshComposition = PreparedLocalDshComposition | PreparedDockerDshComposition;
+
+/** Prepare one DSH-owned launch plan; the shared runner owns only outer isolation. */
 export interface DshComposition {
   /** Stable authorization identity; distinct implementations must use distinct IDs. */
   readonly id: string;
-  /** Identifies whether granted tools are Controller-effective or only DSH-observed. */
+  /** Whether tool inventory is a Controller grant or DSH runtime observation. */
   readonly toolPolicyOwner: ToolPolicyOwner;
+  /** Binds reuse to this exact composition contract. */
   readonly profileSchemaVersion: number;
+  readonly actionManagedExtensionProfile: boolean;
 
+  readonly assertCompatible?: (options: DshCompositionCompatibilityOptions) => void;
+
+  promptToolPolicy(nativeTools: readonly NativeToolId[]): DshPromptToolPolicy;
+
+  /** Controller inputs that materially change this composition's runtime graph. */
   runtimeToolNames(nativeTools: readonly NativeToolId[]): readonly string[];
 
-  prepareBasePatch(options: DshBasePatchOptions): Promise<DshBasePatch>;
+  /** Whether this composition needs the Controller-mediated DSH web-search route. */
+  requiresWebSearchProxy(nativeTools: readonly NativeToolId[]): boolean;
 
-  validateRuntimeAssets(options: DshRuntimeAssetsOptions): Promise<void>;
+  isolationMetadata(options: {
+    readonly isolation: "docker" | "none";
+    readonly nativeTools: readonly NativeToolId[];
+    readonly extensionNetwork: boolean;
+  }): DshCompositionIsolationMetadata;
 
-  prepareLocal(options: PrepareLocalDshCompositionOptions): Promise<PreparedLocalDshComposition>;
-
-  prepareDocker(options: PrepareDockerDshCompositionOptions): Promise<PreparedDockerDshComposition>;
+  prepare(options: PrepareDshCompositionOptions): Promise<PreparedDshComposition>;
 }
 
 /** One production selection point keeps execution and audit ownership in sync. */
 export interface DshCompositionSelection<TOwner extends ToolPolicyOwner = ToolPolicyOwner> {
+  readonly mode: DshMode;
+  readonly id: string;
   readonly toolPolicyOwner: TOwner;
   create(): DshComposition & { readonly toolPolicyOwner: TOwner };
 }

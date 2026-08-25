@@ -11,6 +11,7 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     command: "auto",
     taskAccess: "read",
     prompt: "",
+    dshMode: "controlled",
     dshVersion: DSH_VERSION,
     dshExecutable: "",
     isolation: "docker",

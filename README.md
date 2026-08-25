@@ -22,10 +22,13 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | General tasks           | Answers repository questions or performs an explicitly authorized coding task                         |
 | CI diagnosis and repair | Reads failed checks and logs; trusted workflows may validate and publish a fix                        |
 | Issue implementation    | Turns an authorized Issue request into a validated branch and pull request                            |
+| Composition modes       | Keeps the existing controlled tool profile by default and offers an experimental native DSH mode      |
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.7.0 establishes four architecture foundations without widening the public capability surface: the internal `DshComposition` seam (still backed only by `ControlledComposition`), explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam (still backed by Octokit). It does not add `NativeComposition`, a native DSH ecosystem mode, a GitHub MCP backend, or Session/Resume; the DSH pin remains `0.1.1-rc.2`.
+v0.7.0 established four architecture foundations without widening its published capability surface: the internal `DshComposition` seam, explicit Controller-owned tool-policy audit semantics, a value-free audit of Action-known authority sources, and a transport-only `GitHubToolBackend` seam. Current unreleased development adds an experimental `dsh-mode: native` path over the same locked DSH `0.1.1-rc.2` runtime. `controlled` remains the default, so existing workflows that omit `dsh-mode` retain their current composition, permissions, tools, and outputs.
+
+Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition and capability graph to DSH, while the Action still owns the Docker boundary, run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, GitHub Gateway, validation and deferred writes, deadlines, cancellation, and secret redaction. Native is Docker-only in this experimental phase. Action-managed MCP, Bundle, and Plugin configuration fails closed in native mode until the Codex 6 compatibility work; Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane. This work does not publish v0.8.0; that release remains deferred until Codex 6 is complete.
 
 ## Live runs
 

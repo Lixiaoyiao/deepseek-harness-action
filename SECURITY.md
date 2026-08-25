@@ -62,7 +62,7 @@ with:
 ```
 
 The same rule applies to capability-bearing inputs such as `command`,
-`task-access`, `allow-write`, `permission-profile`, `allowed-tools`,
+`task-access`, `allow-write`, `dsh-mode`, `permission-profile`, `allowed-tools`,
 `disallowed-tools`, `tool-config`, `mcp-config`, `plugin-config`,
 `allow-plugin-install`, `run-tests`, `test-commands`, `validation-integrity`,
 `container-image`, `base-url`, `web-search-base-url`, `isolation`, and
@@ -122,11 +122,11 @@ controller instructions.
 `untrusted`, `trusted-read` and `trusted-write` name effective execution
 profiles. They do not classify repository bytes as trustworthy.
 
-| Profile         | Repository access                                       | Worker tools                                                                                                 | Repository code execution                                                            | GitHub authority |
-| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ---------------- |
-| `untrusted`     | None                                                    | No filesystem, MCP, plugin, shell, web, repository instructions or subagents                                 | Disabled                                                                             | None             |
-| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Permission-profile tools after Controller intersection; edit, Bash and subagent are denied                   | Disabled except audited extension startup; mediated web may be allowed               | None             |
-| `trusted-write` | Read/write `.git`-less copy                             | Permission-profile tools after Controller intersection, including opt-in native Bash/subagent and extensions | Enabled only in credential-free Docker under the selected trusted permission profile | None             |
+| Profile         | Repository access                                       | Controlled composition                                                                      | Native composition                                                                               | GitHub authority |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------- |
+| `untrusted`     | None                                                    | No repository filesystem, MCP, plugin, shell, web, repository instructions, or subagents    | DSH may expose internal tools, but receives no repository mount or Controller credential         | None             |
+| `trusted-read`  | Immutable read-only `.git`-less copy when Docker-backed | Permission-profile tools after Controller intersection; edit, Bash, and subagent are denied | DSH-owned inventory inside Docker with a read-only repository mount and no Controller credential | None             |
+| `trusted-write` | Read/write `.git`-less copy                             | Intersected opt-in tools and extensions inside the credential-free Docker worker            | DSH-owned inventory inside Docker; all outer write and validation gates still apply              | None             |
 
 Trust profiles above answer whether the event and actor may access the
 repository. v0.5 permission profiles are a separate, monotonic Agent-tool
@@ -145,6 +145,30 @@ policy. Unknown, unavailable, or policy-ineligible tools fail closed with a
 reason in the permission audit. The Agent cannot modify its profile, allow/deny
 lists, or policy and cannot approve an extension or permission escalation.
 
+Composition is a separate dimension. `dsh-mode: controlled` is the compatible
+default and retains the Action-generated Profile and positive ToolRuntime
+policy. Experimental `dsh-mode: native` uses the locked official DSH
+`0.1.1-rc.2` headless composition and leaves DSH in ownership of its internal
+capability graph. `permission-profile` is neither reused nor reinterpreted as a
+composition selector, and a controlled canonical allowlist is not presented as
+complete authority over the native inventory.
+
+Native is not an unsafe mode. It requires Docker and retains the Action-owned
+workspace mount, Docker network, real-credential exclusion, run-scoped DeepSeek
+proxy, actor/repository/event trust, GitHub Gateway, validation/revalidation,
+deferred mutation, deadlines, cancellation, cleanup, bounded output, and
+redaction boundaries. Action-managed MCP, Bundle, and Plugin configuration
+fails closed in native mode until the Codex 6 ecosystem work. Controller-owned
+`command.*` and `github.*` tools remain a separate, mode-independent plane.
+
+The audit also keeps these meanings separate. Controlled mode reports
+`policyOwner: controller` and exact requested/effective/denied canonical tools.
+Native reports `policyOwner: dsh` and the root Agent's runtime-observed names in
+`observedTools`; native `toolPolicy` contains no Controller `effectiveTools`.
+Observation is telemetry, not a grant, and does not supersede any outer
+boundary. The Action records the selected mode and stable composition identity
+in `dsh-mode`, `dsh-composition`, the step summary, and `result-json.dsh`.
+
 Fork and other untrusted runs require Docker isolation. Trusted writes also
 require Docker and a full `name@sha256:<64 lowercase hex>` image reference. The
 worker never receives a GitHub client, checkout credential, real GitHub token or
@@ -156,8 +180,11 @@ injection but does not make an operator-selected image trustworthy.
 
 DSH receives an ephemeral proxy token. A controller-side proxy injects the real
 DeepSeek key only on fixed POST routes: chat completions, plus the exact
-Anthropic Messages route when `native.web-search` is effective. For the latter,
-the Controller replaces both upstream `Authorization` and `x-api-key`
+Anthropic Messages route when controlled mode makes `native.web-search`
+effective or native mode runs the official headless graph that exposes
+`web_search`. The upstream receives the real key only when that tool actually
+makes an accepted proxy request. For the latter, the Controller replaces both
+upstream `Authorization` and `x-api-key`
 credentials; it rejects query strings, extra path segments, `web_fetch`, and
 arbitrary URLs. The actual backend, workspace access and known limitations are
 recorded in the structured isolation report rather than inferred from the
@@ -241,6 +268,8 @@ before a later failure, the Controller records `partial-success` and an
 
 #### Controlled DSH native, MCP, Bundle, and plugin tools
 
+This section applies to `dsh-mode: controlled`.
+
 v0.4 introduced the official DSH extension mechanisms. v0.5.1 re-audits them
 against the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family, generates a
 controlled Profile, and
@@ -260,7 +289,7 @@ v0.5.2 added a standalone installer that only writes workflow files and does
 not run inside the Agent or Controller. v0.6.0 retains the exact audited runtime
 pin while hardening Controller error and repository-source boundaries.
 
-The Action starts this generated Profile through the official
+In controlled mode, the Action starts this generated Profile through the official
 `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API. It does not use the general
 CLI path that discovers workspace or `$DSH_HOME` `.env` files, nor does it
 enable dynamic user patch discovery, watch or hot reload. The only Profile and
@@ -386,6 +415,37 @@ Controller snapshots the full top-level runtime package inventory before
 installation and rejects any removal or version change afterwards. It also
 verifies the installed extension identity and pin and ensures the declared
 Bundle patch stays within its installed package before startup.
+
+#### Experimental NativeComposition
+
+`dsh-mode: native` uses `NativeComposition` (`dsh-native-headless`) and the
+official rc.2 headless composition as one DSH-owned graph. It is not the
+controlled Profile with fewer disabled rows. The native launch plan does not
+install fake/no-op Action ToolRuntime policy, workspace-policy, extension
+Profile, receipt-rule, or positive-allowlist artifacts.
+
+The Action observes the root Agent's actual model-facing tool names from DSH's
+public runtime schema surface. `observedTools` is inventory telemetry: it does
+not assert that the Controller granted those tools, that every observed tool was
+invoked, or that a tool can cross the container's mount, network, credential, or
+write boundary. Native `toolPolicy` deliberately omits Controller
+`effectiveTools`.
+
+Native currently fails closed unless Docker isolation is selected. A native
+worker receives the same disposable `.git`-less repository view selected by
+Action trust policy, the same internal-network or bridge construction selected
+by outer policy, only an ephemeral proxy token for model traffic, and no real
+GitHub credential. The Controller still owns event and actor authorization,
+immutable repository identity, typed GitHub operations, validation and
+revalidation, mutation queuing and flush, process deadlines, cancellation,
+cleanup, output bounds, and redaction.
+
+Native also rejects non-empty Action-managed MCP, Bundle, and Plugin
+configuration during this phase. That explicit gap is safer than pretending
+the controlled extension compiler governs DSH's full native ecosystem. Complete
+Skills/Plugin/Bundle/MCP compatibility remains Codex 6 work. Fixed-argv
+`command.*` and typed `github.*` tools remain Controller-owned and follow the
+same gates in both modes.
 
 #### Validation-definition integrity
 
@@ -519,6 +579,11 @@ touching the candidate PR's sticky comment. The integration job exercises all
 six typed GitHub operations against run-bound label, Issue, draft PR, commit and
 ref fixtures, restores their remote state, and independently performs exact,
 identity-verified cleanup without broad matching or deletion.
+The read-only golden paths retain the complete controlled Profile/extension
+coverage and add a frozen-candidate-SHA native Docker smoke. That smoke requires
+a successful real headless task, `policyOwner: dsh`, runtime-derived
+`observedTools`, no native `effectiveTools` claim, and the same read-only
+isolation report before candidate identity is revalidated.
 
 ## Known boundary
 
@@ -545,8 +610,8 @@ The stock DSH `read-only` policy is not a read-containment boundary. This action
 does not rely on it for fork isolation. If `isolation=none` is selected for an
 eligible trusted-read operation, no operating-system process boundary exists;
 the configured `dsh-executable` then runs as trusted host code. Use that mode
-only on a dedicated trusted runner. Untrusted and trusted-write profiles still
-require Docker.
+only on a dedicated trusted runner. It is a controlled compatibility path;
+native, untrusted, and trusted-write execution always require Docker.
 
 The credential-free validation container currently uses Docker bridge
 networking for validation commands, including dependency installation. That is
@@ -592,11 +657,13 @@ crash, or a network/GitHub API outage can prevent all finalization code from
 running; an “In progress” comment may therefore remain stale. The Actions run
 conclusion is authoritative.
 
-v0.7.0 retains the binding of its generated Profile and positive native-tool
-policy to the exact DSH version whose complete tool surface was audited. It
-accepts only the exact `@deepseek-ai/dsh@0.1.1-rc.2` package family; another
-tag, range or exact version is
-rejected until a matching profile is reviewed and shipped. The Action's DSH
+Controlled mode retains the binding of its generated Profile and positive
+native-tool policy to the exact DSH version whose complete tool surface was
+audited. Native mode binds its official headless composition and observed
+runtime inventory to that same pin. The Action accepts only the exact
+`@deepseek-ai/dsh@0.1.1-rc.2` package family; another tag, range, or exact
+version is rejected until matching controlled and native contracts are reviewed
+and shipped. The Action's DSH
 dependency graph is installed from the committed lockfile in an ephemeral
 container with no controller credentials. Production users should mirror the
 packages in a trusted registry or prebuild and pin a reviewed container image

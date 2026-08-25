@@ -18,13 +18,13 @@ validation, image, extension, executable, or credential-routing inputs.
 
 ### Credentials and API routing
 
-| Input                 | Required/default                        | Purpose                                                                                                                                                               |
-| --------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deepseek-api-key`    | Required                                | DeepSeek API key held by the Controller-side credential proxy. It is not passed to DSH, repository code, tools, extensions, or validation.                            |
-| `github-token`        | `${{ github.token }}`                   | Token used only by the trusted Controller for authorized GitHub reads and mutations. Workflow `permissions` remain a separate gate.                                   |
-| `base-url`            | `https://api.deepseek.com`              | Trusted upstream for Controller-proxied DeepSeek chat requests. The real DeepSeek key is sent to this destination.                                                    |
-| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | Trusted upstream for Controller-mediated DeepSeek Anthropic Messages web search. The real key is sent to this destination only when `native.web-search` is effective. |
-| `bot-user-id`         | `41898282`                              | Numeric account ID used to recognize Controller-owned sticky comments. The default is `github-actions[bot]`.                                                          |
+| Input                 | Required/default                        | Purpose                                                                                                                                                                                                                                                                                    |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deepseek-api-key`    | Required                                | DeepSeek API key held by the Controller-side credential proxy. It is not passed to DSH, repository code, tools, extensions, or validation.                                                                                                                                                 |
+| `github-token`        | `${{ github.token }}`                   | Token used only by the trusted Controller for authorized GitHub reads and mutations. Workflow `permissions` remain a separate gate.                                                                                                                                                        |
+| `base-url`            | `https://api.deepseek.com`              | Trusted upstream for Controller-proxied DeepSeek chat requests. The real DeepSeek key is sent to this destination.                                                                                                                                                                         |
+| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | Trusted upstream for Controller-mediated DeepSeek Anthropic Messages web search. Controlled mode exposes this route when `native.web-search` is effective; native mode exposes it for the official headless graph. The upstream receives the real key only for an accepted search request. |
+| `bot-user-id`         | `41898282`                              | Numeric account ID used to recognize Controller-owned sticky comments. The default is `github-actions[bot]`.                                                                                                                                                                               |
 
 `base-url` and `web-search-base-url` are credential-routing decisions, not
 ordinary model data. Review non-default endpoints as carefully as any other
@@ -80,20 +80,55 @@ tool requests and blocked tasks omit it. The value remains untrusted task data.
 
 ### Runtime, isolation, and limits
 
-| Input             | Default                                       | Purpose and constraints                                                                                                                                                  |
-| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.7.0 rejects another version, ranges, and `latest`.                                                                                         |
-| `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable. This trusted host-compatibility path has no container boundary and cannot load extensions.                      |
-| `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective extensions require Docker. `none` is only for eligible trusted-read work on a dedicated trusted runner. |
-| `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective extensions require a full `name@sha256:<64 lowercase hex>` digest.                 |
-| `timeout-minutes` | `20`                                          | Overall setup/execution deadline; accepted range is 1–360. Fixed short cleanup and cancellation-finalization grace may run afterwards.                                   |
-| `max-turns`       | `3`                                           | Maximum fresh DSH turns shared by tool requests and validation repairs; accepted range is 1–10.                                                                          |
+| Input             | Default                                       | Purpose and constraints                                                                                                                                             |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dsh-mode`        | `controlled`                                  | `controlled` or experimental `native`. This selects composition ownership only; it does not select trust, authorize GitHub, or reinterpret `permission-profile`.    |
+| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.7.0 rejects another version, ranges, and `latest`.                                                                                    |
+| `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable for eligible controlled host compatibility. Native mode rejects host execution.                             |
+| `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective controlled extensions require Docker. Experimental native mode always requires Docker.             |
+| `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective controlled extensions require a full `name@sha256:<64 lowercase hex>` digest. |
+| `timeout-minutes` | `20`                                          | Overall setup/execution deadline; accepted range is 1–360. Fixed short cleanup and cancellation-finalization grace may run afterwards.                              |
+| `max-turns`       | `3`                                           | Maximum fresh DSH turns shared by tool requests and validation repairs; accepted range is 1–10.                                                                     |
 
 Set the job-level `timeout-minutes` a few minutes above the Action input. This
 lets the Action stop its worker, publish terminal outputs, attempt an eligible
 sticky-comment update, and clean up before GitHub terminates the whole job.
 Runtime installation, extension installation, each Agent turn, and validation
 have independent caps, each further limited by the remaining overall deadline.
+
+### Composition modes
+
+`controlled` remains the default and preserves the existing Action-managed
+`github-action` Profile, positive ToolRuntime policy, canonical tool
+intersection, extension construction, and audit behavior. Omitting `dsh-mode`
+is therefore equivalent to explicitly selecting `controlled`; existing users
+do not opt into a new tool surface accidentally.
+
+`native` is an experimental `NativeComposition` over the locked official DSH
+`0.1.1-rc.2` headless composition. DSH owns its internal capability graph and
+model-facing inventory. Native is not implemented by deleting a few deny rows
+from `ControlledComposition`, and the Action does not present its controlled
+ToolRuntime allowlist as authority over DSH's complete native inventory.
+
+Native does **not** mean unsafe or unbounded. It is Docker-only and still uses
+the same Action-owned outer boundaries:
+
+- the real DeepSeek key stays in the Controller-side run-scoped proxy and only
+  an ephemeral worker credential enters Docker;
+- the real `GITHUB_TOKEN` and `GH_TOKEN` never enter the worker;
+- actor, repository, event, fork, and immutable-SHA trust decisions are
+  unchanged;
+- `command.*` and `github.*` remain Controller-owned, with the same typed GitHub
+  Gateway, validation/revalidation, deferred mutation, and write gates; and
+- overall deadlines, phase timeouts, cancellation, cleanup, bounded outputs,
+  and secret redaction remain Action-owned.
+
+Native currently rejects `isolation: none`. It also fails closed when
+Action-managed MCP, Bundle, or Plugin configuration is non-empty. Complete
+native Skills/Plugin/Bundle/MCP ecosystem compatibility is deliberately
+deferred to Codex 6. Maintainer-defined `command.*` tools and the closed
+Controller `github.*` catalog are a separate execution plane and are not tied
+to either DSH composition.
 
 ### Validation
 
@@ -164,11 +199,19 @@ for complete workflow templates.
 | `standard` | `strict` plus `native.bash`, `native.web-search`, and `native.subagent` | Trusted maintainer coding tasks. Bash and subagent still require trusted-write Docker policy.  |
 | `custom`   | No preset                                                               | Exact tools, command tools, MCP, Bundle, or Plugin configuration. List every tool explicitly.  |
 
-`allowed-tools` adds exact requests after preset expansion; it does not replace a
-`strict` or `standard` preset. Use `custom` for a minimal exact set. Exact
-`disallowed-tools` entries always win. The final set is intersected with trust,
-event, actor, workspace, network, extension, and Controller policy. Unknown,
-unavailable, omitted, or policy-ineligible IDs fail closed.
+In controlled mode, `allowed-tools` adds exact requests after preset expansion;
+it does not replace a `strict` or `standard` preset. Use `custom` for a minimal
+exact set. Exact `disallowed-tools` entries always win. The final set is
+intersected with trust, event, actor, workspace, network, extension, and
+Controller policy. Unknown, unavailable, omitted, or policy-ineligible IDs fail
+closed.
+
+`permission-profile` is not another spelling of `dsh-mode`. Native mode does
+not reinterpret `strict`, `standard`, or `custom` as DSH composition choices and
+does not use the controlled native-tool allowlist to claim authority over DSH's
+complete capability graph. The existing profile and exact canonical IDs still
+resolve the Action-owned Controller tool plane and its audit; observation of a
+DSH-native tool is not a grant from that profile.
 
 Canonical Action tool IDs are:
 
@@ -181,8 +224,10 @@ Canonical Action tool IDs are:
 - `mcp.<server-id>.<tool-id>` for MCP tools; and
 - `plugin.<extension-id>.<tool-id>` for Bundle or direct plugin tools.
 
-The DSH runtime may use a different model-facing name. Authorization always uses
-the canonical Action ID.
+The controlled DSH runtime may use a different model-facing name; controlled
+authorization always uses the canonical Action ID. Native audit instead reports
+the actual model-facing names observed from that DSH runtime, such as `read` or
+`grep`, without translating them into controlled `workspace.*` grants.
 
 The tool-policy audit uses four deliberately distinct terms:
 
@@ -194,12 +239,17 @@ The tool-policy audit uses four deliberately distinct terms:
 - `deniedTools` are requested capabilities that were not granted, paired with
   the Controller's reason. `disallowedTools` remains the narrower raw explicit
   deny input and is not a synonym.
-- `observedTools` is reserved for a future `policyOwner: dsh` composition and
-  would report names actually observed by that DSH runtime. Observation is
-  telemetry, not a Controller grant, so it must never be labeled effective.
+- `observedTools` reports the names actually visible to the root Agent in a
+  `policyOwner: dsh` native runtime. Observation is telemetry, not a Controller
+  grant, so it is never labeled effective.
 
-`ControlledComposition` is the only production composition today, and its
-`policyOwner` is always `controller`. There is no native or DSH-owned run mode.
+`ControlledComposition` reports `policyOwner: controller` with its unchanged
+`requestedTools`, `effectiveTools`, and `deniedTools`. Experimental
+`NativeComposition` reports `policyOwner: dsh` and `observedTools`; its
+`toolPolicy` has no Controller `effectiveTools` field. An observed tool may
+still be constrained by the read-only workspace mount, Docker network, missing
+credentials, Controller validation, or another outer boundary. Neither audit
+shape is an authorization input.
 
 ### Known authority sources
 
@@ -223,7 +273,9 @@ records only sources the Action knows, configures, or mediates and does not
 prove that trusted worker or extension code lacks network, runner ambient
 state, or other authority. It is observability, not authorization.
 
-### Native tools
+### Controlled native tool IDs
+
+These canonical IDs apply to `dsh-mode: controlled`:
 
 - `workspace.read` and `workspace.search` operate on the run-scoped `.git`-less
   workspace when repository access is allowed.
@@ -238,6 +290,10 @@ state, or other authority. It is observability, not authorization.
 - `native.subagent` is available only under eligible trusted-write policy. Its
   ordinary response returns to the root Agent; it does not bypass the Action's
   root structured-output contract.
+
+Native mode does not translate DSH's internal names into this controlled ID
+set. Inspect `result-json.toolPolicy.observedTools` for the actual root-Agent
+inventory and treat it only as telemetry.
 
 ## Controller-owned GitHub tools
 
@@ -304,7 +360,11 @@ redacted, and returned to the model only as untrusted data.
 
 ## MCP
 
-`mcp-config` is a strict server-and-tool allowlist for the official DSH MCP
+This section applies to controlled mode. Native currently rejects any non-empty
+`mcp-config` rather than claiming compatibility with DSH's full native MCP
+ecosystem.
+
+In controlled mode, `mcp-config` is a strict server-and-tool allowlist for the official DSH MCP
 client. Defining a server does not grant any tool. Each selected tool must also
 appear in `allowed-tools` as `mcp.<server-id>.<tool-id>` and survive Controller
 policy.
@@ -362,7 +422,10 @@ for identifier normalization, inventory checks, limits, and receipt behavior.
 
 ## Bundle, Plugin, and Profile loading
 
-`plugin-config` declares DSH Bundles and direct Cordis plugins. There is no
+This section applies to controlled mode. Native currently rejects non-empty
+Bundle or Plugin configuration; support remains deferred to Codex 6.
+
+In controlled mode, `plugin-config` declares DSH Bundles and direct Cordis plugins. There is no
 separate user-provided Profile input: after validating trusted workflow inputs,
 the Controller generates the run-scoped `github-action` Profile and Cordis patch
 and loads only effective entries through the official DSH app-boot API.
@@ -511,50 +574,57 @@ Actions run conclusion is authoritative. Preserve per-target workflow
 
 The Action writes outputs on success, neutral completion, and failure paths.
 
-| Output                     | Meaning                                                                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `conclusion`               | `success`, `neutral`, or `failure`.                                                                                          |
-| `operation`                | Resolved `task`, `review`, `diagnose`, `fix`, `implement`, or `none`.                                                        |
-| `summary`                  | Validated final summary for any operation, or a safe failure summary.                                                        |
-| `review-summary`           | Backward-compatible alias of `summary`.                                                                                      |
-| `findings-count`           | Selected review findings, or validated Agent findings for another operation.                                                 |
-| `branch-name`              | Created or updated Controller task branch; empty when not applicable.                                                        |
-| `pull-request-url`         | Created pull request URL; empty when not applicable.                                                                         |
-| `commit-sha`               | Commit created by a successful fix; empty when not applicable.                                                               |
-| `trust`                    | Resolved `untrusted`, `trusted-read`, `trusted-write`, or `none` execution trust.                                            |
-| `permission-profile`       | Resolved `strict`, `standard`, `custom`, or `none` Agent profile.                                                            |
-| `effective-tools`          | Backward-compatible JSON array of exact canonical tools granted by the current Controller policy.                            |
-| `network-access`           | Effective `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` worker path.                                        |
-| `workspace-write`          | Whether the effective Agent tools can modify the disposable workspace.                                                       |
-| `trusted-extensions`       | JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for the run.                                         |
-| `duration-ms`              | Total Controller duration in milliseconds.                                                                                   |
-| `comment-id`               | Sticky progress/result comment ID when tracking was available.                                                               |
-| `error-code`               | Stable failure code; empty on success or neutral completion.                                                                 |
-| `error-message`            | Redacted and bounded failure message.                                                                                        |
-| `extension-profile-digest` | SHA-256 digest of the redacted Controller-generated extension audit Profile; empty when unavailable.                         |
-| `tool-receipts`            | JSON object with bounded Controller/DSH receipt arrays and truncation metadata. Receipts are telemetry, never authorization. |
-| `task-output`              | JSON-encoded Controller-validated value for a configured task schema; otherwise empty.                                       |
-| `result-json`              | Versioned structured envelope described below.                                                                               |
+| Output                     | Meaning                                                                                                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conclusion`               | `success`, `neutral`, or `failure`.                                                                                                                                          |
+| `operation`                | Resolved `task`, `review`, `diagnose`, `fix`, `implement`, or `none`.                                                                                                        |
+| `summary`                  | Validated final summary for any operation, or a safe failure summary.                                                                                                        |
+| `review-summary`           | Backward-compatible alias of `summary`.                                                                                                                                      |
+| `findings-count`           | Selected review findings, or validated Agent findings for another operation.                                                                                                 |
+| `branch-name`              | Created or updated Controller task branch; empty when not applicable.                                                                                                        |
+| `pull-request-url`         | Created pull request URL; empty when not applicable.                                                                                                                         |
+| `commit-sha`               | Commit created by a successful fix; empty when not applicable.                                                                                                               |
+| `trust`                    | Resolved `untrusted`, `trusted-read`, `trusted-write`, or `none` execution trust.                                                                                            |
+| `dsh-mode`                 | Resolved `controlled`, `native`, or `none` composition mode.                                                                                                                 |
+| `dsh-composition`          | Stable composition identity: `github-action-controlled`, `dsh-native-headless`, or `none`.                                                                                   |
+| `permission-profile`       | Resolved `strict`, `standard`, `custom`, or `none` Agent profile.                                                                                                            |
+| `effective-tools`          | Backward-compatible JSON array from Action permission resolution. In native mode it is not the DSH inventory; use `result-json.toolPolicy.observedTools` for that telemetry. |
+| `network-access`           | Effective `host-gateway`, `mediated-web`, `bridge`, or unresolved `none` worker path.                                                                                        |
+| `workspace-write`          | Whether the effective Agent tools can modify the disposable workspace.                                                                                                       |
+| `trusted-extensions`       | JSON array of Controller-approved MCP, Bundle, and Plugin owners loaded for the run.                                                                                         |
+| `duration-ms`              | Total Controller duration in milliseconds.                                                                                                                                   |
+| `comment-id`               | Sticky progress/result comment ID when tracking was available.                                                                                                               |
+| `error-code`               | Stable failure code; empty on success or neutral completion.                                                                                                                 |
+| `error-message`            | Redacted and bounded failure message.                                                                                                                                        |
+| `extension-profile-digest` | SHA-256 digest of the redacted Controller-generated extension audit Profile; empty when unavailable.                                                                         |
+| `tool-receipts`            | JSON object with bounded Controller/DSH receipt arrays and truncation metadata. Receipts are telemetry, never authorization.                                                 |
+| `task-output`              | JSON-encoded Controller-validated value for a configured task schema; otherwise empty.                                                                                       |
+| `result-json`              | Versioned structured envelope described below.                                                                                                                               |
 
 The older scalar outputs remain available. A missing branch, commit, PR, or
 comment value is often expected for read-only, denied, failed, entity-free, or
-no-change outcomes.
+no-change outcomes. The step summary records the same resolved DSH mode and
+composition as `dsh-mode`, `dsh-composition`, and `result-json.dsh`.
 
 ### `result-json`
 
 `result-json` is a `schemaVersion: 1` envelope containing the applicable status,
-operation, summary, policy and permission audit, effective extension audit,
-bounded receipts, loop timing/counts, actual isolation report, publication,
-Controller validation, validation integrity, write result, comment ID, and
-error. The additive top-level `authority` audit records the Action-known
+operation, summary, selected DSH mode and composition at `.dsh.mode` and
+`.dsh.composition`, policy and permission
+audit, effective controlled-extension audit, bounded receipts,
+loop timing/counts, actual isolation report, publication, Controller validation,
+validation integrity, write result, comment ID, and error. The additive
+top-level `authority` audit records the Action-known
 Controller and effective worker-extension credential sources described above,
 without credential material or a completeness guarantee. When permissions
-resolve, the additive top-level `toolPolicy` audit has
-`schemaVersion: 1`, `policyOwner: controller`, and the current
-`requestedTools`, `effectiveTools`, and `deniedTools`. It deliberately has no
-`observedTools`. The existing `permissions` object and the scalar
-`permission-profile` and `effective-tools` outputs retain their prior shape and
-meaning. A validated task may add an optional `taskOutput` field without
+resolve, the additive top-level `toolPolicy` audit is discriminated by owner.
+Controlled mode has `policyOwner: controller` with its current
+`requestedTools`, `effectiveTools`, and `deniedTools`, and no `observedTools`.
+Native mode has `policyOwner: dsh`, the runtime-derived `observedTools`
+telemetry, and no Controller `effectiveTools` claim. The existing `permissions`
+object and scalar `permission-profile` and `effective-tools` outputs retain
+their backward-compatible Action-policy shape; they must not be read as the
+native DSH inventory. A validated task may add an optional `taskOutput` field without
 changing the fixed envelope or schema version. `status` is one of `success`, `neutral`, `failed`, `timed_out`,
 `validation_failed`, or `denied`. Known errors expose stable `error.code`,
 `error.category`, and `error.retryable` identity. `error.phase` separately

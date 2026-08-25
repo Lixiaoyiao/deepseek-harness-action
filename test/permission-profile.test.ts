@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildControllerToolPolicyAudit,
+  buildDshToolPolicyAudit,
   buildPermissionAudit,
   STANDARD_PERMISSION_TOOLS,
   STRICT_PERMISSION_TOOLS,
   resolvePermissionRequest,
-  type ToolPolicyAudit,
 } from "../src/permissions/profile.js";
 import type { AllowedToolId } from "../src/tools/schema.js";
 
@@ -124,18 +124,21 @@ describe("permission profile presets", () => {
     );
   });
 
-  it("reserves observed tools for a future DSH-owned policy without calling them effective", () => {
-    const audit = {
+  it("builds a DSH-owned observed inventory without Controller policy claims", () => {
+    const audit = buildDshToolPolicyAudit(["read", "grep", "glob", "read"]);
+
+    expect(audit).toEqual({
       schemaVersion: 1,
       policyOwner: "dsh",
-      requestedTools: ["workspace.read"],
-      observedTools: ["read", "grep"],
-      deniedTools: [],
-    } satisfies ToolPolicyAudit;
-
-    expect(audit.policyOwner).toBe("dsh");
-    expect(audit.observedTools).toEqual(["read", "grep"]);
+      observedTools: ["glob", "grep", "read"],
+    });
+    expect(audit).not.toHaveProperty("requestedTools");
+    expect(audit).not.toHaveProperty("deniedTools");
     expect(audit).not.toHaveProperty("effectiveTools");
+    expect(() => buildDshToolPolicyAudit([])).toThrow(/requires observed runtime tool names/u);
+    expect(() => buildDshToolPolicyAudit(["workspace.read"])).toThrow(
+      /requires observed runtime tool names/u,
+    );
   });
 
   it("reports the physical host-gateway path instead of claiming zero worker networking", () => {

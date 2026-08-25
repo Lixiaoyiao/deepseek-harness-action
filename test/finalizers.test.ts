@@ -170,12 +170,24 @@ describe("operation finalizers", () => {
         dshExecutable: "C:/dsh/lib/bin.js",
         controllerCredentials: ["token"],
       }),
-      {},
+      expect.anything(),
     );
     const lastRunDshCall = (
       mocks.runDsh.mock.calls as unknown as readonly (readonly unknown[])[]
     ).at(-1);
     const dshRequest = lastRunDshCall?.[0] as { readonly deadlineMs?: number } | undefined;
+    const dshDependencies = lastRunDshCall?.[1] as
+      | {
+          readonly composition?: {
+            readonly id?: string;
+            readonly toolPolicyOwner?: string;
+          };
+        }
+      | undefined;
+    expect(dshDependencies?.composition).toMatchObject({
+      id: "github-action-controlled",
+      toolPolicyOwner: "controller",
+    });
     expect(dshRequest?.deadlineMs).toBeGreaterThanOrEqual(startedAt + 120_000);
     expect(dshRequest?.deadlineMs).toBeLessThanOrEqual(Date.now() + 120_000);
   });

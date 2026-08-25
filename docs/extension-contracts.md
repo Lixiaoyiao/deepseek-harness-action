@@ -2,9 +2,9 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status in v0.7.0
+## Status after v0.7.0 (unreleased)
 
-The extension model introduced in v0.4 remains active unchanged in v0.7.0
+The controlled extension model introduced in v0.4 remains active unchanged
 through DeepSeek Harness's official extension mechanisms. The Action does not
 define a second plugin system:
 
@@ -16,24 +16,29 @@ define a second plugin system:
   effective grants, generates the `github-action` Profile and Cordis patch, and
   installs one positive ToolRuntime policy adapter.
 - The DSH runner reaches that construction through the internal
-  `DshComposition` boundary. `ControlledComposition` is the sole current
-  implementation and declares the Controller as its tool-policy owner. The
-  Controller orchestration records the matching exact requested/effective/denied
-  audit. This boundary does not add another Profile or run mode.
+  `DshComposition` boundary. The default `ControlledComposition` declares the
+  Controller as its tool-policy owner. Controller orchestration records the
+  matching exact requested/effective/denied audit.
+- Experimental `NativeComposition` uses the locked official DSH
+  `0.1.1-rc.2` headless composition without constructing the controlled
+  `github-action` Profile or its ToolRuntime policy adapter. DSH owns the
+  internal capability graph and the Action reports its runtime-observed tool
+  names as telemetry.
 - The v0.3 placeholder `ExtensionProvider` seam has been removed. MCP and
   plugin tools are not routed through a parallel Action plugin registry.
 
 Session resume remains deferred. Every outer-loop iteration starts a fresh DSH
-headless process over the same run-scoped `.git`-less workspace and persistent
-invocation-count files. The Action boots its controlled Profile through the
+headless process over the same run-scoped `.git`-less workspace. Controlled
+mode also reuses its run-scoped invocation-count and receipt files; native does
+not invent equivalent controlled policy state. The Action boots its controlled Profile through the
 official `@deepseek-ai/dsh-app-boot@0.1.1-rc.2` public API rather than the
 general-purpose CLI path. The standalone workflow installer added in v0.5.2
 remains unchanged. v0.6.0 added Controller-side routing, branch UX, typed GitHub
-operations, and optional task-result validation. v0.7.0 adds only internal
-composition/backend seams and additive audit semantics: it does not add
-`NativeComposition`, a native DSH ecosystem mode, a GitHub MCP backend,
-Session/Resume, a reusable session token, Agent Teams, GitHub App, or another
-Agent core expansion.
+operations, and optional task-result validation. v0.7.0 added only internal
+composition/backend seams and additive audit semantics. Current unreleased work
+uses that seam for experimental native DSH ownership; it still does not add a
+GitHub MCP backend, Session/Resume, a reusable session token, Agent Teams,
+GitHub App, or another Agent core expansion. It does not publish v0.8.0.
 
 ## Versioned configuration
 
@@ -43,6 +48,12 @@ protocol version 1. Unknown fields and unsupported schema versions fail closed.
 `task-output-schema` is not another protocol or authorization envelope: it is a
 bounded trusted schema used to validate one optional `taskOutput` field inside
 the existing Controller result.
+
+`dsh-mode` is independent of those schema versions. `controlled` is the
+compatible default; `native` selects the official headless composition and is
+currently Docker-only. A native run fails closed if Action-managed MCP, Bundle,
+or Plugin configuration is non-empty. Complete native ecosystem compatibility
+is deferred to Codex 6 rather than approximated with controlled Profile rows.
 
 The Controller accepts only `@deepseek-ai/dsh@0.1.1-rc.2` and the matching
 official package family. Every directly used DSH package is an exact top-level
@@ -96,37 +107,51 @@ package identity and version. It reads that inventory again afterwards and
 rejects an installation that removed or changed any pre-existing runtime
 package before starting DSH.
 
-## One Controller policy, two execution planes
+## Controller authority and DSH composition
 
-The tool catalog has two deliberately separate execution planes:
+The Action has two deliberately separate execution planes:
 
 1. The Controller `ToolRouter` invokes maintainer-defined `command.*` tools and
    the closed `github.*` catalog. Commands accept no model arguments and run
    fixed argv in credential-free containers. GitHub tools accept only typed,
    bounded data while repository/entity/head identity comes from Controller
    context; mutations are queued until validated finalization.
-2. DSH `ToolRuntime` invokes model-routed native workspace, official MCP, and
-   Cordis plugin tools inside the DSH worker. An Action-owned Cordis policy
-   adapter applies the Controller-generated positive runtime allowlist and
-   budgets to those routed invocations.
+2. DSH invokes model-routed tools inside the worker. In controlled mode an
+   Action-owned Cordis policy adapter applies the Controller-generated positive
+   runtime allowlist and budgets to native workspace, official MCP, and Cordis
+   plugin calls. In native mode the locked official headless composition owns
+   its internal capability graph; no controlled ToolRuntime allowlist is
+   presented as complete native authority.
 
-Both planes use the same Controller-resolved security capabilities and expose
-canonical `AgentToolManifest` records to the model. Routing or registration is
-not authorization. A configured tool becomes effective only when its canonical
-ID is also in `allowed-tools` and every requested permission is allowed by the
-current actor/origin/event policy. This limits the model-facing dispatcher; it
-does not sandbox already-approved stdio, Bundle, or plugin code that performs
-startup, background, or direct process I/O.
+Controlled mode supplies both planes from the same Controller-resolved security
+capabilities and exposes canonical `AgentToolManifest` records to the model.
+Routing or registration is not authorization. A configured controlled tool
+becomes effective only when its canonical ID is also in `allowed-tools` and
+every requested permission is allowed by the current actor/origin/event policy.
+This limits the model-facing dispatcher; it does not sandbox already-approved
+stdio, Bundle, or plugin code that performs startup, background, or direct
+process I/O.
+
+Native mode changes only DSH composition ownership. `command.*` and `github.*`
+remain in the Controller `ToolRouter`; repository/entity binding, GitHub token
+use, validation, deferred mutation, and postconditions do not move into DSH.
+Likewise, the worker still receives a read-only or read-write disposable mount
+selected by Action trust policy, only an ephemeral DeepSeek proxy credential,
+and no real GitHub token. Docker, network construction, deadlines,
+cancellation, cleanup, and redaction remain Action-owned boundaries.
 
 The public tool-policy audit keeps authorization separate from observation.
-For the sole current controlled composition, `policyOwner: controller` means
-`effectiveTools` is exactly the final canonical manifest set. The discriminated
-audit model reserves `policyOwner: dsh` plus `observedTools` for a future
-DSH-owned composition; observed runtime names would be telemetry and could not
-be represented as Controller-effective grants. No DSH-owned or native
-composition is implemented in this release.
+For `ControlledComposition`, `policyOwner: controller` means `effectiveTools`
+is exactly the final canonical manifest set. For `NativeComposition`,
+`policyOwner: dsh` reports the actual root-Agent inventory observed from DSH's
+public `ToolRuntime.schemas(agent)` runtime surface. Those names are
+`observedTools` telemetry and cannot be represented as Controller-effective
+grants; native `toolPolicy` therefore has no `effectiveTools` field. The Action
+also records `dsh-mode` / `dsh-composition`, and `.dsh.mode` /
+`.dsh.composition` in `result-json`; the stable composition identities are
+`github-action-controlled` and `dsh-native-headless`.
 
-Canonical Action IDs are:
+Canonical Action IDs for the controlled and Controller-owned planes are:
 
 - `workspace.read`, `workspace.search`, and `workspace.edit` for audited DSH
   native tools;
@@ -137,14 +162,15 @@ Canonical Action IDs are:
 - `mcp.<server-id>.<tool-id>` for MCP tools; and
 - `plugin.<extension-id>.<tool-id>` for Bundle or direct plugin tools.
 
-The Action derives MCP's model-facing `mcp__<server>__<raw-tool>` name with the
+In controlled mode, the Action derives MCP's model-facing
+`mcp__<server>__<raw-tool>` name with the
 official normalization and hash contract. Package tools must declare a unique
 runtime name beginning with `plugin__<extension-id>__`. A model-facing runtime
 name never replaces the canonical Action ID as an authorization key.
 
 ## Controlled Profile, Bundle, and Cordis loading
 
-For Docker execution, the Controller generates
+This section applies only to `dsh-mode: controlled`. For Docker execution, the Controller generates
 `$DSH_HOME/profiles/github-action/package.json`, `cordis.patch.yml`, and
 `pnpm-workspace.yaml`. The Profile always composes the reviewed
 `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-headless` Bundles, then adds only
@@ -230,7 +256,10 @@ stdio argv fields, env/header entries, and plugin configuration values nested
 under credential-like keys are included. Ordinary plugin values such as `read`
 and `safe-json` are not registered as secrets or masked.
 
-Every selected server starts with `failOnStartupError: true`. Only a tool that
+The following registration and restriction contract applies to controlled mode;
+native rejects Action-managed MCP, Bundle, and Plugin configuration before
+worker startup. Every selected controlled server starts with
+`failOnStartupError: true`. Only a tool that
 is selected by `allowed-tools` and survives Controller policy to become
 effective is required to appear in the runtime inventory; its absence fails
 closed. Before restriction, the model-visible inventory must satisfy
@@ -266,6 +295,12 @@ co-tenancy rather than pretending to provide per-tool process isolation:
 - any effective MCP, Bundle, or plugin requires Docker isolation. The host-only
   `dsh-executable` compatibility path never loads extensions.
 
+Experimental native mode does not attempt this Action-managed extension
+co-tenancy calculation: any non-empty MCP, Bundle, or Plugin configuration is
+rejected. Native itself also requires Docker, even for trusted-read work. The
+same Action code still selects the read-only/read-write mount and Docker network
+from outer trust and write policy.
+
 `network=false` does not mean that the worker has no network path. When no owner
 requests network, the worker uses an internal Docker network that blocks
 ordinary external egress. The Controller inspects that network's IPv4 gateway
@@ -277,9 +312,10 @@ the co-hosted DSH process uses Docker bridge egress. This is not a destination
 allowlist. Package acquisition also uses bridge networking even when the
 package's later runtime mode is network-disabled.
 
-## ToolRuntime limits and receipts
+## Controlled ToolRuntime limits and receipts
 
-The positive DSH policy assigns each native, MCP, or plugin runtime tool:
+In controlled mode, the positive DSH policy assigns each native, MCP, or plugin
+runtime tool:
 
 - a per-call `timeoutMs`;
 - a serialized `maxOutputBytes` limit;
@@ -316,6 +352,12 @@ also used in `result-json.loop`, which records the same truncation count.
 Receipts and extension audit data are observability only and never authorization
 input or independent proof. Approved trusted extension code can influence
 worker-side state and receipts.
+
+Native mode does not manufacture equivalent Action policy rules or receipts for
+DSH's full internal inventory. Its `observedTools` catalog is telemetry only.
+The overall Action deadline, bounded turn count, process termination,
+cancellation, cleanup, output bounds, and redaction still wrap every native DSH
+turn independently of tool-level telemetry.
 
 Controller GitHub receipts never contain credentials, raw request bodies, or
 arbitrary URLs. Mutation receipts begin as scheduled telemetry, then finalization

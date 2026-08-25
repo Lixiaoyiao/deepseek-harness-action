@@ -14,6 +14,7 @@ import {
 import type { DshIsolationReport, DshToolReceipt } from "./dsh/runner.js";
 import type { ExtensionAudit } from "./extensions/plan.js";
 import type { PermissionAudit, ToolPolicyAudit } from "./permissions/profile.js";
+import type { DshMode } from "./dsh/composition.js";
 import type { PublicationResult } from "./review/publisher.js";
 import { stripTrackingMarkers } from "./review/tracking.js";
 import type { SecurityPolicy } from "./security/policy.js";
@@ -78,6 +79,7 @@ export interface RunOutcome {
   readonly policy?: SecurityPolicy;
   readonly permission?: PermissionAudit;
   readonly toolPolicy?: ToolPolicyAudit;
+  readonly dsh?: { readonly mode: DshMode; readonly composition: string };
   readonly authority?: AuthorityAudit;
   readonly agent?: AgentRunSummary;
   readonly publication?: PublicationResult;
@@ -311,6 +313,7 @@ function structuredResult(
         }),
     ...(outcome.permission === undefined ? {} : { permissions: outcome.permission }),
     ...(outcome.toolPolicy === undefined ? {} : { toolPolicy: outcome.toolPolicy }),
+    ...(outcome.dsh === undefined ? {} : { dsh: outcome.dsh }),
     ...(outcome.authority === undefined ? {} : { authority: outcome.authority }),
     ...(outcome.agent === undefined
       ? {}
@@ -434,6 +437,8 @@ export function buildActionOutputs(outcome: RunOutcome): Readonly<Record<string,
     operation: outcome.operation ?? "none",
     summary: outcome.summary,
     "review-summary": outcome.summary,
+    "dsh-mode": outcome.dsh?.mode ?? "none",
+    "dsh-composition": outcome.dsh?.composition ?? "none",
     "findings-count": outcome.findingsCount,
     "branch-name": outcome.branchName ?? "",
     "pull-request-url": outcome.pullRequestUrl ?? "",
@@ -499,26 +504,34 @@ function permissionSummaryLines(
       (extension) =>
         `${extension.kind}:${extension.id} (network=${extension.network ? "yes" : "no"}, workspace-write=${extension.workspaceWrite ? "yes" : "no"})`,
     ) ?? [];
+  const toolLines =
+    toolPolicy?.policyOwner === "dsh"
+      ? [`**Observed tools:** ${boundedInlineList(toolPolicy.observedTools)}`]
+      : [
+          `**Requested tools:** ${boundedInlineList(toolPolicy?.requestedTools ?? permission?.requestedTools ?? [])}`,
+          `**Effective tools:** ${boundedInlineList(toolPolicy?.effectiveTools ?? permission?.effectiveTools ?? [])}`,
+        ];
   const lines = [
     "",
     "### Effective Agent permissions",
     "",
     `**Profile:** ${inlineCode(profile)}`,
     `**Tool policy owner:** ${inlineCode(policyOwner)}`,
-    `**Requested tools:** ${boundedInlineList(toolPolicy?.requestedTools ?? permission?.requestedTools ?? [])}`,
-    toolPolicy?.policyOwner === "dsh"
-      ? `**Observed tools:** ${boundedInlineList(toolPolicy.observedTools)}`
-      : `**Effective tools:** ${boundedInlineList(toolPolicy?.effectiveTools ?? permission?.effectiveTools ?? [])}`,
+    ...toolLines,
     `**Network:** ${inlineCode(network)}`,
     `**Workspace write:** ${inlineCode(workspaceWrite)}`,
     `**Trusted extensions:** ${boundedInlineList(trustedExtensions)}`,
   ];
-  const denials = toolPolicy?.deniedTools ?? permission?.deniedTools ?? [];
+  const dshOwnedPolicy = toolPolicy?.policyOwner === "dsh";
+  const denials = dshOwnedPolicy
+    ? (permission?.deniedTools ?? [])
+    : (toolPolicy?.deniedTools ?? permission?.deniedTools ?? []);
+  const denialLabel = dshOwnedPolicy ? "Controller boundary denials" : "Denials";
   if (denials.length === 0) {
-    lines.push("**Denials:** none");
+    lines.push(`**${denialLabel}:** none`);
     return lines;
   }
-  lines.push(`**Denials (${String(denials.length)}):**`);
+  lines.push(`**${denialLabel} (${String(denials.length)}):**`);
   for (const denial of denials.slice(0, MAX_STEP_SUMMARY_AUDIT_ITEMS)) {
     lines.push(`- ${inlineCode(denial.id)} — ${inlineCode(denial.reason)}`);
   }
@@ -584,6 +597,8 @@ export function formatStepSummary(outcome: RunOutcome): string {
     `**Status:** ${outcome.conclusion}`,
     `**Operation:** ${outcome.operation ?? "none"}`,
     `**Trust:** ${outcome.policy?.trust ?? "not resolved"}`,
+    `**DSH mode:** ${outcome.dsh?.mode ?? "none"}`,
+    `**DSH composition:** ${outcome.dsh?.composition ?? "none"}`,
     ...(outcome.writeStatus === undefined ? [] : [`**Write:** ${outcome.writeStatus}`]),
     `**Duration:** ${(outcome.durationMs / 1_000).toFixed(1)}s`,
     "",

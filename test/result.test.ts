@@ -18,8 +18,8 @@ import {
 } from "../src/result.js";
 import {
   buildControllerToolPolicyAudit,
+  buildDshToolPolicyAudit,
   type PermissionAudit,
-  type ToolPolicyAudit,
 } from "../src/permissions/profile.js";
 import { buildAuthorityAudit } from "../src/security/authority.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
@@ -147,6 +147,7 @@ describe("versioned action results", () => {
       policy,
       permission,
       toolPolicy,
+      dsh: { mode: "controlled", composition: "github-action-controlled" },
       authority,
       agent: {
         durationMs: 3_100,
@@ -191,6 +192,8 @@ describe("versioned action results", () => {
       "duration-ms": 4_200,
       "comment-id": 99,
       "error-code": "",
+      "dsh-mode": "controlled",
+      "dsh-composition": "github-action-controlled",
       "permission-profile": "custom",
       "effective-tools": JSON.stringify(permission.effectiveTools),
       "network-access": "bridge",
@@ -200,6 +203,7 @@ describe("versioned action results", () => {
     const result = JSON.parse(String(outputs["result-json"])) as {
       readonly permissions: unknown;
       readonly toolPolicy: unknown;
+      readonly dsh: unknown;
       readonly authority: unknown;
       readonly validation: { readonly integrity: unknown };
     };
@@ -216,6 +220,7 @@ describe("versioned action results", () => {
         toolReceipts: [{ id: "command.test", ok: true }],
       },
       policy: { trust: "trusted-write", allowed: true },
+      dsh: { mode: "controlled", composition: "github-action-controlled" },
       permissions: { profile: "custom", network: "bridge", workspaceWrite: true },
       toolPolicy: {
         policyOwner: "controller",
@@ -541,12 +546,15 @@ describe("versioned action results", () => {
         deniedTools,
       },
       toolPolicy: { ...toolPolicy, deniedTools },
+      dsh: { mode: "controlled", composition: "github-action-controlled" },
       authority,
       validation: { status: "passed", commandCount: 2, integrity },
     };
 
     const summary = formatStepSummary(outcome);
     expect(summary).toContain("### Effective Agent permissions");
+    expect(summary).toContain("**DSH mode:** controlled");
+    expect(summary).toContain("**DSH composition:** github-action-controlled");
     expect(summary).toContain("**Profile:** `custom`");
     expect(summary).toContain("**Tool policy owner:** `Controller`");
     expect(summary).toContain("**Requested tools:**");
@@ -567,14 +575,8 @@ describe("versioned action results", () => {
     expect(summary).toContain("**Baseline replay:** `passed` (2 command(s))");
   });
 
-  it("labels a future DSH-owned runtime inventory as observed rather than effective", () => {
-    const observedToolPolicy = {
-      schemaVersion: 1,
-      policyOwner: "dsh",
-      requestedTools: ["workspace.read"],
-      observedTools: ["read", "grep"],
-      deniedTools: [],
-    } satisfies ToolPolicyAudit;
+  it("labels a native DSH-owned runtime inventory as observed rather than effective", () => {
+    const observedToolPolicy = buildDshToolPolicyAudit(["read", "grep"]);
     const outcome: RunOutcome = {
       schemaVersion: 1,
       conclusion: "success",
@@ -584,18 +586,29 @@ describe("versioned action results", () => {
       durationMs: 10,
       permission,
       toolPolicy: observedToolPolicy,
+      dsh: { mode: "native", composition: "dsh-native-headless" },
     };
     const summary = formatStepSummary(outcome);
     const outputs = buildActionOutputs(outcome);
     const result = JSON.parse(String(outputs["result-json"])) as {
       readonly toolPolicy: Record<string, unknown>;
+      readonly dsh: { readonly mode: string; readonly composition: string };
     };
 
+    expect(summary).toContain("**DSH mode:** native");
+    expect(summary).toContain("**DSH composition:** dsh-native-headless");
     expect(summary).toContain("**Tool policy owner:** `DSH`");
-    expect(summary).toContain("**Observed tools:** `read`, `grep`");
+    expect(summary).toContain("**Observed tools:** `grep`, `read`");
+    expect(summary).toContain("**Controller boundary denials (1):**");
+    expect(summary).not.toContain("**Requested tools:**");
     expect(summary).not.toContain("**Effective tools:**");
+    expect(outputs["dsh-mode"]).toBe("native");
+    expect(outputs["dsh-composition"]).toBe("dsh-native-headless");
     expect(JSON.parse(String(outputs["effective-tools"]))).toEqual(permission.effectiveTools);
+    expect(result.dsh).toEqual({ mode: "native", composition: "dsh-native-headless" });
     expect(result.toolPolicy).toEqual(observedToolPolicy);
+    expect(result.toolPolicy).not.toHaveProperty("requestedTools");
+    expect(result.toolPolicy).not.toHaveProperty("deniedTools");
     expect(result.toolPolicy).not.toHaveProperty("effectiveTools");
   });
 
