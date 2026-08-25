@@ -9,12 +9,19 @@ import type {
   ToolInvocationContext,
   ToolProvider,
 } from "../agent/contracts.js";
-import type { GitHubClient } from "../github/client.js";
 import { issueContentFingerprint } from "../github/issue-identity.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
 import { stripTrackingMarkers } from "../review/tracking.js";
+import type {
+  GitHubBackendRequestControl,
+  GitHubChecksSnapshot,
+  GitHubCommentSnapshot,
+  GitHubIssueSnapshot,
+  GitHubPullSnapshot,
+  GitHubToolBackend,
+} from "./github-backend.js";
 import { githubToolSchema, type GitHubToolId } from "./schema.js";
 
 const MAX_API_CALL_MS = 15_000;
@@ -312,296 +319,11 @@ export function resolveGitHubTools(
   return { ids, denials };
 }
 
-interface RequestControl {
-  readonly timeoutMs: number;
-  readonly signal: AbortSignal;
-}
-
-interface IssueView {
-  readonly labels: readonly string[];
-  readonly assignees: readonly string[];
-  readonly state: "open" | "closed";
-  readonly stateReason: "completed" | "not_planned" | "reopened" | null;
-}
-
-interface PullView {
-  readonly title: string;
-  readonly body: string;
-  readonly state: "open" | "closed";
-  readonly base: string;
-  readonly maintainerCanModify: boolean;
-}
-
-interface OwnedCommentView {
-  readonly id: number;
-  readonly body: string;
-  readonly authorId: number | null;
-}
-
-interface ChecksView {
-  readonly totalCount: number;
-  readonly statusCount: number;
-  readonly checkRuns: readonly {
-    readonly name: string;
-    readonly status: string;
-    readonly conclusion: string | null;
-  }[];
-  readonly combinedState: string;
-  readonly statuses: readonly {
-    readonly context: string;
-    readonly state: string;
-    readonly description: string;
-  }[];
-}
-
-export interface GitHubToolApi {
-  revalidateEntity(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    allowClosed: boolean,
-    control: RequestControl,
-  ): Promise<void>;
-  getIssue(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    control: RequestControl,
-  ): Promise<IssueView>;
-  setLabels(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    labels: readonly string[],
-    control: RequestControl,
-  ): Promise<void>;
-  setAssignees(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    assignees: readonly string[],
-    control: RequestControl,
-  ): Promise<void>;
-  updateIssueState(
-    binding: Extract<GitHubToolBinding, { target: "issue" }>,
-    input: z.infer<typeof issueStateInputSchema>,
-    control: RequestControl,
-  ): Promise<void>;
-  listRecentComments(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    control: RequestControl,
-  ): Promise<readonly OwnedCommentView[]>;
-  createComment(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    body: string,
-    control: RequestControl,
-  ): Promise<void>;
-  getPull(
-    binding: Extract<GitHubToolBinding, { target: "pull_request" }>,
-    control: RequestControl,
-  ): Promise<PullView>;
-  updatePull(
-    binding: Extract<GitHubToolBinding, { target: "pull_request" }>,
-    input: z.infer<typeof pullMetadataInputSchema>,
-    control: RequestControl,
-  ): Promise<void>;
-  readChecks(
-    binding: Extract<GitHubToolBinding, { target: "pull_request" | "workflow_run" }>,
-    control: RequestControl,
-  ): Promise<ChecksView>;
-}
-
-function request(control: RequestControl) {
-  return { request: { timeout: control.timeoutMs, signal: control.signal } } as const;
-}
-
-export function createGitHubToolApi(client: GitHubClient): GitHubToolApi {
-  return {
-    async revalidateEntity(binding, allowClosed, control) {
-      if (binding.target === "issue") {
-        const [repository, response] = await Promise.all([
-          client.rest.repos.get({
-            owner: binding.owner,
-            repo: binding.repo,
-            ...request(control),
-          }),
-          client.rest.issues.get({
-            owner: binding.owner,
-            repo: binding.repo,
-            issue_number: binding.entityNumber,
-            ...request(control),
-          }),
-        ]);
-        const fingerprint = issueContentFingerprint({
-          number: response.data.number,
-          title: response.data.title,
-          body: response.data.body,
-          authorId: response.data.user?.id,
-        });
-        if (
-          repository.data.id !== binding.repositoryId ||
-          response.data.number !== binding.entityNumber ||
-          "pull_request" in response.data ||
-          fingerprint !== binding.contentFingerprint ||
-          (response.data.state === "closed" && !allowClosed)
-        ) {
-          throw new Error("Bound issue identity or state changed before GitHub tool mutation");
-        }
-        return;
-      }
-      const response = await client.rest.pulls.get({
-        owner: binding.owner,
-        repo: binding.repo,
-        pull_number: binding.entityNumber,
-        ...request(control),
-      });
-      const headRepositoryId = response.data.head.repo.id;
-      if (
-        response.data.number !== binding.entityNumber ||
-        response.data.head.sha !== validateCommitSha(binding.headSha) ||
-        response.data.head.ref !== validateRefName(binding.headRef) ||
-        headRepositoryId !== binding.headRepositoryId ||
-        response.data.base.sha !== validateCommitSha(binding.baseSha) ||
-        response.data.base.ref !== validateRefName(binding.baseRef) ||
-        response.data.base.repo.id !== binding.baseRepositoryId ||
-        binding.headRepositoryId !== binding.baseRepositoryId ||
-        (response.data.state === "closed" && !allowClosed)
-      ) {
-        throw new Error("Bound pull request identity or state changed before GitHub tool mutation");
-      }
-    },
-    async getIssue(binding, control) {
-      const response = await client.rest.issues.get({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        ...request(control),
-      });
-      return {
-        labels: response.data.labels.flatMap((label) =>
-          typeof label === "string" ? [label] : label.name === undefined ? [] : [label.name],
-        ),
-        assignees: (response.data.assignees ?? []).map(({ login }) => login),
-        state: response.data.state === "closed" ? "closed" : "open",
-        stateReason:
-          response.data.state_reason === "completed" ||
-          response.data.state_reason === "not_planned" ||
-          response.data.state_reason === "reopened"
-            ? response.data.state_reason
-            : null,
-      };
-    },
-    async setLabels(binding, labels, control) {
-      await client.rest.issues.setLabels({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        labels: [...labels],
-        ...request(control),
-      });
-    },
-    async setAssignees(binding, assignees, control) {
-      await client.rest.issues.update({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        assignees: [...assignees],
-        ...request(control),
-      });
-    },
-    async updateIssueState(binding, input, control) {
-      await client.rest.issues.update({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        state: input.state,
-        ...(input.stateReason === undefined ? {} : { state_reason: input.stateReason }),
-        ...request(control),
-      });
-    },
-    async listRecentComments(binding, control) {
-      const response = await client.rest.issues.listComments({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        per_page: 100,
-        sort: "created",
-        direction: "desc",
-        ...request(control),
-      });
-      return response.data.slice(0, 100).map((comment) => ({
-        id: comment.id,
-        body: comment.body ?? "",
-        authorId: comment.user?.id ?? null,
-      }));
-    },
-    async createComment(binding, body, control) {
-      await client.rest.issues.createComment({
-        owner: binding.owner,
-        repo: binding.repo,
-        issue_number: binding.entityNumber,
-        body,
-        ...request(control),
-      });
-    },
-    async getPull(binding, control) {
-      const response = await client.rest.pulls.get({
-        owner: binding.owner,
-        repo: binding.repo,
-        pull_number: binding.entityNumber,
-        ...request(control),
-      });
-      return {
-        title: response.data.title,
-        body: response.data.body ?? "",
-        state: response.data.state === "closed" ? "closed" : "open",
-        base: response.data.base.ref,
-        maintainerCanModify: response.data.maintainer_can_modify,
-      };
-    },
-    async updatePull(binding, input, control) {
-      await client.rest.pulls.update({
-        owner: binding.owner,
-        repo: binding.repo,
-        pull_number: binding.entityNumber,
-        ...(input.title === undefined ? {} : { title: input.title }),
-        ...(input.body === undefined ? {} : { body: input.body }),
-        ...(input.state === undefined ? {} : { state: input.state }),
-        ...(input.maintainerCanModify === undefined
-          ? {}
-          : { maintainer_can_modify: input.maintainerCanModify }),
-        ...request(control),
-      });
-    },
-    async readChecks(binding, control) {
-      const [checks, statuses] = await Promise.all([
-        client.rest.checks.listForRef({
-          owner: binding.owner,
-          repo: binding.repo,
-          ref: validateCommitSha(binding.headSha),
-          per_page: 50,
-          page: 1,
-          ...request(control),
-        }),
-        client.rest.repos.getCombinedStatusForRef({
-          owner: binding.owner,
-          repo: binding.repo,
-          ref: validateCommitSha(binding.headSha),
-          per_page: 50,
-          page: 1,
-          ...request(control),
-        }),
-      ]);
-      return {
-        totalCount: checks.data.total_count,
-        statusCount: statuses.data.total_count,
-        checkRuns: checks.data.check_runs.slice(0, 50).map((check) => ({
-          name: check.name,
-          status: check.status,
-          conclusion: check.conclusion,
-        })),
-        combinedState: statuses.data.state,
-        statuses: statuses.data.statuses.slice(0, 50).map((status) => ({
-          context: status.context,
-          state: status.state,
-          description: status.description ?? "",
-        })),
-      };
-    },
-  };
-}
+type RequestControl = GitHubBackendRequestControl;
+type IssueView = GitHubIssueSnapshot;
+type PullView = GitHubPullSnapshot;
+type OwnedCommentView = GitHubCommentSnapshot;
+type ChecksView = GitHubChecksSnapshot;
 
 const effectSchema = z.enum(["read", "scheduled", "created", "updated", "unchanged"]);
 const commonOutputSchema = z.strictObject({
@@ -857,8 +579,7 @@ export interface GitHubToolProviderOptions {
   readonly policy: SecurityPolicy;
   readonly allowWrite: boolean;
   readonly expectedAuthorId: number;
-  readonly client?: GitHubClient;
-  readonly api?: GitHubToolApi;
+  readonly backend: GitHubToolBackend;
 }
 
 export interface GitHubToolFlushReceipt {
@@ -891,7 +612,7 @@ export class GitHubToolProvider implements ToolProvider {
   public readonly id = "github";
   private readonly enabled: ReadonlySet<GitHubToolId>;
   private readonly calls = new Map<GitHubToolId, number>();
-  private readonly api: GitHubToolApi;
+  private readonly backend: GitHubToolBackend;
   private binding: GitHubToolBinding;
   private readonly pending = new Map<string, AgentToolCall>();
   private flushing = false;
@@ -904,13 +625,7 @@ export class GitHubToolProvider implements ToolProvider {
     if (options.ids.some((id) => !githubToolSchema.safeParse(id).success)) {
       throw new Error("Invalid GitHub tool id");
     }
-    this.api =
-      options.api ??
-      (options.client === undefined
-        ? (() => {
-            throw new Error("GitHub tool provider requires a Controller-owned client");
-          })()
-        : createGitHubToolApi(options.client));
+    this.backend = options.backend;
     if (options.binding.repositoryId <= 0) throw new Error("Invalid trusted repository binding");
     if (!Number.isSafeInteger(options.expectedAuthorId) || options.expectedAuthorId <= 0) {
       throw new Error("Invalid trusted GitHub bot author binding");
@@ -1055,6 +770,58 @@ export class GitHubToolProvider implements ToolProvider {
     return `repository:${String(this.binding.repositoryId)}/${entity}`;
   }
 
+  private async revalidateEntity(
+    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
+    allowClosed: boolean,
+    control: RequestControl,
+  ): Promise<void> {
+    if (binding.target === "issue") {
+      const target = {
+        owner: binding.owner,
+        repo: binding.repo,
+        issueNumber: binding.entityNumber,
+      } as const;
+      const [repository, issue] = await Promise.all([
+        this.backend.getRepository(target, control),
+        this.backend.getIssue(target, control),
+      ]);
+      const fingerprint = issueContentFingerprint({
+        number: issue.number,
+        title: issue.title,
+        body: issue.body,
+        authorId: issue.authorId,
+      });
+      if (
+        repository.id !== binding.repositoryId ||
+        issue.number !== binding.entityNumber ||
+        issue.kind !== "issue" ||
+        fingerprint !== binding.contentFingerprint ||
+        (issue.state === "closed" && !allowClosed)
+      ) {
+        throw new Error("Bound issue identity or state changed before GitHub tool mutation");
+      }
+      return;
+    }
+
+    const pull = await this.backend.getPull(
+      { owner: binding.owner, repo: binding.repo, pullNumber: binding.entityNumber },
+      control,
+    );
+    if (
+      pull.number !== binding.entityNumber ||
+      pull.headSha !== binding.headSha ||
+      pull.headRef !== binding.headRef ||
+      pull.headRepositoryId !== binding.headRepositoryId ||
+      pull.baseSha !== binding.baseSha ||
+      pull.baseRef !== binding.baseRef ||
+      pull.baseRepositoryId !== binding.baseRepositoryId ||
+      binding.headRepositoryId !== binding.baseRepositoryId ||
+      (pull.state === "closed" && !allowClosed)
+    ) {
+      throw new Error("Bound pull request identity or state changed before GitHub tool mutation");
+    }
+  }
+
   public async invoke(
     call: AgentToolCall,
     context: ToolInvocationContext,
@@ -1087,7 +854,14 @@ export class GitHubToolProvider implements ToolProvider {
       const binding = this.binding;
       if (binding.target === "issue") throw new Error("Checks are not available for issue targets");
       const value: ChecksView = await apiCall(invocation, async (control) =>
-        this.api.readChecks(binding, control),
+        this.backend.readChecks(
+          {
+            owner: binding.owner,
+            repo: binding.repo,
+            headSha: validateCommitSha(binding.headSha),
+          },
+          control,
+        ),
       );
       const output = checksOutputSchema.parse({
         effect: "read",
@@ -1135,13 +909,18 @@ export class GitHubToolProvider implements ToolProvider {
     }
     const binding = this.binding;
     if (binding.target === "workflow_run") throw new Error("Mutation target is not an entity");
+    const issueTarget = {
+      owner: binding.owner,
+      repo: binding.repo,
+      issueNumber: binding.entityNumber,
+    } as const;
     const allowClosed =
       id === "github.issue.state.update" ||
       (id === "github.pull.metadata.update" &&
         pullMetadataInputSchema.parse(parsedInput.data).state !== undefined);
     const revalidate = async (control: RequestControl): Promise<void> => {
       try {
-        await this.api.revalidateEntity(binding, allowClosed, control);
+        await this.revalidateEntity(binding, allowClosed, control);
       } catch (error: unknown) {
         throw new GitHubEntityRevalidationError({ cause: error });
       }
@@ -1152,11 +931,11 @@ export class GitHubToolProvider implements ToolProvider {
       const input = labelsInputSchema.parse(parsedInput.data);
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
-        read: async (control) => this.api.getIssue(binding, control),
+        read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
           await revalidate(control);
           markStarted();
-          await this.api.setLabels(binding, input.labels, control);
+          await this.backend.setLabels(issueTarget, input.labels, control);
         },
         matches: (value) => equalSet(value.labels, input.labels),
       });
@@ -1173,11 +952,11 @@ export class GitHubToolProvider implements ToolProvider {
       const input = assigneesInputSchema.parse(parsedInput.data);
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
-        read: async (control) => this.api.getIssue(binding, control),
+        read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
           await revalidate(control);
           markStarted();
-          await this.api.setAssignees(binding, input.assignees, control);
+          await this.backend.setAssignees(issueTarget, input.assignees, control);
         },
         matches: (value) => equalSet(value.assignees, input.assignees),
       });
@@ -1193,13 +972,17 @@ export class GitHubToolProvider implements ToolProvider {
     if (id === "github.issue.state.update") {
       if (binding.target !== "issue") throw new Error("Issue state cannot target a pull request");
       const input = issueStateInputSchema.parse(parsedInput.data);
+      const update = {
+        state: input.state,
+        ...(input.stateReason === undefined ? {} : { stateReason: input.stateReason }),
+      } as const;
       const result = await mutateWithPostcondition<IssueView>({
         invocation,
-        read: async (control) => this.api.getIssue(binding, control),
+        read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
           await revalidate(control);
           markStarted();
-          await this.api.updateIssueState(binding, input, control);
+          await this.backend.updateIssueState(issueTarget, update, control);
         },
         matches: (value) =>
           value.state === input.state &&
@@ -1238,7 +1021,9 @@ export class GitHubToolProvider implements ToolProvider {
             comment.authorId === this.options.expectedAuthorId && comment.body.includes(marker),
         );
       const existing = find(
-        await apiCall(invocation, async (control) => this.api.listRecentComments(binding, control)),
+        await apiCall(invocation, async (control) =>
+          this.backend.listRecentComments(issueTarget, control),
+        ),
       );
       if (existing !== undefined) {
         const output = commentOutputSchema.parse({
@@ -1258,7 +1043,7 @@ export class GitHubToolProvider implements ToolProvider {
         await apiCall(invocation, async (control) => {
           await revalidate(control);
           mutation.started = true;
-          await this.api.createComment(binding, body, control);
+          await this.backend.createComment(issueTarget, body, control);
         });
         acknowledged = true;
       } catch (error: unknown) {
@@ -1273,7 +1058,7 @@ export class GitHubToolProvider implements ToolProvider {
       try {
         const recovered = find(
           await apiCall(invocation, async (control) =>
-            this.api.listRecentComments(binding, control),
+            this.backend.listRecentComments(issueTarget, control),
           ),
         );
         if (recovered !== undefined) {
@@ -1304,9 +1089,13 @@ export class GitHubToolProvider implements ToolProvider {
     }
 
     if (binding.target !== "pull_request") throw new Error("Pull metadata target is not a PR");
+    const pullTarget = {
+      owner: binding.owner,
+      repo: binding.repo,
+      pullNumber: binding.entityNumber,
+    } as const;
     const rawInput = pullMetadataInputSchema.parse(parsedInput.data);
     const input = {
-      ...rawInput,
       ...(rawInput.title === undefined
         ? {}
         : {
@@ -1323,6 +1112,10 @@ export class GitHubToolProvider implements ToolProvider {
               MAX_PULL_BODY_BYTES,
             ),
           }),
+      ...(rawInput.state === undefined ? {} : { state: rawInput.state }),
+      ...(rawInput.maintainerCanModify === undefined
+        ? {}
+        : { maintainerCanModify: rawInput.maintainerCanModify }),
     };
     const matches = (value: PullView): boolean =>
       (input.title === undefined || value.title === input.title) &&
@@ -1332,11 +1125,11 @@ export class GitHubToolProvider implements ToolProvider {
         value.maintainerCanModify === input.maintainerCanModify);
     const result = await mutateWithPostcondition<PullView>({
       invocation,
-      read: async (control) => this.api.getPull(binding, control),
+      read: async (control) => this.backend.getPull(pullTarget, control),
       mutate: async (control, markStarted) => {
         await revalidate(control);
         markStarted();
-        await this.api.updatePull(binding, input, control);
+        await this.backend.updatePull(pullTarget, input, control);
       },
       matches,
     });
@@ -1348,7 +1141,7 @@ export class GitHubToolProvider implements ToolProvider {
       title: sanitizedOutputText(result.value.title, 1024).slice(0, 256),
       body: sanitizedOutputText(result.value.body, MAX_PULL_BODY_BYTES),
       state: result.value.state,
-      base: result.value.base,
+      base: result.value.baseRef,
       maintainerCanModify: result.value.maintainerCanModify,
     });
     return { callId: call.callId, id, ok: true, output };
