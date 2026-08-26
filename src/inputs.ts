@@ -1,6 +1,12 @@
 import * as core from "@actions/core";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
+import {
+  actionInputDefault,
+  actionInputName,
+  type DefaultedActionInputRuntimeKey,
+} from "./action-contract.js";
 import {
   assertControllerCredentialsAbsentFromExtensions,
   validateExtensionToolReferences,
@@ -11,8 +17,10 @@ import {
   parseNativeMcpConfiguration,
   parseNativePluginConfiguration,
   parsePluginConfiguration,
-  type AnyMcpConfiguration,
-  type AnyPluginConfiguration,
+  type McpConfiguration,
+  type NativeMcpConfiguration,
+  type NativePluginConfiguration,
+  type PluginConfiguration,
 } from "./extensions/schema.js";
 import {
   assertPermissionProfileConfiguration,
@@ -24,9 +32,10 @@ import {
   parseToolConfiguration,
   validateAllowedToolReferences,
 } from "./tools/schema.js";
-import { DSH_VERSION } from "./release.js";
+import { assertContainerImageReference } from "./dsh/docker-policy.js";
+import { validatedControllerBaseUrl } from "./dsh/base-url.js";
 import { parseTaskOutputSchema } from "./dsh/task-output.js";
-import type { DshMode } from "./dsh/composition.js";
+import { assertSupportedDshVersion } from "./dsh/version.js";
 import { validateRefName } from "./security/refs.js";
 import { validateBranchNameTemplate, validateBranchPrefix } from "./write/branch.js";
 
@@ -170,7 +179,6 @@ const actionInputsSchema = z.object({
   command: z.enum(["auto", "task", "review", "diagnose", "fix", "implement"]),
   taskAccess: z.enum(["read", "write"]),
   prompt: z.string(),
-  dshMode: z.enum(["controlled", "native"]),
   dshVersion: z.string().min(1),
   dshExecutable: z.string(),
   isolation: z.enum(["docker", "none"]),
@@ -230,8 +238,6 @@ const actionInputsSchema = z.object({
       return z.NEVER;
     }
   }),
-  mcpConfig: z.custom<AnyMcpConfiguration>(),
-  pluginConfig: z.custom<AnyPluginConfiguration>(),
   taskOutputSchema: z
     .string()
     .transform((value, context) => {
@@ -248,53 +254,28 @@ const actionInputsSchema = z.object({
     .optional(),
 });
 
-export type ActionInputs = z.infer<typeof actionInputsSchema>;
+type CommonActionInputs = z.infer<typeof actionInputsSchema>;
+
+export type ControlledActionInputs = CommonActionInputs & {
+  readonly dshMode: "controlled";
+  readonly mcpConfig: McpConfiguration;
+  readonly pluginConfig: PluginConfiguration;
+};
+
+export type NativeActionInputs = CommonActionInputs & {
+  readonly dshMode: "native";
+  readonly mcpConfig: NativeMcpConfiguration;
+  readonly pluginConfig: NativePluginConfiguration;
+};
+
+/** Mode closes the configuration shape so impossible composition pairs never reach production. */
+export type ActionInputs = ControlledActionInputs | NativeActionInputs;
 
 export type InputReader = (name: string, options?: { required?: boolean }) => string;
 
-const defaults = {
-  allowWrite: "false",
-  command: "auto",
-  taskAccess: "read",
-  prompt: "",
-  dshMode: "controlled" satisfies DshMode,
-  dshVersion: DSH_VERSION,
-  dshExecutable: "",
-  isolation: "docker",
-  containerImage:
-    "docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
-  timeoutMinutes: "20",
-  maxFindings: "20",
-  runTests: "true",
-  testCommands: "[]",
-  baseUrl: "https://api.deepseek.com",
-  webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
-  botUserId: "41898282",
-  progressComment: "true",
-  triggerPhrase: "@dsh",
-  labelTrigger: "",
-  assigneeTrigger: "",
-  allowedActors: "*",
-  allowedBots: "",
-  includeCommentsByActor: "",
-  excludeCommentsByActor: "",
-  baseBranch: "",
-  branchPrefix: "dsh/",
-  branchNameTemplate: "",
-  maxTurns: "3",
-  permissionProfile: "strict",
-  validationIntegrity: "warn",
-  allowPluginInstall: "false",
-  allowedTools: "[]",
-  disallowedTools: "[]",
-  toolConfig: '{"schemaVersion":1,"commands":[]}',
-  mcpConfig: '{"schemaVersion":1,"servers":[]}',
-  pluginConfig: '{"schemaVersion":1,"bundles":[],"plugins":[]}',
-  taskOutputSchema: "",
-} as const;
-
-function optionalInput(reader: InputReader, name: string, fallback: string): string {
-  const value = reader(name);
+function optionalInput(reader: InputReader, runtimeKey: DefaultedActionInputRuntimeKey): string {
+  const value = reader(actionInputName(runtimeKey));
+  const fallback = actionInputDefault(runtimeKey);
   return value === "" ? fallback : value;
 }
 
@@ -337,35 +318,57 @@ function assertControllerSecretsAbsentFromWorkerInputs(inputs: ActionInputs): vo
   }
 }
 
+function configurationError(error: unknown): ActionConfigurationError {
+  return new ActionConfigurationError(
+    `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
+    { cause: error },
+  );
+}
+
+function assertInputOnlyRuntimeInvariants(inputs: ActionInputs): void {
+  assertSupportedDshVersion(inputs.dshVersion);
+  assertContainerImageReference(inputs.containerImage);
+  validatedControllerBaseUrl(inputs.baseUrl, "DeepSeek base URL");
+  validatedControllerBaseUrl(inputs.webSearchBaseUrl, "Web search base URL");
+
+  if (inputs.dshMode === "native") {
+    if (inputs.isolation !== "docker" || inputs.dshExecutable !== "") {
+      throw new Error(
+        "dsh-mode native requires Docker isolation and does not accept dsh-executable",
+      );
+    }
+    return;
+  }
+  if (inputs.isolation === "docker" && inputs.dshExecutable !== "") {
+    throw new Error("dsh-executable is host-only and cannot be used with Docker isolation");
+  }
+  if (
+    inputs.isolation === "none" &&
+    inputs.dshExecutable !== "" &&
+    !isAbsolute(inputs.dshExecutable)
+  ) {
+    throw new Error("dsh-executable must be an absolute path when isolation is none");
+  }
+}
+
 /** Parse and validate all action inputs before any external side effect occurs. */
 export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
-  const deepseekApiKey = reader("deepseek-api-key", { required: true });
-  const githubToken = reader("github-token", { required: true });
-  const baseBranch = optionalInput(reader, "base-branch", defaults.baseBranch);
-  const branchPrefix = optionalInput(reader, "branch-prefix", defaults.branchPrefix);
-  const branchNameTemplate = optionalInput(
-    reader,
-    "branch-name-template",
-    defaults.branchNameTemplate,
-  );
-  const dshMode = optionalInput(reader, "dsh-mode", defaults.dshMode);
-  let mcpConfig: AnyMcpConfiguration;
-  let pluginConfig: AnyPluginConfiguration;
-  try {
-    const rawMcp = optionalInput(reader, "mcp-config", defaults.mcpConfig);
-    const rawPlugins = optionalInput(reader, "plugin-config", defaults.pluginConfig);
-    mcpConfig =
-      dshMode === "native" ? parseNativeMcpConfiguration(rawMcp) : parseMcpConfiguration(rawMcp);
-    pluginConfig =
-      dshMode === "native"
-        ? parseNativePluginConfiguration(rawPlugins)
-        : parsePluginConfiguration(rawPlugins);
-  } catch (error: unknown) {
+  const deepseekApiKey = reader(actionInputName("deepseekApiKey"), { required: true });
+  const githubToken = reader(actionInputName("githubToken"), { required: true });
+  const baseBranch = optionalInput(reader, "baseBranch");
+  const branchPrefix = optionalInput(reader, "branchPrefix");
+  const branchNameTemplate = optionalInput(reader, "branchNameTemplate");
+  const dshModeResult = z
+    .enum(["controlled", "native"])
+    .safeParse(optionalInput(reader, "dshMode"));
+  if (!dshModeResult.success) {
     throw new ActionConfigurationError(
-      `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
+      `Invalid action inputs: ${z.prettifyError(dshModeResult.error)}`,
     );
   }
+  const dshMode = dshModeResult.data;
+  const rawMcp = optionalInput(reader, "mcpConfig");
+  const rawPlugins = optionalInput(reader, "pluginConfig");
   if (
     [deepseekApiKey, githubToken].some(
       (secret) =>
@@ -380,82 +383,75 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
   const parsed = actionInputsSchema.safeParse({
     deepseekApiKey,
     githubToken,
-    allowWrite: optionalInput(reader, "allow-write", defaults.allowWrite),
-    command: optionalInput(reader, "command", defaults.command),
-    taskAccess: optionalInput(reader, "task-access", defaults.taskAccess),
-    prompt: optionalInput(reader, "prompt", defaults.prompt),
-    dshMode,
-    dshVersion: optionalInput(reader, "dsh-version", defaults.dshVersion),
-    dshExecutable: optionalInput(reader, "dsh-executable", defaults.dshExecutable),
-    isolation: optionalInput(reader, "isolation", defaults.isolation),
-    containerImage: optionalInput(reader, "container-image", defaults.containerImage),
-    timeoutMinutes: optionalInput(reader, "timeout-minutes", defaults.timeoutMinutes),
-    maxFindings: optionalInput(reader, "max-findings", defaults.maxFindings),
-    runTests: optionalInput(reader, "run-tests", defaults.runTests),
-    testCommands: optionalInput(reader, "test-commands", defaults.testCommands),
-    baseUrl: optionalInput(reader, "base-url", defaults.baseUrl),
-    webSearchBaseUrl: optionalInput(reader, "web-search-base-url", defaults.webSearchBaseUrl),
-    botUserId: optionalInput(reader, "bot-user-id", defaults.botUserId),
-    progressComment: optionalInput(reader, "progress-comment", defaults.progressComment),
-    triggerPhrase: optionalInput(reader, "trigger-phrase", defaults.triggerPhrase),
-    labelTrigger: optionalInput(reader, "label-trigger", defaults.labelTrigger),
-    assigneeTrigger: optionalInput(reader, "assignee-trigger", defaults.assigneeTrigger),
-    allowedActors: optionalInput(reader, "allowed-actors", defaults.allowedActors),
-    allowedBots: optionalInput(reader, "allowed-bots", defaults.allowedBots),
-    includeCommentsByActor: optionalInput(
-      reader,
-      "include-comments-by-actor",
-      defaults.includeCommentsByActor,
-    ),
-    excludeCommentsByActor: optionalInput(
-      reader,
-      "exclude-comments-by-actor",
-      defaults.excludeCommentsByActor,
-    ),
+    allowWrite: optionalInput(reader, "allowWrite"),
+    command: optionalInput(reader, "command"),
+    taskAccess: optionalInput(reader, "taskAccess"),
+    prompt: optionalInput(reader, "prompt"),
+    dshVersion: optionalInput(reader, "dshVersion"),
+    dshExecutable: optionalInput(reader, "dshExecutable"),
+    isolation: optionalInput(reader, "isolation"),
+    containerImage: optionalInput(reader, "containerImage"),
+    timeoutMinutes: optionalInput(reader, "timeoutMinutes"),
+    maxFindings: optionalInput(reader, "maxFindings"),
+    runTests: optionalInput(reader, "runTests"),
+    testCommands: optionalInput(reader, "testCommands"),
+    baseUrl: optionalInput(reader, "baseUrl"),
+    webSearchBaseUrl: optionalInput(reader, "webSearchBaseUrl"),
+    botUserId: optionalInput(reader, "botUserId"),
+    progressComment: optionalInput(reader, "progressComment"),
+    triggerPhrase: optionalInput(reader, "triggerPhrase"),
+    labelTrigger: optionalInput(reader, "labelTrigger"),
+    assigneeTrigger: optionalInput(reader, "assigneeTrigger"),
+    allowedActors: optionalInput(reader, "allowedActors"),
+    allowedBots: optionalInput(reader, "allowedBots"),
+    includeCommentsByActor: optionalInput(reader, "includeCommentsByActor"),
+    excludeCommentsByActor: optionalInput(reader, "excludeCommentsByActor"),
     baseBranch,
     branchPrefix,
     branchNameTemplate,
-    maxTurns: optionalInput(reader, "max-turns", defaults.maxTurns),
-    permissionProfile: optionalInput(reader, "permission-profile", defaults.permissionProfile),
-    validationIntegrity: optionalInput(
-      reader,
-      "validation-integrity",
-      defaults.validationIntegrity,
-    ),
-    allowPluginInstall: optionalInput(reader, "allow-plugin-install", defaults.allowPluginInstall),
-    allowedTools: optionalInput(reader, "allowed-tools", defaults.allowedTools),
-    disallowedTools: optionalInput(reader, "disallowed-tools", defaults.disallowedTools),
-    toolConfig: optionalInput(reader, "tool-config", defaults.toolConfig),
-    mcpConfig,
-    pluginConfig,
-    taskOutputSchema: optionalInput(reader, "task-output-schema", defaults.taskOutputSchema),
+    maxTurns: optionalInput(reader, "maxTurns"),
+    permissionProfile: optionalInput(reader, "permissionProfile"),
+    validationIntegrity: optionalInput(reader, "validationIntegrity"),
+    allowPluginInstall: optionalInput(reader, "allowPluginInstall"),
+    allowedTools: optionalInput(reader, "allowedTools"),
+    disallowedTools: optionalInput(reader, "disallowedTools"),
+    toolConfig: optionalInput(reader, "toolConfig"),
+    taskOutputSchema: optionalInput(reader, "taskOutputSchema"),
   });
 
   if (!parsed.success) {
     throw new ActionConfigurationError(`Invalid action inputs: ${z.prettifyError(parsed.error)}`);
   }
+  let inputs: ActionInputs;
   try {
-    assertPermissionProfileConfiguration(parsed.data.permissionProfile, parsed.data.allowedTools);
-    validateAllowedToolReferences(parsed.data.allowedTools, parsed.data.toolConfig);
-    validateAllowedToolReferences(
-      parsed.data.disallowedTools,
-      parsed.data.toolConfig,
-      "disallowed-tools",
-    );
-    if (parsed.data.dshMode === "controlled") {
+    inputs =
+      dshMode === "native"
+        ? {
+            ...parsed.data,
+            dshMode: "native",
+            mcpConfig: parseNativeMcpConfiguration(rawMcp),
+            pluginConfig: parseNativePluginConfiguration(rawPlugins),
+          }
+        : {
+            ...parsed.data,
+            dshMode: "controlled",
+            mcpConfig: parseMcpConfiguration(rawMcp),
+            pluginConfig: parsePluginConfiguration(rawPlugins),
+          };
+    assertInputOnlyRuntimeInvariants(inputs);
+    assertPermissionProfileConfiguration(inputs.permissionProfile, inputs.allowedTools);
+    validateAllowedToolReferences(inputs.allowedTools, inputs.toolConfig);
+    validateAllowedToolReferences(inputs.disallowedTools, inputs.toolConfig, "disallowed-tools");
+    if (inputs.dshMode === "controlled") {
+      validateExtensionToolReferences(inputs.allowedTools, inputs.mcpConfig, inputs.pluginConfig);
       validateExtensionToolReferences(
-        parsed.data.allowedTools,
-        parsed.data.mcpConfig as Parameters<typeof validateExtensionToolReferences>[1],
-        parsed.data.pluginConfig as Parameters<typeof validateExtensionToolReferences>[2],
-      );
-      validateExtensionToolReferences(
-        parsed.data.disallowedTools,
-        parsed.data.mcpConfig as Parameters<typeof validateExtensionToolReferences>[1],
-        parsed.data.pluginConfig as Parameters<typeof validateExtensionToolReferences>[2],
+        inputs.disallowedTools,
+        inputs.mcpConfig,
+        inputs.pluginConfig,
         "disallowed-tools",
       );
     } else {
-      const fabricatedGrant = [...parsed.data.allowedTools, ...parsed.data.disallowedTools].find(
+      const fabricatedGrant = [...inputs.allowedTools, ...inputs.disallowedTools].find(
         (id) => id.startsWith("mcp.") || id.startsWith("plugin."),
       );
       if (fabricatedGrant !== undefined) {
@@ -464,50 +460,38 @@ export function loadInputs(reader: InputReader = core.getInput): ActionInputs {
         );
       }
     }
-    assertControllerCredentialsAbsentFromExtensions(
-      parsed.data.mcpConfig,
-      parsed.data.pluginConfig,
-      [parsed.data.deepseekApiKey, parsed.data.githubToken],
-    );
+    assertControllerCredentialsAbsentFromExtensions(inputs.mcpConfig, inputs.pluginConfig, [
+      inputs.deepseekApiKey,
+      inputs.githubToken,
+    ]);
   } catch (error: unknown) {
-    throw new ActionConfigurationError(
-      `Invalid action inputs: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    throw configurationError(error);
   }
-  assertControllerSecretsAbsentFromWorkerInputs(parsed.data);
-  if (parsed.data.command === "task" && parsed.data.prompt.trim() === "") {
+  assertControllerSecretsAbsentFromWorkerInputs(inputs);
+  if (inputs.command === "task" && inputs.prompt.trim() === "") {
     throw new ActionConfigurationError(
       "Invalid action inputs: prompt is required when command is task",
     );
   }
   if (
-    parsed.data.taskOutputSchema !== undefined &&
-    parsed.data.command !== "auto" &&
-    parsed.data.command !== "task"
+    inputs.taskOutputSchema !== undefined &&
+    inputs.command !== "auto" &&
+    inputs.command !== "task"
   ) {
     throw new ActionConfigurationError(
       "Invalid action inputs: task-output-schema is supported only for command task or auto",
     );
   }
   if (
-    parsed.data.dshMode === "native" &&
-    (parsed.data.isolation !== "docker" || parsed.data.dshExecutable !== "")
-  ) {
-    throw new ActionConfigurationError(
-      "Invalid action inputs: dsh-mode native requires Docker isolation and does not accept dsh-executable",
-    );
-  }
-  if (
-    parsed.data.dshMode === "controlled" &&
-    parsed.data.permissionProfile === "standard" &&
-    (parsed.data.mcpConfig.servers.length > 0 ||
-      parsed.data.pluginConfig.bundles.length > 0 ||
-      parsed.data.pluginConfig.plugins.length > 0)
+    inputs.dshMode === "controlled" &&
+    inputs.permissionProfile === "standard" &&
+    (inputs.mcpConfig.servers.length > 0 ||
+      inputs.pluginConfig.bundles.length > 0 ||
+      inputs.pluginConfig.plugins.length > 0)
   ) {
     throw new ActionConfigurationError(
       "Invalid action inputs: MCP, Bundle, and Plugin configuration requires permission-profile custom (strict remains accepted for v0.4 compatibility)",
     );
   }
-  return parsed.data;
+  return inputs;
 }

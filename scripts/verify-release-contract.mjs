@@ -111,7 +111,7 @@ for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
 assert.ok(lockedDshPackageCount > 0, "package-lock.json contains no installed DSH packages");
 
 assert.ok(
-  action.includes(`v${ACTION_VERSION} accepts only the audited ${DSH_VERSION} runtime.`),
+  action.includes(`The Action accepts only the audited ${DSH_VERSION} runtime.`),
   "action.yml DSH compatibility description drifted from src/release.ts",
 );
 assert.ok(
@@ -258,7 +258,9 @@ assert.ok(
 );
 assert.ok(
   installerRuntime.includes("--dsh-mode controlled|native") &&
-    installerRuntime.includes('const DEFAULT_DSH_MODE = "controlled"'),
+    installerRuntime.includes(
+      "const DEFAULT_DSH_MODE = INSTALLER_ACTION_INPUTS.dshMode.defaultValue",
+    ),
   "installer CLI must expose native as an opt-in and keep controlled as the default",
 );
 for (const expected of ["dsh-review-native.yml", "dsh-commands-native.yml"]) {

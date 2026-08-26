@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { utf8Prefix, utf8Suffix } from "./utf8.js";
+
 const secretEnvironmentNames = new Set([
   "GITHUB_TOKEN",
   "GH_TOKEN",
@@ -135,34 +137,22 @@ function orderedTail(capture: StreamCapture): Buffer {
   ]);
 }
 
-function decodeBoundary(buffer: Buffer, side: "head" | "tail"): string {
-  let value = buffer.toString("utf8");
-  if (side === "head") {
-    while (value.endsWith("\uFFFD")) value = value.slice(0, -1);
-  } else {
-    while (value.startsWith("\uFFFD")) value = value.slice(1);
-  }
-  return value;
-}
-
 function renderCapture(capture: StreamCapture, budget: number): string {
   if (budget <= 0 || capture.seen === 0) return "";
   const headBuffer = capture.head.subarray(0, capture.headBytes);
   const tailBuffer = orderedTail(capture);
   if (capture.seen <= budget) {
-    return Buffer.concat([headBuffer, tailBuffer]).toString("utf8");
+    const raw = Buffer.concat([headBuffer, tailBuffer]);
+    return utf8Prefix(raw, raw.byteLength);
   }
   if (budget <= outputTruncationMarker.byteLength) {
-    return decodeBoundary(tailBuffer.subarray(Math.max(0, tailBuffer.byteLength - budget)), "tail");
+    return utf8Suffix(tailBuffer, budget);
   }
   const available = budget - outputTruncationMarker.byteLength;
   const headBytes = Math.floor(available / 3);
   const tailBytes = available - headBytes;
-  const head = decodeBoundary(headBuffer.subarray(0, headBytes), "head");
-  const tail = decodeBoundary(
-    tailBuffer.subarray(Math.max(0, tailBuffer.byteLength - tailBytes)),
-    "tail",
-  );
+  const head = utf8Prefix(headBuffer, headBytes);
+  const tail = utf8Suffix(tailBuffer, tailBytes);
   return head + outputTruncationMarker.toString("utf8") + tail;
 }
 

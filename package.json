@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "DeepSeek Harness for GitHub - controlled and native DSH composition, coding tasks, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {
@@ -24,15 +24,17 @@
     "prebuild": "node scripts/clean-dist.mjs",
     "build": "ncc build src/index.ts -o dist --minify --source-map --no-cache",
     "build:check": "npm run build && git diff --exit-code -- dist/ && git diff --cached --exit-code -- dist/",
+    "generate:action-contract": "node scripts/generate-action-contract.mjs --write",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
+    "test:generated": "node scripts/generate-action-contract.mjs",
     "test:dsh-config": "node scripts/verify-dsh-config.mjs",
     "test:release-contract": "node scripts/verify-release-contract.mjs",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run test:release-contract && npm run test:dsh-config && npm run build:check"
+    "check": "npm run test:generated && npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run test:release-contract && npm run test:dsh-config && npm run build:check"
   },
   "dependencies": {
     "@actions/core": "3.0.1",

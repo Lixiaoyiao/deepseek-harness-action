@@ -33,7 +33,6 @@ import type { AgentToolManifest } from "../agent/contracts.js";
 import { assertControllerCredentialsAbsentFromExtensionPlan } from "../extensions/plan.js";
 import type { AnyExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
 import type { NativeToolId } from "../tools/schema.js";
-import { DSH_VERSION } from "../release.js";
 import {
   assertContainerImageReference,
   assertPinnedContainerImage,
@@ -76,6 +75,9 @@ import {
   withheldControllerSecrets,
   workerWorkspaceWrite,
 } from "./runner-policy.js";
+import { assertSupportedDshVersion } from "./version.js";
+
+export { assertSupportedDshVersion, SUPPORTED_DSH_VERSIONS } from "./version.js";
 
 export { createDshRuntime, disposeDshRuntime } from "./runtime.js";
 export type { DshRuntime } from "./runtime.js";
@@ -89,8 +91,6 @@ export {
 } from "./install.js";
 export type { DshToolReceipt } from "./receipts.js";
 
-const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/u;
-export const SUPPORTED_DSH_VERSIONS = [DSH_VERSION] as const;
 const MAX_STDERR_BYTES = 2 * 1024 * 1024;
 export type DshTrust = "untrusted" | "trusted-read" | "trusted-write";
 export type DshIsolation = "docker" | "none";
@@ -164,18 +164,6 @@ export interface DshRunDependencies {
   /** Internal composition seam. The Action default remains ControlledComposition. */
   readonly composition?: DshComposition;
   readonly warning?: (message: string) => void;
-}
-
-/** Bind policy patches to DSH versions whose complete native tool surface was audited. */
-export function assertSupportedDshVersion(version: string): void {
-  if (!DSH_VERSION_PATTERN.test(version)) {
-    throw new DshConfigurationError("dshVersion must be an exact semver, not a tag or range");
-  }
-  if (!(SUPPORTED_DSH_VERSIONS as readonly string[]).includes(version)) {
-    throw new DshConfigurationError(
-      `dshVersion ${version} has no audited dsh-action policy profile; supported: ${SUPPORTED_DSH_VERSIONS.join(", ")}`,
-    );
-  }
 }
 
 function positiveInteger(value: number, name: string): void {

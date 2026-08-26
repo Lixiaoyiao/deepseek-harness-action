@@ -1,4 +1,5 @@
 import type { AgentToolManifest } from "../agent/contracts.js";
+import { createToolDenial, type ToolDenialReasonCode } from "../permissions/profile.js";
 import type { Capabilities, SecurityPolicy } from "../security/policy.js";
 import type { NativeToolId } from "./schema.js";
 
@@ -58,7 +59,11 @@ export const CONTROLLER_BUILTIN_CAPABILITY_CONTRACTS = Object.freeze([
       permissions: ["write"],
       inputSchema: { type: "object", additionalProperties: false },
     },
-    requirements: { capabilities: ["modifyWorkspace"], isolation: "docker" },
+    requirements: {
+      capabilities: ["modifyWorkspace"],
+      trust: ["trusted-write"],
+      isolation: "docker",
+    },
     denialReason: "Workspace editing requires trusted-write policy with Docker isolation",
   },
   {
@@ -72,6 +77,7 @@ export const CONTROLLER_BUILTIN_CAPABILITY_CONTRACTS = Object.freeze([
     },
     requirements: {
       capabilities: ["executeRepositoryCode", "modifyWorkspace"],
+      trust: ["trusted-write"],
       isolation: "docker",
     },
     denialReason: "Bash requires trusted-write repository-code execution in Docker",
@@ -119,6 +125,7 @@ export interface EvaluateBuiltinCapabilitiesOptions {
 
 export interface BuiltinCapabilityDenial {
   readonly id: NativeToolId;
+  readonly reasonCode: ToolDenialReasonCode;
   readonly reason: string;
 }
 
@@ -137,8 +144,26 @@ export function evaluateBuiltinCapabilities(options: EvaluateBuiltinCapabilities
       (requirements.isolation === undefined || requirements.isolation === options.isolation) &&
       (requirements.trust === undefined || requirements.trust.includes(options.policy.trust)) &&
       requirements.capabilities.every((capability) => options.policy.capabilities[capability]);
-    if (granted) contracts.push(contract);
-    else denials.push({ id, reason: contract.denialReason });
+    if (granted) {
+      contracts.push(contract);
+    } else {
+      denials.push(
+        createToolDenial(id, contract.denialReason, [
+          ...(!options.policy.allowed ||
+          (requirements.trust !== undefined && !requirements.trust.includes(options.policy.trust))
+            ? (["TRUST_REQUIRED"] as const)
+            : []),
+          ...(requirements.isolation !== undefined && requirements.isolation !== options.isolation
+            ? (["ISOLATION_REQUIRED"] as const)
+            : []),
+          ...(requirements.capabilities.some(
+            (capability) => !options.policy.capabilities[capability],
+          )
+            ? (["CAPABILITY_NOT_GRANTED"] as const)
+            : []),
+        ]),
+      );
+    }
   }
   return { contracts, denials };
 }

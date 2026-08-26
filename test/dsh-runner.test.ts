@@ -1451,7 +1451,18 @@ describe("runDsh", () => {
     ).rejects.toBeInstanceOf(DshIsolationUnavailableError);
   });
 
-  it.each(["--privileged", "--network=host", " node:24-bookworm", "node:24 bookworm"])(
+  it.each([
+    "--privileged",
+    "--network=host",
+    " node:24-bookworm",
+    "node:24 bookworm",
+    "https://registry.example/image",
+    "node:",
+    "repo//image",
+    "repo/foo..bar:tag",
+    "repo/foo._bar:tag",
+    "bad_name:5000/image",
+  ])(
     "rejects a Docker option or malformed image reference %s for read-only workers",
     async (containerImage) => {
       const startProxy = vi.fn();

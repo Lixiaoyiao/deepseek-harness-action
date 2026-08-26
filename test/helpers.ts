@@ -1,17 +1,30 @@
-import type { ActionInputs } from "../src/inputs.js";
+import type { ActionInputs, ControlledActionInputs, NativeActionInputs } from "../src/inputs.js";
 import type { GitHubContext } from "../src/github/context.js";
 import type { PermissionCheck } from "../src/github/permissions.js";
 import { DSH_VERSION } from "../src/release.js";
 
-export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
-  return {
+type ControlledInputOverrides = Partial<ControlledActionInputs> & {
+  readonly dshMode?: "controlled";
+};
+type NativeInputOverrides = Partial<NativeActionInputs> & { readonly dshMode: "native" };
+type DynamicModeInputOverrides = Partial<
+  Omit<ControlledActionInputs, "dshMode" | "mcpConfig" | "pluginConfig">
+> & { readonly dshMode: ActionInputs["dshMode"] };
+type CommonTestInputs = Omit<ControlledActionInputs, "dshMode" | "mcpConfig" | "pluginConfig">;
+
+export function inputs(overrides: NativeInputOverrides): NativeActionInputs;
+export function inputs(overrides?: ControlledInputOverrides): ControlledActionInputs;
+export function inputs(overrides: DynamicModeInputOverrides): ActionInputs;
+export function inputs(
+  overrides: ControlledInputOverrides | NativeInputOverrides | DynamicModeInputOverrides = {},
+): ActionInputs {
+  const common: CommonTestInputs = {
     deepseekApiKey: "secret",
     githubToken: "token",
     allowWrite: false,
     command: "auto",
     taskAccess: "read",
     prompt: "",
-    dshMode: "controlled",
     dshVersion: DSH_VERSION,
     dshExecutable: "",
     isolation: "docker",
@@ -41,9 +54,26 @@ export function inputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     allowedTools: ["workspace.read", "workspace.search", "workspace.edit"],
     disallowedTools: [],
     toolConfig: { schemaVersion: 1, commands: [] },
-    mcpConfig: { schemaVersion: 1, servers: [] },
-    pluginConfig: { schemaVersion: 1, bundles: [], plugins: [] },
+  };
+  if (overrides.dshMode === "native") {
+    const mcpConfig = "mcpConfig" in overrides ? overrides.mcpConfig : undefined;
+    const pluginConfig = "pluginConfig" in overrides ? overrides.pluginConfig : undefined;
+    return {
+      ...common,
+      ...overrides,
+      dshMode: "native",
+      mcpConfig: mcpConfig ?? { schemaVersion: 1, servers: [] },
+      pluginConfig: pluginConfig ?? { schemaVersion: 1, bundles: [], plugins: [] },
+    };
+  }
+  const mcpConfig = "mcpConfig" in overrides ? overrides.mcpConfig : undefined;
+  const pluginConfig = "pluginConfig" in overrides ? overrides.pluginConfig : undefined;
+  return {
+    ...common,
     ...overrides,
+    dshMode: "controlled",
+    mcpConfig: mcpConfig ?? { schemaVersion: 1, servers: [] },
+    pluginConfig: pluginConfig ?? { schemaVersion: 1, bundles: [], plugins: [] },
   };
 }
 

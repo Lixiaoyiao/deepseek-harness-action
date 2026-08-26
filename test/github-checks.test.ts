@@ -226,7 +226,11 @@ describe("CI evidence broker", () => {
   });
 
   it("streams logs into the byte cap and caps aggregate check summaries", async () => {
-    const logChunk = new Uint8Array(200 * 1024).fill(97);
+    const logChunk = Buffer.concat([
+      new Uint8Array(128 * 1024 - 1).fill(97),
+      Buffer.from("🙂", "utf8"),
+      new Uint8Array(72 * 1024).fill(97),
+    ]);
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         new ReadableStream<Uint8Array>({
@@ -252,6 +256,7 @@ describe("CI evidence broker", () => {
     });
 
     expect(Buffer.byteLength(evidence.jobs[0]?.log ?? "", "utf8")).toBeLessThanOrEqual(128 * 1024);
+    expect(evidence.jobs[0]?.log).not.toContain("\uFFFD");
     expect(evidence.jobs[0]?.logTruncated).toBe(true);
     expect(evidence.checkRuns).toHaveLength(100);
     expect(

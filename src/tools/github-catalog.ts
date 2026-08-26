@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import type { AgentToolManifest } from "../agent/contracts.js";
+import {
+  createToolDenial,
+  type ToolDenial,
+  type ToolDenialReasonCode,
+} from "../permissions/profile.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import { githubToolSchema, type GitHubToolId } from "./schema.js";
 
@@ -251,14 +256,15 @@ export function resolveGitHubTools(
   allowWrite: boolean,
 ): {
   readonly ids: readonly GitHubToolId[];
-  readonly denials: readonly { id: GitHubToolId; reason: string }[];
+  readonly denials: readonly ToolDenial[];
 } {
   const ids: GitHubToolId[] = [];
-  const denials: { id: GitHubToolId; reason: string }[] = [];
+  const denials: ToolDenial[] = [];
   for (const id of githubToolSchema.options) {
     if (!requested.has(id) || disallowed.has(id)) continue;
     let allowed = false;
     let reason: string;
+    const reasonCodes: ToolDenialReasonCode[] = [];
     if (id === "github.checks.read") {
       allowed =
         binding !== undefined &&
@@ -267,8 +273,37 @@ export function resolveGitHubTools(
         policy.trust !== "untrusted" &&
         policy.capabilities.readCi;
       reason = "Checks require a trusted PR/workflow head and the readCi capability";
+      if (!policy.allowed || policy.trust === "untrusted") reasonCodes.push("TRUST_REQUIRED");
+      if (!policy.capabilities.readCi) reasonCodes.push("CAPABILITY_NOT_GRANTED");
+      if (binding === undefined || binding.target === "issue") {
+        reasonCodes.push("BINDING_UNAVAILABLE");
+      }
     } else {
       const writeGate = policy.allowed && policy.trust === "trusted-write" && allowWrite;
+      const entityBinding = binding !== undefined && binding.target !== "workflow_run";
+      const compatibleBinding =
+        entityBinding &&
+        (id === "github.issue.state.update"
+          ? binding.target === "issue"
+          : id === "github.pull.metadata.update"
+            ? binding.target === "pull_request"
+            : true);
+      const capabilityGranted =
+        id === "github.issue.labels.set"
+          ? policy.capabilities.manageIssueLabels
+          : id === "github.issue.assignees.set"
+            ? policy.capabilities.manageIssueAssignees
+            : id === "github.issue.state.update"
+              ? policy.capabilities.updateIssueState
+              : id === "github.pull.metadata.update"
+                ? policy.capabilities.updatePullRequestMetadata
+                : policy.capabilities.publishComments;
+      if (!policy.allowed || policy.trust !== "trusted-write") {
+        reasonCodes.push("TRUST_REQUIRED");
+      }
+      if (!allowWrite) reasonCodes.push("CAPABILITY_NOT_GRANTED");
+      if (!capabilityGranted) reasonCodes.push("CAPABILITY_NOT_GRANTED");
+      if (!compatibleBinding) reasonCodes.push("BINDING_UNAVAILABLE");
       if (!writeGate) {
         reason = "GitHub mutation tools require trusted-write policy and allow-write=true";
       } else if (binding === undefined || binding.target === "workflow_run") {
@@ -293,7 +328,7 @@ export function resolveGitHubTools(
       }
     }
     if (allowed) ids.push(id);
-    else denials.push({ id, reason });
+    else denials.push(createToolDenial(id, reason, reasonCodes));
   }
   return { ids, denials };
 }

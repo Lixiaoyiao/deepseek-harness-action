@@ -3,10 +3,13 @@
 [README](../README.md) · [Setup](setup.md) · [Usage](usage.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
 This page is the user-facing reference for Action inputs, permissions, tools,
-extensions, validation, progress reporting, and outputs. [`action.yml`](../action.yml)
-is the authoritative public interface. For the complete threat model and known
-limits, read [`SECURITY.md`](../SECURITY.md); for low-level extension behavior,
-read [Extension contracts](extension-contracts.md).
+extensions, validation, progress reporting, and outputs. The typed
+[`src/action-contract.ts`](../src/action-contract.ts) definition is the source
+for public input names, required/default metadata, descriptions, runtime keys,
+and the generated tables below. [`action.yml`](../action.yml) remains the
+published public interface. For the complete threat model and known limits,
+read [`SECURITY.md`](../SECURITY.md); for low-level extension behavior, read
+[Extension contracts](extension-contracts.md).
 
 Treat every capability-bearing input as trusted control-plane configuration.
 Keep these values literal in a reviewed workflow, or derive them only from a
@@ -18,13 +21,17 @@ validation, image, extension, executable, or credential-routing inputs.
 
 ### Credentials and API routing
 
-| Input                 | Required/default                        | Purpose                                                                                                                                                                                                                                                                                    |
-| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `deepseek-api-key`    | Required                                | DeepSeek API key held by the Controller-side credential proxy. It is not passed to DSH, repository code, tools, extensions, or validation.                                                                                                                                                 |
-| `github-token`        | `${{ github.token }}`                   | Token used only by the trusted Controller for authorized GitHub reads and mutations. Workflow `permissions` remain a separate gate.                                                                                                                                                        |
-| `base-url`            | `https://api.deepseek.com`              | Trusted upstream for Controller-proxied DeepSeek chat requests. The real DeepSeek key is sent to this destination.                                                                                                                                                                         |
-| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | Trusted upstream for Controller-mediated DeepSeek Anthropic Messages web search. Controlled mode exposes this route when `native.web-search` is effective; native mode exposes it for the official headless graph. The upstream receives the real key only for an accepted search request. |
-| `bot-user-id`         | `41898282`                              | Numeric account ID used to recognize Controller-owned sticky comments. The default is `github-actions[bot]`.                                                                                                                                                                               |
+<!-- BEGIN GENERATED ACTION INPUTS: credentials -->
+
+| Input                 | Required/default                        | Description                                                                                                                                 |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deepseek-api-key`    | Required                                | DeepSeek API key. Kept by the controller-side credential proxy; never passed to DSH or repository code.                                     |
+| `github-token`        | `${{ github.token }}`                   | GitHub token used only by the trusted controller.                                                                                           |
+| `base-url`            | `https://api.deepseek.com`              | Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content. |
+| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | Trusted credential-routing input for the Controller-mediated DeepSeek Anthropic Messages web-search endpoint.                               |
+| `bot-user-id`         | `41898282`                              | Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot].                                                 |
+
+<!-- END GENERATED ACTION INPUTS: credentials -->
 
 `base-url` and `web-search-base-url` are credential-routing decisions, not
 ordinary model data. Review non-default endpoints as carefully as any other
@@ -32,15 +39,19 @@ secret recipient.
 
 ### Operation and publication
 
-| Input                | Default | Accepted values and behavior                                                                                                                                |
-| -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`            | `auto`  | `auto`, `task`, `review`, `diagnose`, `fix`, or `implement`. `auto` routes from the event; on dispatch/schedule events a non-empty `prompt` selects `task`. |
-| `task-access`        | `read`  | `read` or `write`. A write value requests a capability; it does not authorize a write.                                                                      |
-| `prompt`             | Empty   | Trusted task instructions. Required when `command: task`. See [Usage](usage.md) for event routing and command examples.                                     |
-| `allow-write`        | `false` | Enables consideration of same-repository writes after every actor, event, origin, SHA, protected-path, tool, and validation gate passes.                    |
-| `max-findings`       | `20`    | Maximum number of high-confidence findings to publish; accepted range is 1–100.                                                                             |
-| `progress-comment`   | `true`  | Enables eligible read-only lifecycle updates. It does not disable normal final results or inline review comments.                                           |
-| `task-output-schema` | Empty   | Optional bounded JSON Schema for a final `taskOutput` object. The Controller validates it; it never changes authority or replaces `result-json`.            |
+<!-- BEGIN GENERATED ACTION INPUTS: operation -->
+
+| Input                | Required/default | Description                                                                                                                             |
+| -------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow-write`        | `false`          | Allow trusted same-repository task/fix/implement writes after all trust gates pass.                                                     |
+| `command`            | `auto`           | Optional explicit operation: task, review, diagnose, fix, implement, or auto.                                                           |
+| `task-access`        | `read`           | Capability requested by an explicit task: read or write. Write still requires allow-write and every policy gate.                        |
+| `prompt`             | Empty            | Trusted task prompt. With command=auto on dispatch/schedule events, a non-empty prompt selects generic task mode.                       |
+| `task-output-schema` | Empty            | Optional bounded maintainer-owned JSON Schema for a Controller-validated taskOutput. It never replaces result-json or grants authority. |
+| `max-findings`       | `20`             | Maximum high-confidence findings to publish.                                                                                            |
+| `progress-comment`   | `true`           | Create or update one controller-owned sticky comment at major lifecycle stages, reusing the operation's result marker.                  |
+
+<!-- END GENERATED ACTION INPUTS: operation -->
 
 Writing `@dsh fix`, `@dsh implement`, or `@dsh task --write` is never enough by
 itself. An actual mutation also requires trusted origin and actors, suitable
@@ -50,18 +61,22 @@ confirmed no-change task can publish only its answer and performs no mutation.
 
 ### Routing, filters, and branch UX
 
-| Input                       | Default | Behavior                                                                                                                                                              |
-| --------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trigger-phrase`            | `@dsh`  | Literal first-line command phrase. A custom phrase changes routing only; the command grammar and every authorization gate remain unchanged.                           |
-| `label-trigger`             | Empty   | Exact label for an `issues:labeled` task or `pull_request*:labeled` review. Empty disables the route.                                                                 |
-| `assignee-trigger`          | Empty   | Exact assignee login for an `issues:assigned` task or `pull_request*:assigned` review. Empty disables the route.                                                      |
-| `allowed-actors`            | `*`     | Comma-separated routing allowlist. It cannot make an actor trusted or bypass the GitHub permission check.                                                             |
-| `allowed-bots`              | Empty   | Comma-separated bot allowlist. A listed bot must still have repository write permission; unknown and unlisted bot-like accounts fail the write gate.                  |
-| `include-comments-by-actor` | Empty   | Optional comma-separated allowlist for historical comments included as untrusted model context.                                                                       |
-| `exclude-comments-by-actor` | Empty   | Optional historical-comment deny list. Exclusion wins; the exact triggering comment remains in the audited snapshot.                                                  |
-| `base-branch`               | Empty   | Trusted base for Issue and automation materialization and generated PRs. Empty uses the repository default. PR review/fix remains bound to the audited PR head.       |
-| `branch-prefix`             | `dsh/`  | Validated prefix for Controller-created task branches.                                                                                                                |
-| `branch-name-template`      | Empty   | Optional deterministic template. It must contain `{{prefix}}` and `{{key}}`; supported values also include `{{operation}}`, `{{entityType}}`, and `{{entityNumber}}`. |
+<!-- BEGIN GENERATED ACTION INPUTS: routing -->
+
+| Input                       | Required/default | Description                                                                                                                                                 |
+| --------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trigger-phrase`            | `@dsh`           | Maintainer-controlled literal used for first-line comment commands. Routing only; it never grants authority.                                                |
+| `label-trigger`             | Empty            | Optional exact label that routes Issue tasks or pull request reviews. Empty disables this route.                                                            |
+| `assignee-trigger`          | Empty            | Optional exact assignee login that routes Issue tasks or pull request reviews. Empty disables this route.                                                   |
+| `allowed-actors`            | `*`              | Comma-separated maintainer routing allowlist for originating actors. \* preserves the default route; authorization remains separate.                        |
+| `allowed-bots`              | Empty            | Comma-separated bot allowlist. Empty preserves the fail-closed bot write gate; listed bots still need repository write permission.                          |
+| `include-comments-by-actor` | Empty            | Optional comma-separated allowlist for historical comments included as untrusted context. The audited trigger comment is retained.                          |
+| `exclude-comments-by-actor` | Empty            | Optional comma-separated deny list for historical comment context. Exclusion wins over inclusion.                                                           |
+| `base-branch`               | Empty            | Maintainer-selected base branch for Issue and automation tasks. Empty uses the trusted repository default branch; PR fixes stay bound to their head.        |
+| `branch-prefix`             | `dsh/`           | Validated prefix for Controller-created task branches.                                                                                                      |
+| `branch-name-template`      | Empty            | Optional deterministic branch template using {{prefix}}, {{key}}, {{operation}}, {{entityType}}, and {{entityNumber}}; {{prefix}} and {{key}} are required. |
+
+<!-- END GENERATED ACTION INPUTS: routing -->
 
 The workflow must subscribe to the matching GitHub event and keep any job-level
 `if` expression aligned with a custom trigger. These inputs are trusted
@@ -80,15 +95,19 @@ tool requests and blocked tasks omit it. The value remains untrusted task data.
 
 ### Runtime, isolation, and limits
 
-| Input             | Default                                       | Purpose and constraints                                                                                                                                             |
-| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dsh-mode`        | `controlled`                                  | `controlled` or experimental `native`. This selects composition ownership only; it does not select trust, authorize GitHub, or reinterpret `permission-profile`.    |
-| `dsh-version`     | `0.1.1-rc.2`                                  | Exact audited DSH version. v0.8.0 rejects another version, ranges, and `latest`.                                                                                    |
-| `dsh-executable`  | Empty                                         | Optional absolute path to a preinstalled DSH executable for eligible controlled host compatibility. Native mode rejects host execution.                             |
-| `isolation`       | `docker`                                      | `docker` or `none`. Untrusted review data, writes, and effective controlled extensions require Docker. Experimental native mode always requires Docker.             |
-| `container-image` | Digest-pinned Node 24 image from `action.yml` | Trusted worker code. The value must be one Docker/OCI reference. Writes and effective controlled extensions require a full `name@sha256:<64 lowercase hex>` digest. |
-| `timeout-minutes` | `20`                                          | Overall setup/execution deadline; accepted range is 1–360. Fixed short cleanup and cancellation-finalization grace may run afterwards.                              |
-| `max-turns`       | `3`                                           | Maximum fresh DSH turns shared by tool requests and validation repairs; accepted range is 1–10.                                                                     |
+<!-- BEGIN GENERATED ACTION INPUTS: runtime -->
+
+| Input             | Required/default                                                                                                  | Description                                                                                                                                                                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dsh-mode`        | `controlled`                                                                                                      | DSH composition ownership: controlled preserves the Controller-owned ToolRuntime policy; experimental native uses the official DSH headless Profile, MCP, Bundle, Plugin, Skill, Subagent, and Workflow graph inside the Action's Docker safety boundary. |
+| `dsh-version`     | `0.1.1-rc.2`                                                                                                      | Pinned @deepseek-ai/dsh version. The Action accepts only the audited 0.1.1-rc.2 runtime.                                                                                                                                                                  |
+| `dsh-executable`  | Empty                                                                                                             | Trusted capability input. Optional absolute path to a preinstalled DSH executable; host mode executes it without a container boundary.                                                                                                                    |
+| `isolation`       | `docker`                                                                                                          | Trusted capability input selecting the DSH isolation backend. 'none' removes the OS/container boundary; Docker is required for untrusted review data, writes, and extensions.                                                                             |
+| `container-image` | `docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059` | Trusted worker-code input. Every value must be one Docker/OCI image reference and cannot be parsed as a Docker option; extensions and writes require a full name@sha256 digest.                                                                           |
+| `timeout-minutes` | `20`                                                                                                              | Overall setup/execution deadline shared by runtime and extension install, DSH turns, command tools, and validation. Fixed short cleanup/finalization grace may run after it.                                                                              |
+| `max-turns`       | `3`                                                                                                               | Maximum fresh DSH turns across tool requests and validation repair attempts.                                                                                                                                                                              |
+
+<!-- END GENERATED ACTION INPUTS: runtime -->
 
 Set the job-level `timeout-minutes` a few minutes above the Action input. This
 lets the Action stop its worker, publish terminal outputs, attempt an eligible
@@ -145,11 +164,15 @@ sandbox. Maintainer-defined `command.*` tools and the closed Controller
 
 ### Validation
 
-| Input                  | Default | Purpose                                                                                                                                                                            |
-| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run-tests`            | `true`  | Must remain `true` for every code, Git ref, pull-request, and write-task comment mutation. `false` denies the mutation; it is not a waiver.                                        |
-| `test-commands`        | `[]`    | JSON array of non-empty argv arrays, for example `[["npm","test"],["npm","run","typecheck"]]`. Every configured command must pass before a write. No shell expansion is performed. |
-| `validation-integrity` | `warn`  | `off`, `warn`, or `strict`; controls the Controller-owned audit of changes to tests, scripts, lint/typecheck/build configuration, and other validation definitions.                |
+<!-- BEGIN GENERATED ACTION INPUTS: validation -->
+
+| Input                  | Required/default | Description                                                                                                                                                                |
+| ---------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run-tests`            | `true`           | Must be true for every code, Git ref, and pull-request mutation. false denies the mutation and is not a validation waiver.                                                 |
+| `test-commands`        | `[]`             | Non-empty JSON array of credential-free argv arrays required for every write, e.g. [["npm","test"]]. Every command must pass; Controller credentials in argv are rejected. |
+| `validation-integrity` | `warn`           | Controller-owned validation-definition policy: off records, warn reports, strict blocks high-confidence weakening and replays baseline controls when needed.               |
+
+<!-- END GENERATED ACTION INPUTS: validation -->
 
 Validation runs in a disposable, credential-free Docker container after all
 trusted-write gates pass. Do not place `GITHUB_TOKEN`, the DeepSeek key, or
@@ -158,15 +181,19 @@ with deterministic validation commands for your repository.
 
 ### Agent tools and extensions
 
-| Input                  | Default                                         | Purpose                                                                                                                                              |
-| ---------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `permission-profile`   | `strict`                                        | Agent tool preset: `strict`, `standard`, or `custom`. This does not grant GitHub authority.                                                          |
-| `allowed-tools`        | `[]`                                            | JSON array of exact canonical tool IDs requested in addition to preset expansion. Configuration alone does not authorize a tool.                     |
-| `disallowed-tools`     | `[]`                                            | JSON array of exact canonical tool IDs. Deny always wins.                                                                                            |
-| `tool-config`          | `{"schemaVersion":1,"commands":[]}`             | Versioned manifest of maintainer-owned, fixed-argv `command.*` tools.                                                                                |
-| `mcp-config`           | `{"schemaVersion":1,"servers":[]}`              | Versioned official DSH MCP config. Controlled declares exact tools/budgets; native declares only server transport and owner/process requirements.    |
-| `plugin-config`        | `{"schemaVersion":1,"bundles":[],"plugins":[]}` | Versioned DSH Bundle/direct Cordis Plugin config. Controlled declares tools; native entries are definition-only official Profile/Cordis composition. |
-| `allow-plugin-install` | `false`                                         | Separate startup gate for a controlled-effective or native-admitted Bundle/Plugin package. Installation and startup execute trusted worker code.     |
+<!-- BEGIN GENERATED ACTION INPUTS: tools -->
+
+| Input                  | Required/default                                | Description                                                                                                                                                                                                                                                                            |
+| ---------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `permission-profile`   | `strict`                                        | Agent tool preset: strict preserves v0.4 behavior, standard grants trusted coding conveniences, and custom uses the exact allow/deny lists.                                                                                                                                            |
+| `allowed-tools`        | `[]`                                            | JSON allowlist of Action/controlled capabilities. controlled accepts workspace.\*, native.\*, command.\*, typed github.\*, mcp.\*, and plugin.\* IDs; native rejects mcp./plugin. grants because DSH owns that inventory.                                                              |
+| `disallowed-tools`     | `[]`                                            | JSON deny list using the same exact tool IDs as allowed-tools. Deny always wins after preset expansion.                                                                                                                                                                                |
+| `tool-config`          | `{"schemaVersion":1,"commands":[]}`             | Versioned JSON manifest of maintainer-owned fixed-argv command tools. Model-provided argv and controller credentials in argv are rejected; common direct shell executables are also denied.                                                                                            |
+| `mcp-config`           | `{"schemaVersion":1,"servers":[]}`              | Versioned maintainer-owned official DSH MCP config. controlled declares exact tools/budgets; native declares the server, owner-level workspaceWrite/network, toolCallTimeoutMs, and explicit credentialEnv/credentialHeaders because DSH discovers tools.                              |
+| `plugin-config`        | `{"schemaVersion":1,"bundles":[],"plugins":[]}` | Versioned maintainer-owned DSH Bundle/Plugin config. Native entries are definition-only, with direct-Plugin credentialConfig, and load through official Profile/Cordis composition. Startup executes trusted worker code; every package requires an exact semver or GitHub commit pin. |
+| `allow-plugin-install` | `false`                                         | Allow startup of explicitly configured and pinned third-party DSH Bundles/Plugins. Disabled by default because installation and startup execute trusted code.                                                                                                                          |
+
+<!-- END GENERATED ACTION INPUTS: tools -->
 
 All three manifests require `schemaVersion: 1`; unknown fields and unsupported
 versions fail closed. In controlled mode, MCP, Bundle, and Plugin configuration
@@ -670,7 +697,7 @@ proves identity, not safety; review and maintain the image separately.
 
 ### GitHub image attachments
 
-v0.8.0 does not download or forward GitHub image attachments. The exact audited
+v0.8.1 does not download or forward GitHub image attachments. The exact audited
 `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
@@ -801,7 +828,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
+- uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

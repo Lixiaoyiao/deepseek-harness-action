@@ -1,4 +1,4 @@
-# v0.8.0 GitHub integration example. Replace the Action tag, maintainer and
+# v0.8.1 GitHub integration example. Replace the Action tag, maintainer and
 # assignee placeholders, validation argv, and container image before use.
 name: DSH GitHub integration
 
@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

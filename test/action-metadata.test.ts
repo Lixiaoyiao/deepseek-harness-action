@@ -1,7 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
+import { ACTION_INPUT_CONTRACT } from "../src/action-contract.js";
 import {
   ACTION_TAG,
   ACTION_VERSION,
@@ -24,62 +26,31 @@ describe("Marketplace action metadata", () => {
     );
   });
 
-  it("keeps safe defaults in the published metadata", async () => {
+  it("publishes the typed Action input contract without metadata drift", async () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
-    expect(metadata).toMatch(/allow-write:[\s\S]*?default: "false"/u);
-    expect(metadata).toMatch(/progress-comment:[\s\S]*?default: "true"/u);
-    expect(metadata).toMatch(/trigger-phrase:[\s\S]*?default: "@dsh"/u);
-    expect(metadata).toMatch(/label-trigger:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/assignee-trigger:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/allowed-actors:[\s\S]*?default: "\*"/u);
-    expect(metadata).toMatch(/allowed-bots:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/include-comments-by-actor:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/exclude-comments-by-actor:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/base-branch:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/branch-prefix:[\s\S]*?default: "dsh\/"/u);
-    expect(metadata).toMatch(/branch-name-template:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/task-output-schema:[\s\S]*?default: ""/u);
-    expect(metadata).toMatch(/task-access:[\s\S]*?default: "read"/u);
-    expect(metadata).toMatch(/max-turns:[\s\S]*?default: "3"/u);
-    expect(metadata).toMatch(/dsh-mode:[\s\S]*?default: "controlled"/u);
-    expect(metadata).toMatch(
-      /dsh-mode:[\s\S]*?experimental native uses the official DSH headless Profile, MCP, Bundle, Plugin, Skill, Subagent, and Workflow graph inside the Action's Docker safety boundary/iu,
+    const parsed = YAML.parse(metadata) as {
+      readonly inputs: Readonly<Record<string, unknown>>;
+      readonly outputs: Readonly<Record<string, { readonly description: string }>>;
+    };
+    const expectedInputs = Object.fromEntries(
+      ACTION_INPUT_CONTRACT.map((input) => [
+        input.name,
+        {
+          description: input.description,
+          required: input.required,
+          ...("default" in input ? { default: input.default } : {}),
+        },
+      ]),
     );
-    expect(metadata).toMatch(/permission-profile:[\s\S]*?default: "strict"/u);
-    expect(metadata).toMatch(/allowed-tools:[\s\S]*?default: "\[\]"/u);
-    expect(metadata).toMatch(/disallowed-tools:[\s\S]*?default: "\[\]"/u);
-    expect(metadata).toMatch(/validation-integrity:[\s\S]*?default: "warn"/u);
-    expect(metadata).toMatch(/tool-config:[\s\S]*?schemaVersion/u);
-    expect(metadata).toMatch(/mcp-config:[\s\S]*?schemaVersion/u);
-    expect(metadata).toMatch(/plugin-config:[\s\S]*?schemaVersion/u);
-    expect(metadata).toMatch(/allow-plugin-install:[\s\S]*?default: "false"/u);
-    expect(metadata).toMatch(/isolation:[\s\S]*?default: "docker"/u);
-    expect(metadata).toContain(`default: "${DSH_VERSION}"`);
-    expect(metadata).toMatch(/extensions and writes require a full name@sha256 digest/iu);
-    expect(metadata).toMatch(
-      /mcp-config:[\s\S]*?controlled declares exact tools\/budgets; native declares the server, owner-level workspaceWrite\/network, toolCallTimeoutMs, and explicit credentialEnv\/credentialHeaders because DSH discovers tools/iu,
-    );
-    expect(metadata).toMatch(/plugin-config:[\s\S]*?startup executes trusted worker code/iu);
-    expect(metadata).toMatch(/extension-profile-digest:[\s\S]*?SHA-256 digest/u);
-    expect(metadata).toMatch(
-      /tool-receipts:[\s\S]*?bounded controller\/DSH receipt arrays and truncation metadata/u,
-    );
-    expect(metadata).toMatch(
-      /effective-tools:[\s\S]*?never describes native DSH inventory; use result-json\.toolPolicy\.observedTools/iu,
-    );
-    expect(metadata).toMatch(/result-json:[\s\S]*?tool-policy ownership audit/u);
-    expect(metadata).toMatch(/result-json:[\s\S]*?known-authority audit/u);
-    expect(metadata).toMatch(/result-json:[\s\S]*?Versioned JSON envelope/u);
-    expect(metadata).toMatch(/task-output:[\s\S]*?Controller schema validation/u);
-    expect(metadata).toMatch(/error-code:[\s\S]*?Stable failure code/u);
 
-    const outputs = metadata.slice(metadata.indexOf("outputs:"));
-    expect(outputs).toMatch(
-      /^ {2}dsh-mode:\r?\n {4}description: "Resolved DSH mode: controlled, native, or none"$/mu,
+    expect(parsed.inputs).toEqual(expectedInputs);
+    expect(parsed.outputs["dsh-mode"]?.description).toBe(
+      "Resolved DSH mode: controlled, native, or none",
     );
-    expect(outputs).toMatch(
-      /^ {2}dsh-composition:\r?\n {4}description: "Stable selected DSH composition identity, or none"$/mu,
+    expect(parsed.outputs["dsh-composition"]?.description).toBe(
+      "Stable selected DSH composition identity, or none",
     );
+    expect(parsed.outputs["error-code"]?.description).toContain("Stable failure code");
   });
 
   it("pins the official DSH rc.2 runtime and its lockfile exactly", async () => {
@@ -234,7 +205,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("binds the v0.8.0 canary to the formal release and runs both read-only modes", async () => {
+  it("binds the v0.8.1 canary to the formal release and runs both read-only modes", async () => {
     const canary = await readFile(
       new URL("../.github/workflows/release-canary.yml", import.meta.url),
       "utf8",
@@ -361,7 +332,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.8.0 task example with the standard coding profile", async () => {
+  it("ships the v0.8.1 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
@@ -375,7 +346,7 @@ describe("Marketplace action metadata", () => {
     expect(example).toContain("test-commands:");
   });
 
-  it("ships a fail-closed v0.8.0 GitHub integration example", async () => {
+  it("ships a fail-closed v0.8.1 GitHub integration example", async () => {
     const example = await readFile(
       new URL("../examples/github-integration.yml", import.meta.url),
       "utf8",

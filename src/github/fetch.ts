@@ -4,6 +4,8 @@
  */
 import { z } from "zod";
 
+import { utf8Prefix } from "../security/utf8.js";
+
 import { isAllowedActor } from "./actors.js";
 import type { GitHubClient } from "./client.js";
 import type { GitHubContext } from "./context.js";
@@ -265,21 +267,15 @@ function originalTriggerComment(context: GitHubContext): RepositoryComment | nul
 }
 
 function boundedUtf8(value: string, limit: number): { text: string; truncated: boolean } {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.byteLength <= limit) return { text: value, truncated: false };
-  if (limit <= 0) return { text: "", truncated: true };
-  const marker = Buffer.from("\n[truncated by dsh-action]", "utf8");
-  if (marker.byteLength >= limit) {
-    let text = bytes.subarray(0, limit).toString("utf8");
-    while (Buffer.byteLength(text, "utf8") > limit) text = text.slice(0, -1);
-    return { text, truncated: true };
-  }
-  let prefix = bytes.subarray(0, limit - marker.byteLength).toString("utf8");
-  while (Buffer.byteLength(prefix, "utf8") + marker.byteLength > limit) {
-    prefix = prefix.slice(0, -1);
+  const cap = Math.max(0, Math.floor(limit));
+  if (Buffer.byteLength(value, "utf8") <= cap) return { text: value, truncated: false };
+  const marker = "\n[truncated by dsh-action]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  if (markerBytes >= cap) {
+    return { text: utf8Prefix(value, cap), truncated: true };
   }
   return {
-    text: prefix + marker.toString("utf8"),
+    text: utf8Prefix(value, cap - markerBytes) + marker,
     truncated: true,
   };
 }
@@ -298,11 +294,12 @@ async function fetchBlobText(
     const raw = Buffer.from(response.data.content.replaceAll("\n", ""), "base64");
     if (raw.includes(0)) return { bytes: 0, truncated: false };
     const limit = Math.min(MAX_FILE_CONTEXT_BYTES, remainingBytes);
-    const bounded = boundedUtf8(raw.toString("utf8"), limit);
+    const decoded = utf8Prefix(raw, raw.byteLength);
+    const bounded = boundedUtf8(decoded, limit);
     return {
       text: bounded.text,
       bytes: Buffer.byteLength(bounded.text, "utf8"),
-      truncated: bounded.truncated,
+      truncated: bounded.truncated || Buffer.byteLength(decoded, "utf8") < raw.byteLength,
     };
   } catch {
     return { bytes: 0, truncated: true };

@@ -387,6 +387,36 @@ describe("Controller-owned typed GitHub tools", () => {
     expect(untrusted.denials).toHaveLength(6);
   });
 
+  it("classifies GitHub denial boundaries with deterministic precedence", () => {
+    const requested = new Set(["github.comment.create"] as const);
+    const optOut = resolveGitHubTools(requested, new Set(), policy(), issueBinding, false);
+    expect(optOut.denials).toEqual([
+      {
+        id: "github.comment.create",
+        reasonCode: "CAPABILITY_NOT_GRANTED",
+        reason: "GitHub mutation tools require trusted-write policy and allow-write=true",
+      },
+    ]);
+
+    const trustWins = resolveGitHubTools(
+      requested,
+      new Set(),
+      policy("untrusted", { publishComments: false }),
+      undefined,
+      false,
+    );
+    expect(trustWins.denials[0]?.reasonCode).toBe("TRUST_REQUIRED");
+
+    const wrongEntity = resolveGitHubTools(
+      new Set(["github.pull.metadata.update"]),
+      new Set(),
+      policy(),
+      issueBinding,
+      true,
+    );
+    expect(wrongEntity.denials[0]?.reasonCode).toBe("BINDING_UNAVAILABLE");
+  });
+
   it("publishes GitHub manifests only through the Controller router", () => {
     const effective = resolveEffectiveTools(
       parseAllowedTools('["github.issue.labels.set","github.checks.read"]'),
@@ -1147,11 +1177,11 @@ describe("Controller-owned typed GitHub tools", () => {
         totalCount: 50,
         statusCount: 75,
         checkRuns: Array.from({ length: 50 }, (_, index) => ({
-          name: `${String(index)}-${"x".repeat(400)}`,
-          status: "completed",
+          name: index === 0 ? `${"x".repeat(255)}😀tail` : `${String(index)}-${"x".repeat(400)}`,
+          status: index === 0 ? "😀".repeat(20) : "completed",
           conclusion: "success",
         })),
-        combinedState: "success",
+        combinedState: "😀".repeat(20),
         statuses: Array.from({ length: 50 }, (_, index) => ({
           context: `status-${String(index)}`,
           state: "success",
@@ -1180,6 +1210,17 @@ describe("Controller-owned typed GitHub tools", () => {
       headSha: HEAD,
       truncated: true,
     });
+    const output = result.output as {
+      readonly combinedState: string;
+      readonly checkRuns: readonly { readonly name: string; readonly status: string }[];
+    };
+    expect(output.combinedState).toBe("😀".repeat(8));
+    expect(output.checkRuns[0]).toEqual({
+      name: "x".repeat(255),
+      status: "😀".repeat(8),
+      conclusion: "success",
+    });
+    expect(JSON.stringify(output)).not.toContain("�");
     await expect(
       tools.invoke(
         { callId: "call-checks-evil", id: "github.checks.read", input: { ref: "attacker" } },

@@ -27,9 +27,41 @@ export const STANDARD_PERMISSION_TOOLS = [
   "native.subagent",
 ] as const satisfies readonly AllowedToolId[];
 
+/**
+ * Stable denial categories in deterministic precedence order. When more than one
+ * boundary rejects a tool, the first matching category is reported.
+ */
+export const TOOL_DENIAL_REASON_CODE_PRECEDENCE = [
+  "EXPLICIT_DENY",
+  "TRUST_REQUIRED",
+  "ISOLATION_REQUIRED",
+  "CAPABILITY_NOT_GRANTED",
+  "BINDING_UNAVAILABLE",
+  "PROVIDER_UNAVAILABLE",
+] as const;
+export type ToolDenialReasonCode = (typeof TOOL_DENIAL_REASON_CODE_PRECEDENCE)[number];
+
 export interface ToolDenial {
   readonly id: AllowedToolId;
+  readonly reasonCode: ToolDenialReasonCode;
   readonly reason: string;
+}
+
+export function createToolDenial<const Id extends AllowedToolId>(
+  id: Id,
+  reason: string,
+  candidates: readonly ToolDenialReasonCode[],
+): ToolDenial & { readonly id: Id } {
+  const selected = TOOL_DENIAL_REASON_CODE_PRECEDENCE.find((code) => candidates.includes(code));
+  if (selected === undefined) throw new Error(`Tool denial ${id} requires a stable reason code`);
+  return { id, reasonCode: selected, reason };
+}
+
+function higherPriorityDenial(current: ToolDenial | undefined, next: ToolDenial): ToolDenial {
+  if (current === undefined) return next;
+  const currentRank = TOOL_DENIAL_REASON_CODE_PRECEDENCE.indexOf(current.reasonCode);
+  const nextRank = TOOL_DENIAL_REASON_CODE_PRECEDENCE.indexOf(next.reasonCode);
+  return nextRank < currentRank ? next : current;
 }
 
 interface ToolPolicyAuditBase {
@@ -127,7 +159,11 @@ export function resolvePermissionRequest(
     disallowedTools: sortedUnique(disallowedTools),
     deniedTools: requestedTools
       .filter((id) => denied.has(id))
-      .map((id) => ({ id, reason: "Explicit disallowed-tools entry; deny always wins" })),
+      .map((id) =>
+        createToolDenial(id, "Explicit disallowed-tools entry; deny always wins", [
+          "EXPLICIT_DENY",
+        ]),
+      ),
   };
 }
 
@@ -142,14 +178,18 @@ export function buildPermissionAudit(options: {
   const effective = new Set(effectiveTools);
   const deniedById = new Map<AllowedToolId, ToolDenial>();
   for (const denial of [...options.resolution.deniedTools, ...(options.additionalDenials ?? [])]) {
-    deniedById.set(denial.id, denial);
+    deniedById.set(denial.id, higherPriorityDenial(deniedById.get(denial.id), denial));
   }
   for (const id of options.resolution.requestedTools) {
     if (!effective.has(id) && !deniedById.has(id)) {
-      deniedById.set(id, {
+      deniedById.set(
         id,
-        reason: "The Controller trust policy or configured provider did not grant this tool",
-      });
+        createToolDenial(
+          id,
+          "The Controller trust policy or configured provider did not grant this tool",
+          ["PROVIDER_UNAVAILABLE"],
+        ),
+      );
     }
   }
   const commandBridge = options.manifests.some(
@@ -198,9 +238,13 @@ export function buildPermissionAudit(options: {
     ...(options.extensions === undefined ? {} : { extensionDigest: options.extensions.digest }),
     trustedExtensions,
   };
-  const digest = createHash("sha256")
-    .update(JSON.stringify(auditWithoutDigest), "utf8")
-    .digest("hex");
+  // reasonCode is additive public metadata. Keep the compatibility digest and
+  // downstream task identity stable for an otherwise identical v0.8.0 policy.
+  const digestSurface = {
+    ...auditWithoutDigest,
+    deniedTools: auditWithoutDigest.deniedTools.map(({ id, reason }) => ({ id, reason })),
+  };
+  const digest = createHash("sha256").update(JSON.stringify(digestSurface), "utf8").digest("hex");
   return { ...auditWithoutDigest, digest };
 }
 

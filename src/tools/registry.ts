@@ -8,6 +8,7 @@ import type {
 import type { SecurityPolicy } from "../security/policy.js";
 import type { ExtensionPlan } from "../extensions/plan.js";
 import {
+  createToolDenial,
   resolvePermissionRequest,
   type PermissionProfile,
   type PermissionResolution,
@@ -93,11 +94,26 @@ export function resolveEffectiveTools(
   for (const command of configuration.commands) {
     const id = commandToolId(command.name);
     if (!requested.has(id) || disallowed.has(id) || commands.includes(command)) continue;
-    permissionDenials.push({
-      id,
-      reason:
+    permissionDenials.push(
+      createToolDenial(
+        id,
         "The Controller trust policy denied this command's execution, write, or network grant",
-    });
+        [
+          ...(!policy.allowed || policy.trust !== "trusted-write"
+            ? (["TRUST_REQUIRED"] as const)
+            : []),
+          ...(command.workspaceAccess === "write" && !policy.capabilities.modifyWorkspace
+            ? (["CAPABILITY_NOT_GRANTED"] as const)
+            : []),
+          ...(command.network === "bridge" && !policy.capabilities.accessNetwork
+            ? (["CAPABILITY_NOT_GRANTED"] as const)
+            : []),
+          ...(!policy.capabilities.executeRepositoryCode
+            ? (["CAPABILITY_NOT_GRANTED"] as const)
+            : []),
+        ],
+      ),
+    );
   }
   const requestedGitHub = new Set(
     [...requested].filter((id): id is GitHubToolId => githubToolSchema.safeParse(id).success),

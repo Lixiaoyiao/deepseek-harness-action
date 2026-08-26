@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
 
 import type { ExtensionRuntimeLockAudit, RuntimeLockBaseline } from "../extensions/runtime-lock.js";
+import { validatedControllerBaseUrl } from "./base-url.js";
 import { DshConfigurationError } from "./errors.js";
 
 export type DshRuntimeIsolation = "docker" | "none";
@@ -89,23 +90,7 @@ function normalizedAbsolutePath(value: string, field: string): string {
 
 function normalizedBaseUrl(value: string, field: string): string {
   const raw = nonEmptyString(value, field);
-  let base: URL;
-  try {
-    base = new URL(raw);
-  } catch (error: unknown) {
-    throw new DshConfigurationError(`DSH runtime binding ${field} is invalid`, { cause: error });
-  }
-  const loopbackHttp =
-    base.protocol === "http:" &&
-    (base.hostname === "127.0.0.1" || base.hostname === "::1" || base.hostname === "localhost");
-  if (base.protocol !== "https:" && !loopbackHttp) {
-    throw new DshConfigurationError(
-      `DSH runtime binding ${field} must use HTTPS (except loopback tests)`,
-    );
-  }
-  if (base.username !== "" || base.password !== "") {
-    throw new DshConfigurationError(`DSH runtime binding ${field} must not contain credentials`);
-  }
+  const base = validatedControllerBaseUrl(raw, `DSH runtime binding ${field}`);
   base.pathname = base.pathname.replace(/\/+$/u, "") || "/";
   base.search = "";
   base.hash = "";

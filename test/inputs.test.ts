@@ -1,13 +1,29 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
-import { loadInputs } from "../src/inputs.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { loadInputs, type ActionInputs } from "../src/inputs.js";
+import type {
+  McpConfiguration,
+  NativeMcpConfiguration,
+  NativePluginConfiguration,
+  PluginConfiguration,
+} from "../src/extensions/schema.js";
 
 function reader(values: Readonly<Record<string, string>>) {
   return (name: string): string => values[name] ?? "";
 }
 
 describe("loadInputs", () => {
+  it("closes extension configuration types over the dshMode discriminator", () => {
+    type Controlled = Extract<ActionInputs, { readonly dshMode: "controlled" }>;
+    type Native = Extract<ActionInputs, { readonly dshMode: "native" }>;
+
+    expectTypeOf<Controlled["mcpConfig"]>().toEqualTypeOf<McpConfiguration>();
+    expectTypeOf<Controlled["pluginConfig"]>().toEqualTypeOf<PluginConfiguration>();
+    expectTypeOf<Native["mcpConfig"]>().toEqualTypeOf<NativeMcpConfiguration>();
+    expectTypeOf<Native["pluginConfig"]>().toEqualTypeOf<NativePluginConfiguration>();
+  });
+
   it("applies defaults and decodes argv without shell parsing", () => {
     const result = loadInputs(
       reader({
@@ -193,6 +209,93 @@ describe("loadInputs", () => {
       ),
     ).toThrow(/Invalid action inputs/u);
   });
+
+  it.each([
+    ["dsh-version", "latest", /exact semver/u],
+    ["dsh-version", "0.1.1-rc.3", /no audited/u],
+    ["container-image", "--privileged", /single Docker\/OCI image reference/u],
+    ["container-image", "node image:24", /single Docker\/OCI image reference/u],
+    ["container-image", "https://registry.example/image", /single Docker\/OCI image reference/u],
+    ["container-image", "node:", /single Docker\/OCI image reference/u],
+    ["container-image", "repo//image", /single Docker\/OCI image reference/u],
+    ["container-image", "repo/foo..bar:tag", /single Docker\/OCI image reference/u],
+    ["container-image", "repo/foo._bar:tag", /single Docker\/OCI image reference/u],
+    ["container-image", "bad_name:5000/image", /single Docker\/OCI image reference/u],
+    ["base-url", "http://api.example.test", /must use HTTPS/u],
+    ["base-url", "ftp://api.example.test", /must use HTTPS/u],
+    ["base-url", "https://user:password@api.example.test", /must not contain credentials/u],
+    ["web-search-base-url", "http://search.example.test", /must use HTTPS/u],
+    ["web-search-base-url", "https://token@search.example.test", /must not contain credentials/u],
+  ])("fails during input loading for input-only runtime invariant %s", (name, value, message) => {
+    expect(() =>
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          [name]: value,
+        }),
+      ),
+    ).toThrow(message);
+  });
+
+  it.each([
+    "node",
+    "node:24-bookworm",
+    "docker.io/library/node:24-bookworm",
+    "Registry/repo:tag",
+    "registry.example:5000/team/image_name-v2:Tag_1",
+    `node:24@sha256:${"a".repeat(64)}`,
+  ])("accepts a well-formed Docker/OCI image reference %s", (containerImage) => {
+    expect(
+      loadInputs(
+        reader({
+          "deepseek-api-key": "deepseek-key",
+          "github-token": "github-token",
+          "container-image": containerImage,
+        }),
+      ).containerImage,
+    ).toBe(containerImage);
+  });
+
+  it("retains the loopback HTTP exception used by isolated integration tests", () => {
+    const result = loadInputs(
+      reader({
+        "deepseek-api-key": "deepseek-key",
+        "github-token": "github-token",
+        "base-url": "http://127.0.0.1:8000/v1",
+        "web-search-base-url": "http://localhost:8001/anthropic/v1",
+      }),
+    );
+    expect(result.baseUrl).toBe("http://127.0.0.1:8000/v1");
+    expect(result.webSearchBaseUrl).toBe("http://localhost:8001/anthropic/v1");
+  });
+
+  it.each([
+    {
+      isolation: "docker",
+      executable: "/opt/dsh/bin.js",
+      message: /host-only/u,
+    },
+    {
+      isolation: "none",
+      executable: "relative/bin.js",
+      message: /absolute path/u,
+    },
+  ])(
+    "rejects incompatible controlled dsh-executable input early",
+    ({ isolation, executable, message }) => {
+      expect(() =>
+        loadInputs(
+          reader({
+            "deepseek-api-key": "deepseek-key",
+            "github-token": "github-token",
+            isolation,
+            "dsh-executable": executable,
+          }),
+        ),
+      ).toThrow(message);
+    },
+  );
 
   it("selects native without reinterpreting permission-profile or Controller command tools", () => {
     const result = loadInputs(
