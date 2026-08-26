@@ -106,15 +106,18 @@ describe("maintainer-defined command tools", () => {
       expect.arrayContaining([
         {
           id: "workspace.edit",
+          reasonCode: "CAPABILITY_NOT_GRANTED",
           reason: "Workspace editing requires trusted-write policy with Docker isolation",
         },
         {
           id: "command.write",
+          reasonCode: "CAPABILITY_NOT_GRANTED",
           reason:
             "The Controller trust policy denied this command's execution, write, or network grant",
         },
         {
           id: "command.network",
+          reasonCode: "CAPABILITY_NOT_GRANTED",
           reason:
             "The Controller trust policy denied this command's execution, write, or network grant",
         },
@@ -143,6 +146,7 @@ describe("maintainer-defined command tools", () => {
     expect(effective.manifests.map(({ id }) => id)).not.toContain("native.bash");
     expect(effective.permissionDenials).toContainEqual({
       id: "native.bash",
+      reasonCode: "EXPLICIT_DENY",
       reason: "Explicit disallowed-tools entry; deny always wins",
     });
   });
@@ -169,18 +173,22 @@ describe("maintainer-defined command tools", () => {
       expect.arrayContaining([
         {
           id: "workspace.edit",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Workspace editing requires trusted-write policy with Docker isolation",
         },
         {
           id: "native.bash",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Bash requires trusted-write repository-code execution in Docker",
         },
         {
           id: "native.web-search",
+          reasonCode: "CAPABILITY_NOT_GRANTED",
           reason: "Web search requires a trusted same-repository actor and Docker",
         },
         {
           id: "native.subagent",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Subagent delegation requires trusted-write policy in Docker",
         },
       ]),
@@ -205,22 +213,52 @@ describe("maintainer-defined command tools", () => {
       deniedTools: [
         {
           id: "native.bash",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Bash requires trusted-write repository-code execution in Docker",
         },
         {
           id: "native.subagent",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Subagent delegation requires trusted-write policy in Docker",
         },
         {
           id: "native.web-search",
+          reasonCode: "CAPABILITY_NOT_GRANTED",
           reason: "Web search requires a trusted same-repository actor and Docker",
         },
         {
           id: "workspace.edit",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Workspace editing requires trusted-write policy with Docker isolation",
         },
       ],
     });
+  });
+
+  it("applies trust, isolation, then capability denial precedence deterministically", () => {
+    const configuration = parseToolConfiguration('{"schemaVersion":1,"commands":[]}');
+    const untrustedAndUnisolated = resolveEffectiveTools(
+      ["workspace.read"],
+      configuration,
+      policy({}, "untrusted"),
+      { permissionProfile: "custom", isolation: "none" },
+    );
+    const isolatedOnly = resolveEffectiveTools(
+      ["workspace.read"],
+      configuration,
+      policy({}, "trusted-read"),
+      { permissionProfile: "custom", isolation: "none" },
+    );
+    const capabilityOnly = resolveEffectiveTools(
+      ["workspace.edit"],
+      configuration,
+      policy({ modifyWorkspace: false }),
+      { permissionProfile: "custom", isolation: "docker" },
+    );
+
+    expect(untrustedAndUnisolated.permissionDenials[0]?.reasonCode).toBe("TRUST_REQUIRED");
+    expect(isolatedOnly.permissionDenials[0]?.reasonCode).toBe("ISOLATION_REQUIRED");
+    expect(capabilityOnly.permissionDenials[0]?.reasonCode).toBe("CAPABILITY_NOT_GRANTED");
   });
 
   it("runs exact argv in a named read-only container and force-cleans timeouts", async () => {

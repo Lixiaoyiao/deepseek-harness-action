@@ -8,10 +8,58 @@ import type { DshProcessSpec } from "./process.js";
 import type { DeepSeekProxyHandle } from "./proxy.js";
 import type { DshDockerLaunchPlan } from "./composition.js";
 
-const CONTAINER_IMAGE_REFERENCE_PATTERN =
-  /^(?=.{1,512}$)[A-Za-z0-9][A-Za-z0-9._:/-]*(?:@sha256:[a-f0-9]{64})?$/u;
-const PINNED_CONTAINER_IMAGE_PATTERN =
-  /^(?=.{1,512}$)[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/u;
+const IMAGE_PATH_COMPONENT_PATTERN = /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/u;
+const IMAGE_REGISTRY_DOMAIN_PATTERN =
+  /^(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])(?:\.(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]))*(?::[0-9]+)?$/u;
+const IMAGE_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/u;
+const IMAGE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+
+function validContainerImageReference(containerImage: string, requireDigest: boolean): boolean {
+  if (
+    containerImage.length === 0 ||
+    containerImage.length > 512 ||
+    containerImage.includes("://") ||
+    containerImage.includes("//")
+  ) {
+    return false;
+  }
+  const digestParts = containerImage.split("@");
+  if (digestParts.length > 2) return false;
+  const nameAndTag = digestParts[0];
+  const digest = digestParts[1];
+  if (
+    nameAndTag === undefined ||
+    nameAndTag === "" ||
+    (requireDigest && digest === undefined) ||
+    (digest !== undefined && !IMAGE_DIGEST_PATTERN.test(digest))
+  ) {
+    return false;
+  }
+
+  const segments = nameAndTag.split("/");
+  const finalSegment = segments.at(-1);
+  if (finalSegment === undefined || finalSegment === "") return false;
+  const tagSeparator = finalSegment.lastIndexOf(":");
+  if (tagSeparator >= 0) {
+    const tag = finalSegment.slice(tagSeparator + 1);
+    const imageName = finalSegment.slice(0, tagSeparator);
+    if (!IMAGE_TAG_PATTERN.test(tag) || !IMAGE_PATH_COMPONENT_PATTERN.test(imageName)) return false;
+    segments[segments.length - 1] = imageName;
+  }
+
+  const first = segments[0];
+  const explicitRegistry =
+    segments.length > 1 &&
+    first !== undefined &&
+    (first.includes(".") ||
+      first.includes(":") ||
+      first === "localhost" ||
+      first !== first.toLowerCase());
+  if (explicitRegistry && !IMAGE_REGISTRY_DOMAIN_PATTERN.test(first)) return false;
+  return segments
+    .slice(explicitRegistry ? 1 : 0)
+    .every((segment) => IMAGE_PATH_COMPONENT_PATTERN.test(segment));
+}
 
 export const CONTAINER_WORKSPACE = "/workspace";
 export const CONTAINER_DSH_HOME = "/dsh-home";
@@ -28,7 +76,7 @@ export const CONTAINER_AUDIT = `${CONTAINER_ACTION_STATE}/tool-receipts.jsonl`;
 
 /** Require an immutable OCI/Docker image reference for code-writing processes. */
 export function assertPinnedContainerImage(containerImage: string): void {
-  if (!PINNED_CONTAINER_IMAGE_PATTERN.test(containerImage)) {
+  if (!validContainerImageReference(containerImage, true)) {
     throw new DshConfigurationError(
       "Docker extensions and trusted-write require containerImage to be an immutable name@sha256:<64 lowercase hex> reference",
     );
@@ -37,7 +85,7 @@ export function assertPinnedContainerImage(containerImage: string): void {
 
 /** Prevent an input value from being reinterpreted as a docker run option. */
 export function assertContainerImageReference(containerImage: string): void {
-  if (!CONTAINER_IMAGE_REFERENCE_PATTERN.test(containerImage)) {
+  if (!validContainerImageReference(containerImage, false)) {
     throw new DshConfigurationError(
       "containerImage must be a single Docker/OCI image reference and must not begin with an option",
     );

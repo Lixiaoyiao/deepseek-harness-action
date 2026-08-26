@@ -63,10 +63,12 @@ describe("permission profile presets", () => {
     expect(resolution.deniedTools).toEqual([
       {
         id: "command.check",
+        reasonCode: "EXPLICIT_DENY",
         reason: "Explicit disallowed-tools entry; deny always wins",
       },
       {
         id: "native.bash",
+        reasonCode: "EXPLICIT_DENY",
         reason: "Explicit disallowed-tools entry; deny always wins",
       },
     ]);
@@ -91,7 +93,13 @@ describe("permission profile presets", () => {
       ],
       additionalDenials: [
         {
+          id: "native.bash",
+          reasonCode: "PROVIDER_UNAVAILABLE",
+          reason: "A lower-priority provider denial must not replace an explicit deny",
+        },
+        {
           id: "native.web-search",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Web search requires a trusted same-repository actor and Docker",
         },
       ],
@@ -108,10 +116,12 @@ describe("permission profile presets", () => {
       deniedTools: [
         {
           id: "native.bash",
+          reasonCode: "EXPLICIT_DENY",
           reason: "Explicit disallowed-tools entry; deny always wins",
         },
         {
           id: "native.web-search",
+          reasonCode: "TRUST_REQUIRED",
           reason: "Web search requires a trusted same-repository actor and Docker",
         },
       ],
@@ -122,6 +132,19 @@ describe("permission profile presets", () => {
     expect(() => buildControllerToolPolicyAudit(permission, "dsh")).toThrow(
       /must report observed tools/u,
     );
+  });
+
+  it("uses PROVIDER_UNAVAILABLE when no earlier boundary explains a missing provider tool", () => {
+    const resolution = resolvePermissionRequest("custom", ["mcp.repo.lookup"], []);
+    const permission = buildPermissionAudit({ resolution, manifests: [] });
+
+    expect(permission.deniedTools).toEqual([
+      {
+        id: "mcp.repo.lookup",
+        reasonCode: "PROVIDER_UNAVAILABLE",
+        reason: "The Controller trust policy or configured provider did not grant this tool",
+      },
+    ]);
   });
 
   it("builds a DSH-owned observed inventory without Controller policy claims", () => {

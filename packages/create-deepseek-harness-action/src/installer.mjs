@@ -4,12 +4,16 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
+import { INSTALLER_ACTION_INPUTS } from "./action-inputs.generated.mjs";
+
 const DOCUMENTATION_URL =
   "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/v0.8.0/docs/setup.md";
 const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
 const MODES = new Set(["review", "commands", "both"]);
 const DSH_MODES = new Set(["controlled", "native"]);
-const DEFAULT_DSH_MODE = "controlled";
+const DSH_MODE_INPUT_NAME = INSTALLER_ACTION_INPUTS.dshMode.name;
+const DSH_MODE_OPTION = `--${DSH_MODE_INPUT_NAME}`;
+const DEFAULT_DSH_MODE = INSTALLER_ACTION_INPUTS.dshMode.defaultValue;
 const WORKFLOWS = Object.freeze({
   controlled: Object.freeze({
     review: Object.freeze({
@@ -71,13 +75,13 @@ export function parseArguments(argv) {
     } else if (argument?.startsWith("--mode=")) {
       option = "mode";
       value = argument.slice("--mode=".length);
-    } else if (argument === "--dsh-mode") {
-      option = "dsh-mode";
+    } else if (argument === DSH_MODE_OPTION) {
+      option = DSH_MODE_INPUT_NAME;
       value = argv[index + 1];
       index += 1;
-    } else if (argument?.startsWith("--dsh-mode=")) {
-      option = "dsh-mode";
-      value = argument.slice("--dsh-mode=".length);
+    } else if (argument?.startsWith(`${DSH_MODE_OPTION}=`)) {
+      option = DSH_MODE_INPUT_NAME;
+      value = argument.slice(`${DSH_MODE_OPTION}=`.length);
     } else {
       throw new Error(`Unknown argument: ${argument ?? ""}\n\n${usage()}`);
     }
@@ -94,12 +98,12 @@ export function parseArguments(argv) {
       continue;
     }
 
-    if (dshMode !== undefined) throw new Error("--dsh-mode may be provided only once");
+    if (dshMode !== undefined) throw new Error(`${DSH_MODE_OPTION} may be provided only once`);
     if (value === undefined || value === "" || value.startsWith("--")) {
-      throw new Error(`--dsh-mode requires controlled or native\n\n${usage()}`);
+      throw new Error(`${DSH_MODE_OPTION} requires controlled or native\n\n${usage()}`);
     }
     if (!DSH_MODES.has(value)) {
-      throw new Error(`Invalid --dsh-mode value: ${value}\n\n${usage()}`);
+      throw new Error(`Invalid ${DSH_MODE_OPTION} value: ${value}\n\n${usage()}`);
     }
     dshMode = value;
   }

@@ -72,6 +72,7 @@ const permission: PermissionAudit = {
   deniedTools: [
     {
       id: "native.subagent",
+      reasonCode: "EXPLICIT_DENY",
       reason: "Explicit disallowed-tools entry; deny always wins",
     },
   ],
@@ -531,6 +532,7 @@ describe("versioned action results", () => {
     const deniedTools = [
       {
         id: "native.subagent" as const,
+        reasonCode: "TRUST_REQUIRED" as const,
         reason: "Denied for @team ![pixel](https://tracker.invalid) `policy`",
       },
     ];

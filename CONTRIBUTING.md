@@ -13,6 +13,11 @@ npm run check
 
 Add regression coverage for behavior changes. Keep changes focused and preserve the Controller/worker security boundary described in [SECURITY.md](SECURITY.md).
 
+Public Action input metadata is defined in `src/action-contract.ts`. After an
+input metadata change, run `npm run generate:action-contract` and review the
+generated `action.yml`, configuration tables, and installer subset. The full
+check fails if those artifacts drift.
+
 ## Pull requests
 
 1. Create a branch from the latest `main`.

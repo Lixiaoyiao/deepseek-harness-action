@@ -9,12 +9,9 @@ import type {
   ToolInvocationContext,
   ToolProvider,
 } from "../agent/contracts.js";
-import type { AgentToolReceipt } from "../agent/loop.js";
-import { issueContentFingerprint } from "../github/issue-identity.js";
-import { sanitizeUntrustedText } from "../security/redaction.js";
 import type { SecurityPolicy } from "../security/policy.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
-import { stripTrackingMarkers } from "../review/tracking.js";
+import { utf8Prefix } from "../security/utf8.js";
 import type {
   GitHubBackendRequestControl,
   GitHubChecksSnapshot,
@@ -23,11 +20,22 @@ import type {
   GitHubPullSnapshot,
   GitHubToolBackend,
 } from "./github-backend.js";
+import { callGitHubApi, type GitHubInvocationDeadline } from "./github-gateway-deadline.js";
+import {
+  GitHubMutationExecutionError,
+  isAmbiguousGitHubMutationError,
+  mutateGitHubWithPostcondition,
+} from "./github-gateway-mutation.js";
+import {
+  GitHubEntityRevalidationError,
+  revalidateGitHubEntity,
+} from "./github-gateway-revalidation.js";
+import { GitHubToolFlushError, type GitHubToolFlushReceipt } from "./github-gateway-receipts.js";
+import { sanitizedGitHubOutputText, sanitizedGitHubPublicText } from "./github-gateway-text.js";
 import {
   COMMENT_MARKER_PREFIX,
   MAX_COMMENT_BYTES,
   MAX_PULL_BODY_BYTES,
-  RESERVED_MARKER_PATTERN,
   assigneesInputSchema,
   boundedString,
   commentInputSchema,
@@ -43,7 +51,12 @@ import {
 } from "./github-catalog.js";
 import { githubToolSchema, type GitHubToolId } from "./schema.js";
 
-const MAX_API_CALL_MS = 15_000;
+export {
+  GitHubToolFlushError,
+  githubFlushHasExternalEffect,
+  mergeGitHubFlushReceipts,
+} from "./github-gateway-receipts.js";
+export type { GitHubToolFlushReceipt } from "./github-gateway-receipts.js";
 
 type RequestControl = GitHubBackendRequestControl;
 type IssueView = GitHubIssueSnapshot;
@@ -101,40 +114,6 @@ const checksOutputSchema = commonOutputSchema.extend({
 const mutationToolSchema = githubToolSchema.exclude(["github.checks.read"]);
 const scheduledOutputSchema = commonOutputSchema.extend({ operation: mutationToolSchema });
 
-function bounded(value: string, bytes: number): string {
-  const raw = Buffer.from(value, "utf8");
-  if (raw.byteLength <= bytes) return value;
-  let result = raw.subarray(0, bytes).toString("utf8");
-  while (result.endsWith("\uFFFD") || Buffer.byteLength(result, "utf8") > bytes) {
-    result = result.slice(0, -1);
-  }
-  return result;
-}
-
-function sanitizedPublicText(
-  value: string,
-  label: string,
-  allowEmpty: boolean,
-  maximumCharacters: number,
-  maximumBytes: number,
-): string {
-  if (RESERVED_MARKER_PATTERN.test(value)) {
-    throw new Error(`${label} contains a reserved Controller marker`);
-  }
-  const sanitized = sanitizeUntrustedText(stripTrackingMarkers(value));
-  if (!allowEmpty && sanitized.trim() === "") {
-    throw new Error(`${label} is empty after Controller sanitization`);
-  }
-  if (sanitized.length > maximumCharacters || Buffer.byteLength(sanitized, "utf8") > maximumBytes) {
-    throw new Error(`${label} exceeds its bound after Controller sanitization`);
-  }
-  return sanitized;
-}
-
-function sanitizedOutputText(value: string, maximumBytes: number): string {
-  return bounded(sanitizeUntrustedText(stripTrackingMarkers(value)), maximumBytes);
-}
-
 function sorted(values: readonly string[]): string[] {
   return [...values].sort((left, right) => left.localeCompare(right));
 }
@@ -143,158 +122,6 @@ function equalSet(left: readonly string[], right: readonly string[]): boolean {
   return (
     JSON.stringify(sorted(left.map((value) => value.toLowerCase()))) ===
     JSON.stringify(sorted(right.map((value) => value.toLowerCase())))
-  );
-}
-
-function errorStatus(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const status = (error as { readonly status?: unknown }).status;
-  return typeof status === "number" ? status : undefined;
-}
-
-class GitHubEntityRevalidationError extends Error {
-  public constructor(options?: ErrorOptions) {
-    super("Trusted GitHub entity binding failed immediate revalidation", options);
-    this.name = "GitHubEntityRevalidationError";
-  }
-}
-
-function ambiguousMutationError(error: unknown): boolean {
-  if (error instanceof GitHubEntityRevalidationError) return false;
-  const status = errorStatus(error);
-  return status === undefined || status === 408 || status === 429 || status >= 500;
-}
-
-interface InvocationDeadline {
-  readonly deadlineMs: number;
-  readonly signal?: AbortSignal;
-}
-
-function abortError(signal: AbortSignal | undefined): Error {
-  return signal?.reason instanceof Error ? signal.reason : new Error("GitHub tool request aborted");
-}
-
-async function apiCall<T>(
-  invocation: InvocationDeadline,
-  start: (control: RequestControl) => Promise<T>,
-): Promise<T> {
-  if (invocation.signal?.aborted === true) throw abortError(invocation.signal);
-  const remainingMs = invocation.deadlineMs - Date.now();
-  if (remainingMs <= 0) throw new Error("GitHub tool invocation deadline exhausted");
-  const timeoutMs = Math.min(MAX_API_CALL_MS, remainingMs);
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error("GitHub API request timed out")),
-    timeoutMs,
-  );
-  const forwardAbort = (): void => controller.abort(abortError(invocation.signal));
-  invocation.signal?.addEventListener("abort", forwardAbort, { once: true });
-  try {
-    const promise = start({ timeoutMs, signal: controller.signal });
-    return await new Promise<T>((resolve, reject) => {
-      const abort = (): void => reject(abortError(controller.signal));
-      controller.signal.addEventListener("abort", abort, { once: true });
-      promise
-        .then(resolve, reject)
-        .finally(() => controller.signal.removeEventListener("abort", abort));
-    });
-  } finally {
-    clearTimeout(timer);
-    invocation.signal?.removeEventListener("abort", forwardAbort);
-  }
-}
-
-interface MutationResult<T> {
-  readonly value: T;
-  readonly attempts: number;
-  readonly effect: "updated" | "unchanged";
-  readonly reconciled: boolean;
-}
-
-class GitHubMutationExecutionError extends Error {
-  public constructor(
-    public readonly attempts: number,
-    public readonly reconciled: boolean,
-    public readonly externalEffect: "none" | "possible" | "confirmed",
-    options?: ErrorOptions,
-  ) {
-    super("GitHub mutation failed its bounded retry and reconciliation policy", options);
-    this.name = "GitHubMutationExecutionError";
-  }
-}
-
-async function mutateWithPostcondition<T>(options: {
-  readonly invocation: InvocationDeadline;
-  readonly read: (control: RequestControl) => Promise<T>;
-  readonly mutate: (control: RequestControl, markStarted: () => void) => Promise<void>;
-  readonly matches: (value: T) => boolean;
-}): Promise<MutationResult<T>> {
-  const read = async (): Promise<T> => await apiCall(options.invocation, options.read);
-  const before = await read();
-  if (options.matches(before)) {
-    return { value: before, attempts: 0, effect: "unchanged", reconciled: true };
-  }
-  let attempts = 0;
-  let lastError: unknown;
-  let reconciled = false;
-  let possibleExternalEffect = false;
-  while (attempts < 2) {
-    attempts += 1;
-    const mutation = { started: false };
-    let mutationAcknowledged = false;
-    try {
-      await apiCall(options.invocation, async (control) =>
-        options.mutate(control, () => {
-          mutation.started = true;
-        }),
-      );
-      mutationAcknowledged = true;
-      const after = await read();
-      if (!options.matches(after)) {
-        throw new Error("GitHub mutation postcondition did not match the requested state");
-      }
-      return { value: after, attempts, effect: "updated", reconciled: true };
-    } catch (error: unknown) {
-      if (mutationAcknowledged) {
-        throw new GitHubMutationExecutionError(attempts, reconciled, "confirmed", {
-          cause: error,
-        });
-      }
-      if (!mutation.started || error instanceof GitHubEntityRevalidationError) {
-        throw new GitHubMutationExecutionError(
-          attempts,
-          reconciled,
-          possibleExternalEffect ? "possible" : "none",
-          { cause: error },
-        );
-      }
-      if (options.invocation.signal?.aborted === true || !ambiguousMutationError(error)) {
-        const externalEffect =
-          possibleExternalEffect || ambiguousMutationError(error) ? "possible" : "none";
-        throw new GitHubMutationExecutionError(attempts, reconciled, externalEffect, {
-          cause: error,
-        });
-      }
-      possibleExternalEffect = true;
-      lastError = error;
-      try {
-        const value = await read();
-        reconciled = true;
-        if (options.matches(value)) {
-          return { value, attempts, effect: "updated", reconciled: true };
-        }
-      } catch (readError: unknown) {
-        throw new GitHubMutationExecutionError(attempts, reconciled, "possible", {
-          cause: readError,
-        });
-      }
-    }
-  }
-  throw new GitHubMutationExecutionError(
-    attempts,
-    reconciled,
-    possibleExternalEffect ? "possible" : "none",
-    { cause: lastError },
   );
 }
 
@@ -323,79 +150,6 @@ export interface GitHubAuthorityGatewayOptions {
   readonly expectedAuthorId: number;
   readonly backend: GitHubToolBackend;
   readonly validationGate?: GitHubMutationValidationGate;
-}
-
-export interface GitHubToolFlushReceipt {
-  readonly result: AgentToolResult;
-  readonly durationMs: number;
-}
-
-export function githubFlushHasExternalEffect(receipts: readonly GitHubToolFlushReceipt[]): boolean {
-  return receipts.some(({ result }) => {
-    if (typeof result.output !== "object" || result.output === null) return false;
-    const output = result.output as Record<string, unknown>;
-    return (
-      output.effect === "created" ||
-      output.effect === "updated" ||
-      output.externalEffect === "possible" ||
-      output.externalEffect === "confirmed"
-    );
-  });
-}
-
-/** Replace deferred scheduling receipts with their bounded final Gateway receipts. */
-export function mergeGitHubFlushReceipts(
-  receipts: readonly AgentToolReceipt[],
-  flushes: readonly GitHubToolFlushReceipt[],
-): readonly AgentToolReceipt[] {
-  const byCallId = new Map(flushes.map((flush) => [flush.result.callId, flush]));
-  return receipts.map((receipt) => {
-    const flush = byCallId.get(receipt.callId);
-    if (flush === undefined) return receipt;
-    const output =
-      typeof flush.result.output === "object" && flush.result.output !== null
-        ? (flush.result.output as Record<string, unknown>)
-        : {};
-    const effect = output.effect;
-    return {
-      ...receipt,
-      ok: flush.result.ok,
-      durationMs: receipt.durationMs + flush.durationMs,
-      ...(effect === "created" ||
-      effect === "updated" ||
-      effect === "unchanged" ||
-      effect === "read" ||
-      effect === "scheduled"
-        ? { effect }
-        : {}),
-      ...(!flush.result.ok ? { error: true } : {}),
-      ...(typeof output.target === "string" && Buffer.byteLength(output.target, "utf8") <= 160
-        ? { target: output.target }
-        : {}),
-      ...(typeof output.attempts === "number" &&
-      Number.isInteger(output.attempts) &&
-      output.attempts >= 0 &&
-      output.attempts <= 2
-        ? { attempts: output.attempts }
-        : {}),
-      ...(typeof output.reconciled === "boolean" ? { reconciled: output.reconciled } : {}),
-      ...(output.externalEffect === "possible" || output.externalEffect === "confirmed"
-        ? { externalEffect: output.externalEffect }
-        : {}),
-    };
-  });
-}
-
-export class GitHubToolFlushError extends Error {
-  public readonly receipts: readonly GitHubToolFlushReceipt[];
-  public readonly hasExternalEffect: boolean;
-
-  public constructor(receipts: readonly GitHubToolFlushReceipt[], options?: ErrorOptions) {
-    super("A deferred GitHub tool mutation failed during Controller finalization", options);
-    this.name = "GitHubToolFlushError";
-    this.receipts = receipts;
-    this.hasExternalEffect = githubFlushHasExternalEffect(receipts);
-  }
 }
 
 export class GitHubAuthorityGateway implements ToolProvider {
@@ -577,58 +331,6 @@ export class GitHubAuthorityGateway implements ToolProvider {
     return `repository:${String(this.binding.repositoryId)}/${entity}`;
   }
 
-  private async revalidateEntity(
-    binding: Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>,
-    allowClosed: boolean,
-    control: RequestControl,
-  ): Promise<void> {
-    if (binding.target === "issue") {
-      const target = {
-        owner: binding.owner,
-        repo: binding.repo,
-        issueNumber: binding.entityNumber,
-      } as const;
-      const [repository, issue] = await Promise.all([
-        this.backend.getRepository(target, control),
-        this.backend.getIssue(target, control),
-      ]);
-      const fingerprint = issueContentFingerprint({
-        number: issue.number,
-        title: issue.title,
-        body: issue.body,
-        authorId: issue.authorId,
-      });
-      if (
-        repository.id !== binding.repositoryId ||
-        issue.number !== binding.entityNumber ||
-        issue.kind !== "issue" ||
-        fingerprint !== binding.contentFingerprint ||
-        (issue.state === "closed" && !allowClosed)
-      ) {
-        throw new Error("Bound issue identity or state changed before GitHub tool mutation");
-      }
-      return;
-    }
-
-    const pull = await this.backend.getPull(
-      { owner: binding.owner, repo: binding.repo, pullNumber: binding.entityNumber },
-      control,
-    );
-    if (
-      pull.number !== binding.entityNumber ||
-      pull.headSha !== binding.headSha ||
-      pull.headRef !== binding.headRef ||
-      pull.headRepositoryId !== binding.headRepositoryId ||
-      pull.baseSha !== binding.baseSha ||
-      pull.baseRef !== binding.baseRef ||
-      pull.baseRepositoryId !== binding.baseRepositoryId ||
-      binding.headRepositoryId !== binding.baseRepositoryId ||
-      (pull.state === "closed" && !allowClosed)
-    ) {
-      throw new Error("Bound pull request identity or state changed before GitHub tool mutation");
-    }
-  }
-
   public async invoke(
     call: AgentToolCall,
     context: ToolInvocationContext,
@@ -653,7 +355,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
       }
       this.calls.set(id, next);
     }
-    const invocation: InvocationDeadline = {
+    const invocation: GitHubInvocationDeadline = {
       deadlineMs: Date.now() + context.timeoutMs,
       ...(context.signal === undefined ? {} : { signal: context.signal }),
     };
@@ -662,7 +364,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
     if (id === "github.checks.read") {
       const binding = this.binding;
       if (binding.target === "issue") throw new Error("Checks are not available for issue targets");
-      const value: ChecksView = await apiCall(invocation, async (control) =>
+      const value: ChecksView = await callGitHubApi(invocation, async (control) =>
         this.backend.readChecks(
           {
             owner: binding.owner,
@@ -678,16 +380,16 @@ export class GitHubAuthorityGateway implements ToolProvider {
         attempts: 1,
         reconciled: false,
         headSha: validateCommitSha(binding.headSha),
-        combinedState: bounded(value.combinedState, 32),
+        combinedState: utf8Prefix(value.combinedState, 32),
         checkRuns: value.checkRuns.slice(0, 50).map((check) => ({
-          name: sanitizedOutputText(check.name, 1024).slice(0, 256),
-          status: bounded(check.status, 32),
-          conclusion: check.conclusion === null ? null : bounded(check.conclusion, 32),
+          name: sanitizedGitHubOutputText(check.name, 256, 1024),
+          status: utf8Prefix(check.status, 32),
+          conclusion: check.conclusion === null ? null : utf8Prefix(check.conclusion, 32),
         })),
         statuses: value.statuses.slice(0, 50).map((status) => ({
-          context: sanitizedOutputText(status.context, 1024).slice(0, 256),
-          state: bounded(status.state, 32),
-          description: sanitizedOutputText(status.description, 2048).slice(0, 512),
+          context: sanitizedGitHubOutputText(status.context, 256, 1024),
+          state: utf8Prefix(status.state, 32),
+          description: sanitizedGitHubOutputText(status.description, 512, 2048),
         })),
         truncated:
           value.totalCount > value.checkRuns.length || value.statusCount > value.statuses.length,
@@ -729,16 +431,16 @@ export class GitHubAuthorityGateway implements ToolProvider {
         pullMetadataInputSchema.parse(parsedInput.data).state !== undefined);
     const revalidate = async (control: RequestControl): Promise<void> => {
       try {
-        await this.revalidateEntity(binding, allowClosed, control);
+        await revalidateGitHubEntity(this.backend, binding, allowClosed, control);
       } catch (error: unknown) {
         throw new GitHubEntityRevalidationError({ cause: error });
       }
     };
-    await apiCall(invocation, revalidate);
+    await callGitHubApi(invocation, revalidate);
 
     if (id === "github.issue.labels.set") {
       const input = labelsInputSchema.parse(parsedInput.data);
-      const result = await mutateWithPostcondition<IssueView>({
+      const result = await mutateGitHubWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
@@ -759,7 +461,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
     }
     if (id === "github.issue.assignees.set") {
       const input = assigneesInputSchema.parse(parsedInput.data);
-      const result = await mutateWithPostcondition<IssueView>({
+      const result = await mutateGitHubWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
@@ -785,7 +487,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
         state: input.state,
         ...(input.stateReason === undefined ? {} : { stateReason: input.stateReason }),
       } as const;
-      const result = await mutateWithPostcondition<IssueView>({
+      const result = await mutateGitHubWithPostcondition<IssueView>({
         invocation,
         read: async (control) => this.backend.getIssue(issueTarget, control),
         mutate: async (control, markStarted) => {
@@ -813,7 +515,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
       const marker = `${COMMENT_MARKER_PREFIX}${markerId} -->`;
       const suffix = `\n\n${marker}`;
       const safeBodyBytes = MAX_COMMENT_BYTES - Buffer.byteLength(suffix, "utf8");
-      const safeBody = sanitizedPublicText(
+      const safeBody = sanitizedGitHubPublicText(
         input.body,
         "GitHub comment body",
         false,
@@ -830,7 +532,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
             comment.authorId === this.options.expectedAuthorId && comment.body.includes(marker),
         );
       const existing = find(
-        await apiCall(invocation, async (control) =>
+        await callGitHubApi(invocation, async (control) =>
           this.backend.listRecentComments(issueTarget, control),
         ),
       );
@@ -849,7 +551,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
       let acknowledged = false;
       let mutationError: unknown;
       try {
-        await apiCall(invocation, async (control) => {
+        await callGitHubApi(invocation, async (control) => {
           await revalidate(control);
           mutation.started = true;
           await this.backend.createComment(issueTarget, body, control);
@@ -860,13 +562,13 @@ export class GitHubAuthorityGateway implements ToolProvider {
         if (!mutation.started || error instanceof GitHubEntityRevalidationError) {
           throw new GitHubMutationExecutionError(attempts, false, "none", { cause: error });
         }
-        if (!ambiguousMutationError(error)) {
+        if (!isAmbiguousGitHubMutationError(error)) {
           throw new GitHubMutationExecutionError(attempts, false, "none", { cause: error });
         }
       }
       try {
         const recovered = find(
-          await apiCall(invocation, async (control) =>
+          await callGitHubApi(invocation, async (control) =>
             this.backend.listRecentComments(issueTarget, control),
           ),
         );
@@ -908,12 +610,18 @@ export class GitHubAuthorityGateway implements ToolProvider {
       ...(rawInput.title === undefined
         ? {}
         : {
-            title: sanitizedPublicText(rawInput.title, "pull request title", false, 256, 1024),
+            title: sanitizedGitHubPublicText(
+              rawInput.title,
+              "pull request title",
+              false,
+              256,
+              1024,
+            ),
           }),
       ...(rawInput.body === undefined
         ? {}
         : {
-            body: sanitizedPublicText(
+            body: sanitizedGitHubPublicText(
               rawInput.body,
               "pull request body",
               true,
@@ -932,7 +640,7 @@ export class GitHubAuthorityGateway implements ToolProvider {
       (input.state === undefined || value.state === input.state) &&
       (input.maintainerCanModify === undefined ||
         value.maintainerCanModify === input.maintainerCanModify);
-    const result = await mutateWithPostcondition<PullView>({
+    const result = await mutateGitHubWithPostcondition<PullView>({
       invocation,
       read: async (control) => this.backend.getPull(pullTarget, control),
       mutate: async (control, markStarted) => {
@@ -947,8 +655,8 @@ export class GitHubAuthorityGateway implements ToolProvider {
       target,
       attempts: result.attempts,
       reconciled: result.reconciled,
-      title: sanitizedOutputText(result.value.title, 1024).slice(0, 256),
-      body: sanitizedOutputText(result.value.body, MAX_PULL_BODY_BYTES),
+      title: sanitizedGitHubOutputText(result.value.title, 256, 1024),
+      body: sanitizedGitHubOutputText(result.value.body, MAX_PULL_BODY_BYTES, MAX_PULL_BODY_BYTES),
       state: result.value.state,
       base: result.value.baseRef,
       maintainerCanModify: result.value.maintainerCanModify,

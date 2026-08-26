@@ -6,6 +6,13 @@ Please use GitHub private vulnerability reporting rather than opening a public
 issue. Include the affected version, event type, trust boundary and a minimal
 reproduction. Do not include live credentials.
 
+## Architecture invariants
+
+The stable system-level promises are indexed as
+[INV-001 through INV-005](docs/invariants.md) and explained in
+[`ARCHITECTURE.md`](ARCHITECTURE.md). These identifiers are documentation and
+test anchors, not a second implementation of production policy.
+
 ## Trust model
 
 The model separates four independent questions: who may request work, which
@@ -145,6 +152,15 @@ policy. Unknown, unavailable, or policy-ineligible tools fail closed with a
 reason in the permission audit. The Agent cannot modify its profile, allow/deny
 lists, or policy and cannot approve an extension or permission escalation.
 
+Each Controller-owned tool denial also includes an additive, machine-readable
+`reasonCode`. When several boundaries deny the same tool, the stable precedence
+is `EXPLICIT_DENY`, `TRUST_REQUIRED`, `ISOLATION_REQUIRED`,
+`CAPABILITY_NOT_GRANTED`, `BINDING_UNAVAILABLE`, then
+`PROVIDER_UNAVAILABLE`. The human-readable `reason` remains part of the audit;
+consumers should branch on `reasonCode` and display `reason`. The additive code
+is excluded from the compatibility digest so an otherwise identical policy and
+task identity remain stable across this patch release.
+
 Controller-managed builtin tools declare their identity, model permission tags,
 and trust, capability, and isolation requirements in one capability contract.
 The generic evaluator intersects that contract with the request, explicit deny,
@@ -267,7 +283,7 @@ maintainer configuration, `allowed-tools` and the controller policy:
 
 #### Controller-owned GitHub tools
 
-v0.8.0 retains only six exact typed operations: label and assignee replacement,
+v0.8.1 retains only six exact typed operations: label and assignee replacement,
 Issue state update, comment creation, PR metadata update, and check/status
 read. The tool input never accepts an owner, repository, entity number, head
 SHA, raw URL, REST route, GraphQL document, or credential. Those identities
@@ -614,14 +630,14 @@ The supplied templates use the following sets:
 | Interactive commands with fix/implement enabled | `actions: read`, `checks: read`, `contents: write`, `issues: write`, `pull-requests: write`                                                        |
 | CI auto-fix                                     | Same as the preceding row                                                                                                                          |
 | Core E2E jobs                                   | Split per job: secretless gate; bounded read/write/cancellation scopes; exact Issue/PR/ref/check scopes only for the isolated integration fixtures |
-| v0.8.0 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                          |
+| v0.8.1 release canary                           | Secretless `contents: read` gate; the `core-e2e` smoke job also has only `contents: read`                                                          |
 
 Progress comments use the same issue or pull-request comment permission as the
 final result and require no additional token scope. Write-task comment APIs are
 not called before successful final validation.
 
 The release canary requires repository variable `DSH_RELEASE_CANARY_SHA` to be
-the lowercase full 40-character commit SHA referenced by the formal v0.8.0 tag
+the lowercase full 40-character commit SHA referenced by the formal v0.8.1 tag
 and its non-draft, non-prerelease GitHub Release. Before any environment secret
 is available, a secretless gate requires `refs/heads/main`, requires the
 run/workflow SHA to equal the live default-branch SHA, and fails if `main` is no
@@ -695,7 +711,7 @@ and destinations that are reachable through the runner's Docker bridge path.
 Use dedicated runners, network segmentation, and runner-level egress controls
 for that threat model.
 
-GitHub attachment images are not an enabled input path in v0.8.0. The exact
+GitHub attachment images are not an enabled input path in v0.8.1. The exact
 audited `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text task
 and constructs one text content block; it has no formal multimodal contract.
 Markdown images are rendered inert as `[image removed]`. The Controller does
@@ -718,7 +734,7 @@ The v1 sticky marker identifies an operation result kind, not a workflow run or
 head SHA. The supplied workflows therefore use a per-PR, per-Issue or per-run
 `concurrency` group. Custom workflows should preserve that serialization; without
 it, a slow or hard-cancelled older run can overwrite a newer run's sticky state.
-A marker-level freshness guard remains deferred in v0.8.0. On `SIGTERM` or
+A marker-level freshness guard remains deferred in v0.8.1. On `SIGTERM` or
 `SIGINT`, the Controller aborts the active worker and immediately starts a
 bounded, best-effort terminal comment update while run-scoped cleanup proceeds.
 A later authoritative non-cancellation failure can correct a provisional

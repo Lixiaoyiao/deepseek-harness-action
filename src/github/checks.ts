@@ -1,4 +1,5 @@
 import type { GitHubClient } from "./client.js";
+import { utf8Prefix, utf8Suffix } from "../security/utf8.js";
 
 const MAX_FAILED_RUNS = 20;
 const MAX_FAILED_JOBS = 100;
@@ -69,38 +70,23 @@ function boundLog(
   const cap = Math.max(0, Math.min(MAX_LOG_BYTES_PER_JOB, remaining));
   if (raw.byteLength <= cap) return { log: value, bytes: raw.byteLength, truncated: false };
   if (cap === 0) return { log: "", bytes: 0, truncated: true };
-  const marker = Buffer.from("\n[... log truncated by dsh-action ...]\n", "utf8");
-  if (marker.byteLength >= cap) {
+  const marker = "\n[... log truncated by dsh-action ...]\n";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  if (markerBytes >= cap) {
     const log = utf8Prefix(marker, cap);
     return { log, bytes: Buffer.byteLength(log), truncated: true };
   }
-  const contentCap = cap - marker.byteLength;
+  const contentCap = cap - markerBytes;
   const headSize = Math.floor(contentCap / 3);
   const tailSize = contentCap - headSize;
   const head = utf8Prefix(raw, headSize);
   const tail = utf8Suffix(raw, tailSize);
-  const log = head + marker.toString("utf8") + tail;
+  const log = head + marker + tail;
   return {
     log,
     bytes: Buffer.byteLength(log),
     truncated: true,
   };
-}
-
-function utf8Prefix(raw: Buffer, cap: number): string {
-  let end = Math.min(cap, raw.byteLength);
-  while (end > 0 && end < raw.byteLength && (raw[end] ?? 0) >= 0x80 && (raw[end] ?? 0) < 0xc0) {
-    end -= 1;
-  }
-  return raw.subarray(0, end).toString("utf8");
-}
-
-function utf8Suffix(raw: Buffer, cap: number): string {
-  let start = Math.max(0, raw.byteLength - cap);
-  while (start < raw.byteLength && (raw[start] ?? 0) >= 0x80 && (raw[start] ?? 0) < 0xc0) {
-    start += 1;
-  }
-  return raw.subarray(start).toString("utf8");
 }
 
 function boundSummary(
@@ -113,11 +99,10 @@ function boundSummary(
     return { summary: value, bytes: raw.byteLength, truncated: false };
   }
   if (cap === 0) return { summary: "", bytes: 0, truncated: true };
-  const marker = Buffer.from("\n[... summary truncated ...]", "utf8");
+  const marker = "\n[... summary truncated ...]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
   const summary =
-    marker.byteLength >= cap
-      ? utf8Prefix(marker, cap)
-      : utf8Prefix(raw, cap - marker.byteLength) + marker.toString("utf8");
+    markerBytes >= cap ? utf8Prefix(marker, cap) : utf8Prefix(raw, cap - markerBytes) + marker;
   return { summary, bytes: Buffer.byteLength(summary), truncated: true };
 }
 
@@ -186,7 +171,12 @@ async function readResponseBody(
     if (truncated) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
-  return { text: Buffer.concat(chunks).toString("utf8"), truncated };
+  const raw = Buffer.concat(chunks);
+  const text = utf8Prefix(raw, raw.byteLength);
+  return {
+    text,
+    truncated: truncated || Buffer.byteLength(text, "utf8") < raw.byteLength,
+  };
 }
 
 interface DownloadJobLogOptions {

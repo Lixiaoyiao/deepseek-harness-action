@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Troubleshooting](troubleshooting.md) · [Security](../SECURITY.md)
 
-## Status in v0.8.0
+## Status in v0.8.1
 
 The controlled extension model introduced in v0.4 remains active unchanged
 through DeepSeek Harness's official extension mechanisms. The Action does not
@@ -529,7 +529,7 @@ The Controller validates the returned protocol, operation, paths, and terminal
 state before any validation, publication, or GitHub write.
 
 `SessionStore`, `AgentSessionBinding`, and `AgentSessionHandle` remain reserved
-interfaces only. v0.8.0 does not instantiate a store or expose a resume token.
+interfaces only. v0.8.1 does not instantiate a store or expose a resume token.
 The redacted extension audit digest is included in public task identity and
 output audit data, while the Controller-only complete configuration digest binds
 runtime reuse. Neither digest is a reusable session credential. Any

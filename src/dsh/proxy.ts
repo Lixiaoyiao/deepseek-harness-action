@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 
 import { DshConfigurationError, DshProxyError } from "./errors.js";
+import { validatedControllerBaseUrl } from "./base-url.js";
 
 const DEFAULT_REQUEST_LIMIT = 8 * 1024 * 1024;
 const DEFAULT_RESPONSE_LIMIT = 32 * 1024 * 1024;
@@ -258,25 +259,6 @@ async function handleRequest(
   }
 }
 
-function validatedBaseUrl(raw: string, label: string): URL {
-  let base: URL;
-  try {
-    base = new URL(raw);
-  } catch (error: unknown) {
-    throw new DshConfigurationError(`${label} is invalid`, { cause: error });
-  }
-  const loopbackHttp =
-    base.protocol === "http:" &&
-    (base.hostname === "127.0.0.1" || base.hostname === "::1" || base.hostname === "localhost");
-  if (base.protocol !== "https:" && !loopbackHttp) {
-    throw new DshConfigurationError(`${label} must use HTTPS (except loopback tests)`);
-  }
-  if (base.username !== "" || base.password !== "") {
-    throw new DshConfigurationError(`${label} must not contain credentials`);
-  }
-  return base;
-}
-
 async function listen(server: Server, host: string): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
@@ -298,7 +280,7 @@ export async function startDeepSeekProxy(
 ): Promise<DeepSeekProxyHandle> {
   if (options.apiKey.trim() === "") throw new DshConfigurationError("DeepSeek API key is empty");
 
-  const base = validatedBaseUrl(options.baseUrl, "DeepSeek base URL");
+  const base = validatedControllerBaseUrl(options.baseUrl, "DeepSeek base URL");
   if (options.allowWebSearch === true && options.webSearchBaseUrl === undefined) {
     throw new DshConfigurationError(
       "Web search base URL is required when Controller web search permission is enabled",
@@ -307,7 +289,7 @@ export async function startDeepSeekProxy(
   const configuredWebSearchBase =
     options.webSearchBaseUrl === undefined
       ? undefined
-      : validatedBaseUrl(options.webSearchBaseUrl, "Web search base URL");
+      : validatedControllerBaseUrl(options.webSearchBaseUrl, "Web search base URL");
   const webSearchBase = options.allowWebSearch === true ? configuredWebSearchBase : undefined;
 
   const bindHost = options.bindHost ?? "127.0.0.1";

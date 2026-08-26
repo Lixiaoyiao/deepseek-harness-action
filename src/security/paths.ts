@@ -10,6 +10,11 @@ function isWithin(root: string, candidate: string): boolean {
   return segment === "" || (!segment.startsWith("..") && !isAbsolute(segment));
 }
 
+function isMissingPathError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
 /** Resolve an existing path, or the nearest existing ancestor, and reject symlink escapes. */
 export async function assertPathWithin(rootPath: string, candidatePath: string): Promise<string> {
   const root = await realpath(rootPath).catch(() => {
@@ -23,9 +28,12 @@ export async function assertPathWithin(rootPath: string, candidatePath: string):
     try {
       await lstat(ancestor);
       break;
-    } catch {
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) throw error;
       const parent = dirname(ancestor);
-      if (parent === ancestor) throw new Error("No existing ancestor for path");
+      if (parent === ancestor) {
+        throw new Error("No existing ancestor for path", { cause: error });
+      }
       ancestor = parent;
     }
   }

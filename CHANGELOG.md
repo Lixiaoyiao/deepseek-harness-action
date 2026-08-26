@@ -3,6 +3,59 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.8.1] - 2026-08-26
+
+### Changed
+
+- Centralized UTF-8 prefix and suffix primitives used by context, agent-loop,
+  GitHub evidence, public-text, and command-output truncation. Callers retain
+  their existing head-only, head-tail, and marker policies while tiny byte caps
+  now terminate without splitting a code point or producing U+FFFD.
+- Moved input-only failures for DeepSeek upstream URL protocol/userinfo, the
+  audited exact DSH version, Docker/OCI image syntax, and host executable shape
+  into `loadInputs()`. Runner, proxy, Docker, and runtime binding checks remain
+  in place as defense in depth.
+- Made `dshMode` the discriminator for controlled versus native MCP and Plugin
+  configuration types, removing downstream production casts and making mixed
+  composition/configuration shapes unrepresentable.
+- Established one typed public Action input contract for names, required/default
+  metadata, descriptions, runtime keys, documentation groups, and the installer
+  subset. `action.yml`, the configuration tables, and installer metadata are
+  generated deterministically and CI rejects drift.
+- Kept `GitHubAuthorityGateway` as the only Controller authority facade while
+  extracting its existing deadline, entity-revalidation, mutation
+  retry/postcondition/reconciliation, public-text, and receipt responsibilities
+  into focused internal helpers.
+
+### Security
+
+- `assertPathWithin()` now treats only `ENOENT` and `ENOTDIR` as a missing-path
+  search condition. Permission, I/O, and other filesystem errors fail closed.
+- Added additive stable denial `reasonCode` values with deterministic precedence:
+  `EXPLICIT_DENY`, `TRUST_REQUIRED`, `ISOLATION_REQUIRED`,
+  `CAPABILITY_NOT_GRANTED`, `BINDING_UNAVAILABLE`, and
+  `PROVIDER_UNAVAILABLE`. Existing human-readable reasons remain present, and
+  the additive code is excluded from the compatibility digest so existing task
+  identity remains stable.
+- Added a concise architecture guide and system invariant catalog covering
+  Controller/DSH/validation ownership, credential and authority boundaries,
+  controlled/native policy ownership, GitHub mutation validation, and native
+  observed inventory.
+
+### Testing and compatibility
+
+- Added independent tiny-cap UTF-8, filesystem-error, early-input-validation,
+  discriminated-configuration, denial-precedence, generated-contract, and
+  architecture-invariant tests while retaining the six-axis deterministic
+  pairwise/invariant matrix.
+- Added a manual/periodic non-gating upstream compatibility canary that probes
+  the next available DSH candidate and runs native ecosystem/composition smoke
+  without modifying the lockfile, production pin, accepted-version list, or
+  formal release gate.
+- `controlled` remains the compatible default. This release adds no Session,
+  GitHub MCP backend, GitHub capability, authority widening, or DSH upgrade;
+  production remains exact-pinned to `0.1.1-rc.2`.
+
 ## Installer 0.2.0 - 2026-08-26
 
 - Added `--dsh-mode controlled|native` to the independently versioned
@@ -783,6 +836,7 @@ versioning for published action releases.
   PR workflows, strict structured-output validation, controller-owned tracking
   comments and fail-closed write gates.
 
+[0.8.1]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Lixiaoyiao/deepseek-harness-action/compare/v0.5.3...v0.6.0

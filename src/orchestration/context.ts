@@ -16,6 +16,7 @@ import type { ActionInputs } from "../inputs.js";
 import { ActionConfigurationError, OperationContextError, PolicyDeniedError } from "../errors.js";
 import { sanitizeUntrustedText } from "../security/redaction.js";
 import { validateRefName } from "../security/refs.js";
+import { utf8Prefix } from "../security/utf8.js";
 
 export function runUrl(context: GitHubContext): string {
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
@@ -85,14 +86,13 @@ export function resolveBaseBranch(
 }
 
 export function boundedText(value: string, maximumBytes: number): string {
-  const raw = Buffer.from(value, "utf8");
-  if (raw.byteLength <= maximumBytes) return value;
-  const marker = Buffer.from("\n[truncated by dsh-action]", "utf8");
-  let prefix = raw.subarray(0, Math.max(0, maximumBytes - marker.byteLength)).toString("utf8");
-  while (Buffer.byteLength(prefix, "utf8") + marker.byteLength > maximumBytes) {
-    prefix = prefix.slice(0, -1);
-  }
-  return prefix + marker.toString("utf8");
+  const cap = Math.max(0, Math.floor(maximumBytes));
+  if (Buffer.byteLength(value, "utf8") <= cap) return value;
+  const marker = "\n[truncated by dsh-action]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  return markerBytes >= cap
+    ? utf8Prefix(marker, cap)
+    : utf8Prefix(value, cap - markerBytes) + marker;
 }
 
 /** Enforce the operation/entity state machine before invoking DSH. */

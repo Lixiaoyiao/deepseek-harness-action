@@ -613,6 +613,7 @@ describe("deterministic security invariant matrix", () => {
       expect(effective.manifests.map(({ id }) => id)).not.toContain(denied);
       expect(effective.permissionDenials).toContainEqual({
         id: denied,
+        reasonCode: "EXPLICIT_DENY",
         reason: "Explicit disallowed-tools entry; deny always wins",
       });
     },

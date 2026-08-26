@@ -26,13 +26,13 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 | 受控工具         | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
 | 结构化结果       | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.8.0 在锁定的 DSH `0.1.1-rc.2` runtime 上正式发布实验性的 `dsh-mode: native` 路径及其官方生态 composition。Native MCP server、Profile Bundle、direct Cordis Plugin、仓库 Skills、Subagent 和 Workflow 保留 DSH-native discovery 与行为。`controlled` 仍是兼容默认值，因此未配置 `dsh-mode` 的 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
+v0.8.1 继续提供基于锁定 DSH `0.1.1-rc.2` runtime 的实验性 `dsh-mode: native` 路径及其官方生态 composition。Native MCP server、Profile Bundle、direct Cordis Plugin、仓库 Skills、Subagent 和 Workflow 保留 DSH-native discovery 与行为。`controlled` 仍是兼容默认值，因此未配置 `dsh-mode` 的 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
 
 Native 模式并不是 unsafe 模式。它把 DSH 内部 headless composition、capability graph 和 model-visible inventory 的 ownership 交还给 DSH。Native MCP 通过官方 `@deepseek-ai/dsh-mcp-client` 加载；Bundle 作为官方 Profile layer 组合；direct Plugin 通过 Cordis 加载；仓库 Skills、Subagent 与 Workflow 保留 DSH-native 行为。它使用 definition-only 扩展 schema 来声明 owner 和进程需求，而不是声明 Action tool、grant 或 per-tool budget。动态生态工具只通过运行时 `observedTools` 出现，native `toolPolicy` 不会虚构 Controller `effectiveTools`。
 
 Action 仍拥有 trusted-workflow admission、package exact pin、lifecycle script 禁用、runtime inventory audit、Docker 与 `.git`-less workspace 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、validation 与 deferred write、deadline、cancellation 和 secret redaction。Native 仍仅支持 Docker；bridge network 和 read/write mount 都是 whole-worker 能力，不是 per-extension 或 per-tool sandbox。用户自行配置并携带自有凭据的 GitHub MCP 属于受信任外部扩展，其直接副作用不享受 Controller Gateway 的 binding、revalidation、validation 或 deferred-mutation 保证。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。
 
-v0.8.0 的 behavior-preserving architecture cleanup 让 orchestrator 成为更薄的 typed lifecycle 协调层，将 Controller-owned GitHub authorization、deferred effect、revalidation、backend execution、reconciliation 和 receipt 收敛到 `GitHubAuthorityGateway`，并让 Controller-managed builtin tool 通过单一 declarative capability contract 和通用 policy evaluator 解析权限。Deterministic invariant/matrix tests 加固了跨模式安全性，同时保持公共 JSON 与 output schema 兼容。`GitHubToolBackend` 仍只负责 transport；本版本不包含 Action-owned GitHub MCP backend 或 Session/Resume，也不改变锁定的 DSH 版本。
+v0.8.1 是 behavior-preserving hardening：统一按字节安全的 UTF-8 截断，将纯输入错误前移到启动阶段且保留 runtime 复检，对异常 filesystem 错误 fail closed，用 discriminator 闭合 controlled/native 配置类型，并增加生成的 public-input metadata 与稳定 denial reason code。`GitHubAuthorityGateway` 仍是唯一 GitHub authority facade，但 deadline、revalidation、mutation、reconciliation 与 receipt helper 更易审计。本版本不增加 Action-owned GitHub MCP backend、Session/Resume、新 GitHub capability，也不升级 DSH。
 
 ## 真实运行
 
@@ -106,7 +106,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -114,7 +114,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应把 `v0.8.0` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应把 `v0.8.1` 替换为该版本发布时的完整、不可变 commit SHA。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 常用 `@dsh` 命令
 
@@ -154,6 +154,7 @@ jobs:
 | [安装指南](docs/setup.zh-CN.md) · [English](docs/setup.md) | 安装器、手工安装、Secret、权限、安全检出和模板                       |
 | [使用指南](docs/usage.zh-CN.md) · [English](docs/usage.md) | `@dsh` 命令、task、review、diagnose、fix、implement 和自动化         |
 | [配置参考](docs/configuration.md)                          | 输入、权限档位、工具、验证、扩展和输出                               |
+| [架构](ARCHITECTURE.md) · [不变量](docs/invariants.md)     | 组件职责、authority 边界与稳定系统不变量                             |
 | [故障排查](docs/troubleshooting.md)                        | 权限拒绝、Docker、超时、取消、验证和扩展故障                         |
 | [安全策略](SECURITY.md)                                    | 信任模型、凭据边界、网络行为和已知限制                               |
 | [扩展契约](docs/extension-contracts.md)                    | MCP、Profile、Bundle、Plugin、ToolRuntime 和 receipts 的深层技术约束 |

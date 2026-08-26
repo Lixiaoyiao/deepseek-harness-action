@@ -20,6 +20,7 @@ import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
 import { PHASE_TIMEOUTS, phaseTimeoutMs, settleWithin } from "../lifecycle/deadline.js";
 import { DshAgentEngine, type AgentTask, type DshTurnMetadata } from "../review/run.js";
+import { utf8Prefix, utf8Suffix } from "../security/utf8.js";
 import { ValidationFailureError } from "../write/validate.js";
 import { fingerprintWorkspace } from "../write/workspace.js";
 
@@ -116,36 +117,25 @@ export interface AgentLoopDependencies {
 }
 
 function bounded(value: string, maximumBytes = 12 * 1024): string {
-  const buffer = Buffer.from(value, "utf8");
-  if (buffer.byteLength <= maximumBytes) return value;
-  const marker = Buffer.from("\n[truncated by dsh-action]", "utf8");
-  let prefix = buffer.subarray(0, maximumBytes - marker.byteLength).toString("utf8");
-  while (
-    prefix.endsWith("\uFFFD") ||
-    Buffer.byteLength(prefix, "utf8") + marker.byteLength > maximumBytes
-  ) {
-    prefix = prefix.slice(0, -1);
-  }
-  return prefix + marker.toString("utf8");
+  const cap = Math.max(0, Math.floor(maximumBytes));
+  if (Buffer.byteLength(value, "utf8") <= cap) return value;
+  const marker = "\n[truncated by dsh-action]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  return markerBytes >= cap
+    ? utf8Prefix(marker, cap)
+    : utf8Prefix(value, cap - markerBytes) + marker;
 }
 
 function boundedHeadTail(value: string, maximumBytes = 6 * 1024): string {
-  const buffer = Buffer.from(value, "utf8");
-  if (buffer.byteLength <= maximumBytes) return value;
-  const marker = Buffer.from("\n[...truncated by dsh-action...]\n", "utf8");
-  const available = maximumBytes - marker.byteLength;
+  const cap = Math.max(0, Math.floor(maximumBytes));
+  if (Buffer.byteLength(value, "utf8") <= cap) return value;
+  const marker = "\n[...truncated by dsh-action...]\n";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  if (markerBytes >= cap) return utf8Prefix(marker, cap);
+  const available = cap - markerBytes;
   const headBytes = Math.floor(available / 3);
   const tailBytes = available - headBytes;
-  let head = buffer.subarray(0, headBytes).toString("utf8");
-  let tail = buffer.subarray(buffer.byteLength - tailBytes).toString("utf8");
-  while (head.endsWith("\uFFFD")) head = head.slice(0, -1);
-  while (tail.startsWith("\uFFFD")) tail = tail.slice(1);
-  let result = head + marker.toString("utf8") + tail;
-  while (Buffer.byteLength(result, "utf8") > maximumBytes && tail.length > 0) {
-    tail = tail.slice(1);
-    result = head + marker.toString("utf8") + tail;
-  }
-  return result;
+  return utf8Prefix(value, headBytes) + marker + utf8Suffix(value, tailBytes);
 }
 
 function boundedFeedbackData(value: unknown): unknown {

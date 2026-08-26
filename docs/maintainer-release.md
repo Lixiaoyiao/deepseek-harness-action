@@ -4,14 +4,14 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
-v0.8.0 publishes the experimental `NativeComposition` and official native MCP,
-Profile Bundle, Cordis Plugin, repository Skills, Subagent, and Workflow
-compatibility together with the subsequent behavior-preserving Controller
-cleanup. Its formal annotated tag, GitHub Release, and release canary resolve to
-commit `86fff4c4527694c7eefdc65c6cf7a633b5ea8cb1`. The independently versioned
-installer follows as `0.2.0` only after that Action identity is complete. Its
-reviewed source has a separate immutable tag, while its pack step binds generated
-workflows to the formal Action commit through `DSH_ACTION_RELEASE_SHA`.
+v0.8.1 is a behavior-preserving maintenance and security hardening release over
+the existing controlled and experimental native compositions. It keeps the
+audited DSH `0.1.1-rc.2` family exact-pinned and does not add Session/Resume, an
+Action-owned GitHub MCP backend, or another GitHub capability. Its formal
+annotated tag, GitHub Release, and release canary must resolve to the same
+qualified exact-main commit. The independently versioned installer remains
+`0.2.0` and retains its formal v0.8.0 Action binding unless a separate companion
+release is intentionally prepared.
 
 ## Release invariants
 
@@ -26,7 +26,7 @@ workflows to the formal Action commit through `DSH_ACTION_RELEASE_SHA`.
   guessed SHA is not a production Action reference.
 - A published tag is immutable. If its formal smoke fails, do not move the tag; fix forward with the next patch release.
 
-The release constants and direct DSH package inventory live in [`src/release.ts`](../src/release.ts). [`scripts/verify-release-contract.mjs`](../scripts/verify-release-contract.mjs) checks them against the manifest, lock, Action metadata, CI runtime smoke, and release canary.
+The release constants and direct DSH package inventory live in [`src/release.ts`](../src/release.ts). Public Action input metadata lives in [`src/action-contract.ts`](../src/action-contract.ts); run `npm run generate:action-contract` after changing it. [`scripts/verify-release-contract.mjs`](../scripts/verify-release-contract.mjs) checks the release constants against the manifest, lock, Action metadata, CI runtime smoke, and release canary, while `npm run test:generated` rejects generated input metadata drift.
 
 ## Repository environments and variables
 
@@ -49,13 +49,13 @@ npm run check
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
 
-v0.8.0 also includes a deterministic invariant/model matrix across composition
+v0.8.1 retains the deterministic invariant/model matrix across composition
 mode, trust, permission profile, isolation, extension authority, and Controller
 GitHub authority. Use that matrix for cross-axis policy coverage and reserve
 live E2E for the representative high-value paths below; do not attempt a live
 Cartesian product.
 
-For v0.8.0, the DSH audit also proves that the exact headless package still
+For v0.8.1, the DSH audit also proves that the exact headless package still
 accepts only one text task and creates one text content block. That negative
 contract is release evidence for deferring GitHub attachment images; do not
 remove it unless a replacement exact DSH multimodal contract and its security
@@ -90,6 +90,14 @@ For a DSH version bump, additionally:
 5. Add compatibility and security regression coverage before running the real golden paths.
 
 If the official package family is incomplete or clean `npm ci` cannot consume it, do not use `--legacy-peer-deps`, mix versions, or weaken the lock audit. Leave the current exact DSH pin in place and defer the upgrade.
+
+The [DSH upstream compatibility canary](../.github/workflows/dsh-upstream-canary.yml)
+runs weekly and on manual dispatch. It selects only the next published version
+after the audited pin, temporarily installs the same direct DSH package family
+without changing the manifest or lockfile, and runs the native composition and
+ecosystem smoke tests. The job is advisory and non-gating: a failure is a
+maintenance warning, never a production pin change, accepted-version update,
+release gate, or declaration of support.
 
 ## Pull request and candidate CI
 

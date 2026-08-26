@@ -6,12 +6,6 @@ import {
   resolveNativeExtensionPlan,
   type ExtensionPlan,
 } from "../extensions/plan.js";
-import type {
-  McpConfiguration,
-  NativeMcpConfiguration,
-  NativePluginConfiguration,
-  PluginConfiguration,
-} from "../extensions/schema.js";
 import { createOctokitGitHubToolBackend } from "../github/octokit-tool-backend.js";
 import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
@@ -78,15 +72,15 @@ export async function prepareExecution(options: {
   const extensions =
     inputs.dshMode === "native"
       ? resolveNativeExtensionPlan({
-          mcp: inputs.mcpConfig as NativeMcpConfiguration,
-          plugins: inputs.pluginConfig as NativePluginConfiguration,
+          mcp: inputs.mcpConfig,
+          plugins: inputs.pluginConfig,
           allowPluginInstall: inputs.allowPluginInstall,
           policy,
         })
       : resolveExtensionPlan({
           allowedTools: extensionAllowedTools,
-          mcp: inputs.mcpConfig as McpConfiguration,
-          plugins: inputs.pluginConfig as PluginConfiguration,
+          mcp: inputs.mcpConfig,
+          plugins: inputs.pluginConfig,
           allowPluginInstall: inputs.allowPluginInstall,
           policy,
         });

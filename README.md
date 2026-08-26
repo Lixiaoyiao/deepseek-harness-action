@@ -26,13 +26,13 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.8.0 ships the experimental `dsh-mode: native` path over the locked DSH `0.1.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
+v0.8.1 retains the experimental `dsh-mode: native` path over the locked DSH `0.1.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
 
 Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition, capability graph, and model-visible inventory to DSH. Native MCP servers load through official `@deepseek-ai/dsh-mcp-client`; Bundles become official Profile layers; direct Plugins load through Cordis; and repository Skills, Subagents, and Workflows retain DSH-native behavior. Its definition-only extension schema declares owners and process requirements, not Action tools, grants, or per-tool budgets. Dynamic ecosystem tools appear only in runtime `observedTools`, and native `toolPolicy` never claims Controller `effectiveTools`.
 
 The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Controller Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane.
 
-The v0.8.0 behavior-preserving architecture cleanup makes the orchestrator a thinner typed lifecycle coordinator, converges Controller-owned GitHub authorization, deferred effects, revalidation, backend execution, reconciliation, and receipts in `GitHubAuthorityGateway`, and gives Controller-managed builtin tools one declarative capability contract and generic policy evaluator. Deterministic invariant/matrix tests harden cross-mode security while preserving the public JSON and output schemas. `GitHubToolBackend` remains transport-only; this release does not add an Action-owned GitHub MCP backend or Session/Resume, and it does not change the locked DSH version.
+The v0.8.1 behavior-preserving hardening release centralizes byte-safe UTF-8 truncation, moves input-only failures to startup while retaining runtime checks, fails closed on unexpected filesystem errors, closes controlled/native configuration types, and adds generated public-input metadata plus stable denial reason codes. `GitHubAuthorityGateway` remains the only GitHub authority facade while its deadline, revalidation, mutation, reconciliation, and receipt helpers are easier to audit. This release does not add an Action-owned GitHub MCP backend, Session/Resume, another GitHub capability, or a DSH upgrade.
 
 ## Live runs
 
@@ -108,7 +108,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -116,7 +116,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.8.0` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.8.1` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 
@@ -151,16 +151,17 @@ Read the complete [Security policy](SECURITY.md) before enabling write mode, hos
 
 ## Documentation
 
-| Guide                                                       | Contents                                                                             |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Setup](docs/setup.md) · [中文](docs/setup.zh-CN.md)        | Installer, manual setup, Secret, permissions, safe checkout, and templates           |
-| [Usage](docs/usage.md) · [中文](docs/usage.zh-CN.md)        | `@dsh` commands, tasks, review, diagnose, fix, implement, and automation             |
-| [Configuration](docs/configuration.md)                      | Inputs, permission profiles, tools, validation, extensions, and outputs              |
-| [Troubleshooting](docs/troubleshooting.md)                  | Denials, Docker, timeouts, cancellation, validation, and extension failures          |
-| [Security policy](SECURITY.md)                              | Trust model, credential boundaries, network behavior, and known limitations          |
-| [Extension contracts](docs/extension-contracts.md)          | Deep technical contracts for MCP, Profile, Bundle, Plugin, ToolRuntime, and receipts |
-| [Maintainer release guide](docs/maintainer-release.md)      | Local checks, Core E2E, release canary, version updates, and publishing              |
-| [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) | Development workflow and release history                                             |
+| Guide                                                              | Contents                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [Setup](docs/setup.md) · [中文](docs/setup.zh-CN.md)               | Installer, manual setup, Secret, permissions, safe checkout, and templates           |
+| [Usage](docs/usage.md) · [中文](docs/usage.zh-CN.md)               | `@dsh` commands, tasks, review, diagnose, fix, implement, and automation             |
+| [Configuration](docs/configuration.md)                             | Inputs, permission profiles, tools, validation, extensions, and outputs              |
+| [Architecture](ARCHITECTURE.md) · [Invariants](docs/invariants.md) | Component ownership, authority boundaries, and stable system invariants              |
+| [Troubleshooting](docs/troubleshooting.md)                         | Denials, Docker, timeouts, cancellation, validation, and extension failures          |
+| [Security policy](SECURITY.md)                                     | Trust model, credential boundaries, network behavior, and known limitations          |
+| [Extension contracts](docs/extension-contracts.md)                 | Deep technical contracts for MCP, Profile, Bundle, Plugin, ToolRuntime, and receipts |
+| [Maintainer release guide](docs/maintainer-release.md)             | Local checks, Core E2E, release canary, version updates, and publishing              |
+| [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)        | Development workflow and release history                                             |
 
 ## Development
 
