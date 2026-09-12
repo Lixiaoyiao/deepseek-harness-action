@@ -33,7 +33,9 @@ async function fixture() {
   };
   try {
     const line = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Fixture startup timed out")), 10_000);
+      // Match the Docker fixture budget; cold Windows process startup can be
+      // delayed by endpoint scanning while the full suite runs concurrently.
+      const timer = setTimeout(() => reject(new Error("Fixture startup timed out")), 20_000);
       let output = "";
       child.stdout.on("data", (chunk: Buffer) => {
         output += chunk.toString();
