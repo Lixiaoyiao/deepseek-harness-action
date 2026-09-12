@@ -154,6 +154,15 @@ Harness files and fixtures are checked out at the trusted default-branch SHA. Ca
 
 The golden paths cover:
 
+The deliberately weakened-validator case uses a localhost completion fixture
+and a public dummy provider key. It deterministically requests one real DSH
+Bash write, then the real Controller must reject the no-op entrypoint through
+strict Validation Integrity. Docker, the credential proxy, tool receipts, and
+all no-GitHub-mutation assertions remain active. This negative case must not
+depend on a live model agreeing to disable a security verifier. CI separately
+runs its frozen-SHA Docker regression without provider secrets; the other
+controlled/native representative paths continue to use the real provider.
+
 | Area                        | Required evidence                                                                                                                                                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Strict read-only            | Controlled `github-action` Profile and official Bundle identity with no write capability                                                                                                                                                                 |

@@ -19,6 +19,11 @@ versioning for published action releases.
 - Made controlled and native release-canary outcomes and assertions independent,
   with bounded failure diagnostics and an aggregate gate that requires both
   modes to pass. A controlled failure no longer hides all native evidence.
+- Made the Core E2E integrity-test precondition deterministic: a local completion
+  fixture drives real DSH/Bash with a dummy key, while the original strict
+  Controller rejection, receipt and no-mutation assertions remain. A dedicated
+  secretless Docker CI regression verifies this path; representative live-model
+  controlled/native coverage is retained.
 - Replaced the upstream canary's first-historical-successor selection with
   separate current stable/RC candidates and complete isolated dependency
   installations, including the candidate's Cordis requirements. Reports now
