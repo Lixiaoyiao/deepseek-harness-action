@@ -4,14 +4,15 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
-v0.8.1 is a behavior-preserving maintenance and security hardening release over
-the existing controlled and experimental native compositions. It keeps the
+v0.8.2 is a reliability and maintenance release over the existing controlled
+and experimental native compositions. It keeps the
 audited DSH `0.1.1-rc.2` family exact-pinned and does not add Session/Resume, an
 Action-owned GitHub MCP backend, or another GitHub capability. Its formal
 annotated tag, GitHub Release, and release canary must resolve to the same
 qualified exact-main commit. The independently versioned installer remains
-`0.2.0` and retains its formal v0.8.0 Action binding unless a separate companion
-release is intentionally prepared.
+`0.2.0` with its formal v0.8.0 Action binding until the separate `0.2.1`
+companion is reviewed and published after v0.8.2 qualification. Never substitute
+a guessed Action SHA while preparing that companion.
 
 ## Release invariants
 
@@ -49,13 +50,13 @@ npm run check
 
 `npm run check` runs formatting, lint, type checking, coverage tests, the release-contract check, the DSH configuration audit, and a deterministic `dist` build comparison. Do not skip a failing sub-check.
 
-v0.8.1 retains the deterministic invariant/model matrix across composition
+v0.8.2 retains the deterministic invariant/model matrix across composition
 mode, trust, permission profile, isolation, extension authority, and Controller
 GitHub authority. Use that matrix for cross-axis policy coverage and reserve
 live E2E for the representative high-value paths below; do not attempt a live
 Cartesian product.
 
-For v0.8.1, the DSH audit also proves that the exact headless package still
+For v0.8.2, the DSH audit also proves that the exact headless package still
 accepts only one text task and creates one text content block. That negative
 contract is release evidence for deferring GitHub attachment images; do not
 remove it unless a replacement exact DSH multimodal contract and its security
@@ -92,12 +93,26 @@ For a DSH version bump, additionally:
 If the official package family is incomplete or clean `npm ci` cannot consume it, do not use `--legacy-peer-deps`, mix versions, or weaken the lock audit. Leave the current exact DSH pin in place and defer the upgrade.
 
 The [DSH upstream compatibility canary](../.github/workflows/dsh-upstream-canary.yml)
-runs weekly and on manual dispatch. It selects only the next published version
-after the audited pin, temporarily installs the same direct DSH package family
-without changing the manifest or lockfile, and runs the native composition and
-ecosystem smoke tests. The job is advisory and non-gating: a failure is a
-maintenance warning, never a production pin change, accepted-version update,
-release gate, or declaration of support.
+runs weekly and on manual dispatch. It independently selects the newest
+official stable and RC candidates newer than the audited production pin by
+semantic version, excluding alpha/deprecated builds and RCs already superseded
+by the selected stable release. Each candidate uses a separate temporary
+directory containing copies of the relevant source and fixtures, with a fresh
+complete dependency installation. Candidate DSH packages use one exact version;
+Cordis requirements come from that candidate's official dependency graph.
+Installation uses strict peer validation, followed by a lock inventory audit and
+`npm ls`; mixed DSH versions or multiple Cordis runtimes prevent the smoke.
+The production manifest, lockfile and support range remain unchanged.
+
+Reports distinguish `not-tested`, `install-failed`, `interface-incompatible`,
+and `passed`. Missing candidates, failed selection, and an interrupted,
+timed-out, or unstartable smoke are `not-tested`; dependency resolution,
+installation, or graph-validation failures are `install-failed`. Only a
+completed failing smoke is `interface-incompatible`, and a skipped smoke is
+never compatibility evidence. The stable and RC jobs retain independent JSON
+reports, candidate manifests/locks, and bounded install/test logs as artifacts,
+including partial logs during interruption. The jobs are advisory and
+non-gating, never a production upgrade, release gate, or declaration of support.
 
 ## Pull request and candidate CI
 
@@ -138,6 +153,22 @@ gh workflow run e2e.yml --ref main \
 Harness files and fixtures are checked out at the trusted default-branch SHA. Candidate Action code is checked out separately at the bound candidate SHA. Every checkout sets `persist-credentials: false`, and the workflow verifies that no checkout Git credential remains.
 
 The golden paths cover:
+
+The deliberately weakened-validator case uses a localhost completion fixture
+and a public dummy provider key. It deterministically requests one real DSH
+Bash write, then the real Controller must reject the no-op entrypoint through
+strict Validation Integrity. Docker, the credential proxy, tool receipts, and
+all no-GitHub-mutation assertions remain active. This negative case must not
+depend on a live model agreeing to disable a security verifier. CI separately
+runs its frozen-SHA Docker regression without provider secrets; the other
+controlled/native representative paths continue to use the real provider.
+
+The live MCP smoke also requires a fresh opaque proof returned only by the
+actual echo tool. The expected value stays in the Controller's temporary
+endpoint file, outside the model prompt, schema and worker mounts. Exact
+receipt/call-count and hidden-tool denial assertions remain mandatory; a model
+summary is not execution evidence. Always-running diagnostics retain bounded
+counts and proof equality plus a sanitized server audit, including on failure.
 
 | Area                        | Required evidence                                                                                                                                                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -223,7 +254,11 @@ The [release canary](../.github/workflows/release-canary.yml) runs every Wednesd
 - the run SHA and workflow SHA to equal live `main`; and
 - `main` to remain the default branch.
 
-The protected `core-e2e` smoke job then checks that the configured release Tag, its non-draft/non-prerelease GitHub Release, and `DSH_RELEASE_CANARY_SHA` all resolve to the same commit. It checks out that immutable commit with `persist-credentials: false` and runs one `strict`, read-only, no-tools task with no mutation scope.
+The protected `core-e2e` smoke job then checks that the configured release Tag, its non-draft/non-prerelease GitHub Release, and `DSH_RELEASE_CANARY_SHA` all resolve to the same commit. It checks out that immutable commit with `persist-credentials: false` and runs controlled-default and native read-only representative tasks with no
+mutation scope. Both modes retain their outcome and bounded, redacted
+diagnostics even if the first mode fails. The final gate requires both modes
+and their schema/composition assertions to pass; continuing to collect evidence
+does not turn a failure into a successful canary.
 
 Set the variable to the formal tag's final commit and dispatch from `main`:
 
@@ -232,7 +267,7 @@ gh variable set DSH_RELEASE_CANARY_SHA --body "$release_sha"
 gh workflow run release-canary.yml --ref main
 ```
 
-Wait for the run and record its URL and conclusion. Pre-merge Core E2E, post-merge Core E2E, and `main` CI do not replace this formal-tag smoke; conversely, the one-task post-release smoke does not replace full post-merge Core E2E before tagging.
+Wait for the run and record its URL and conclusion. Pre-merge Core E2E, post-merge Core E2E, and `main` CI do not replace this formal-tag smoke; conversely, the two-mode post-release smoke does not replace full post-merge Core E2E before tagging.
 
 If the smoke fails after publication, keep the tag immutable. Diagnose the failure, prepare the next patch release from `main`, and repeat the complete latest-SHA qualification flow.
 

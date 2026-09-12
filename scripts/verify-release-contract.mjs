@@ -175,6 +175,26 @@ assert.ok(
   canary.includes("git -C release-action config --local --get-regexp"),
   "release canary must recheck the checkout's local credential configuration",
 );
+assert.equal(
+  countToken(canary, "continue-on-error: true"),
+  4,
+  "both release mode invocations and assertions must retain independent evidence",
+);
+for (const expected of [
+  "Record diagnostics and require both release modes",
+  "if: always()",
+  "steps.controlled.outcome",
+  "steps.controlled_assert.outcome",
+  "steps.native.outcome",
+  "steps.native_assert.outcome",
+  'result.action !== "success" || result.assertion !== "success"',
+  "process.exitCode = 1;",
+]) {
+  assert.ok(
+    canary.includes(expected),
+    `release canary is missing its final failure gate: ${expected}`,
+  );
+}
 assert.ok(
   controlledCanary.includes('.toolPolicy.policyOwner == "controller"') &&
     controlledCanary.includes('.dsh.mode == "controlled"') &&

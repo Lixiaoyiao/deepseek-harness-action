@@ -26,13 +26,13 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 | Controlled tools        | Adds exact profiles for native, fixed-command, typed Controller GitHub, MCP, Bundle, and Plugin tools |
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result        |
 
-v0.8.1 retains the experimental `dsh-mode: native` path over the locked DSH `0.1.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
+v0.8.2 retains the experimental `dsh-mode: native` path over the locked DSH `0.1.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
 
 Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition, capability graph, and model-visible inventory to DSH. Native MCP servers load through official `@deepseek-ai/dsh-mcp-client`; Bundles become official Profile layers; direct Plugins load through Cordis; and repository Skills, Subagents, and Workflows retain DSH-native behavior. Its definition-only extension schema declares owners and process requirements, not Action tools, grants, or per-tool budgets. Dynamic ecosystem tools appear only in runtime `observedTools`, and native `toolPolicy` never claims Controller `effectiveTools`.
 
 The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Controller Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane.
 
-The v0.8.1 behavior-preserving hardening release centralizes byte-safe UTF-8 truncation, moves input-only failures to startup while retaining runtime checks, fails closed on unexpected filesystem errors, closes controlled/native configuration types, and adds generated public-input metadata plus stable denial reason codes. `GitHubAuthorityGateway` remains the only GitHub authority facade while its deadline, revalidation, mutation, reconciliation, and receipt helpers are easier to audit. This release does not add an Action-owned GitHub MCP backend, Session/Resume, another GitHub capability, or a DSH upgrade.
+v0.8.2 fixes structured-result reliability in the production controlled/native paths and refreshes the advisory upstream compatibility checks. A bounded, tool-free result repair never reruns the worker task; strict output validation and all Controller write gates remain authoritative. Release canaries preserve diagnostics for both modes independently. Inputs, outputs, defaults, permissions, and the audited DSH `0.1.1-rc.2` pin remain compatible; this release adds no Session/Resume or new GitHub capability.
 
 ## Live runs
 
@@ -108,7 +108,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.8.2
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.1.1-rc.2
@@ -116,7 +116,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, replace `v0.8.1` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, replace `v0.8.2` with the full immutable release commit SHA. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Common `@dsh` commands
 

@@ -27,12 +27,22 @@ export interface DshPromptInput {
   readonly maxBytes?: number;
 }
 
-function outputContract(operation: DshOperation, taskOutputSchema?: TaskOutputSchema): string {
+export function outputContract(
+  operation: DshOperation,
+  taskOutputSchema?: TaskOutputSchema,
+): string {
   const taskOutputField =
     operation === "task" && taskOutputSchema !== undefined
       ? ',\n  "taskOutput": {"maintainer-defined":"object matching the trusted schema below; required only when state=final"}'
       : "";
-  return `{
+  const minimalExample =
+    taskOutputField === ""
+      ? `Minimal final result (replace summary with the actual result):
+${JSON.stringify({ protocolVersion: 1, operation, state: "final", summary: "Task result.", findings: [] })}`
+      : "A final task requires taskOutput matching the trusted schema below, in addition to protocolVersion, operation, state, summary, and findings. Its values must come from the completed task; do not invent values merely to satisfy the schema.";
+  return `${minimalExample}
+Field reference below describes types and alternatives; do not copy its placeholders as values:
+{
   "protocolVersion": 1,
   "operation": ${JSON.stringify(operation)},
   "state": "final|needs_tool|blocked",
@@ -51,18 +61,12 @@ function outputContract(operation: DshOperation, taskOutputSchema?: TaskOutputSc
     "evidence": "specific observed evidence (optional)",
     "suggestion": "concrete correction (optional)"
   }],
-  "diagnosis": "root-cause diagnosis (optional)",
+  "diagnosis": "non-empty root-cause string (optional; omit when absent, never null or empty)",
   "changePlan": [{"path":"repository/relative/path","summary":"change made or planned"}],
   "verification": [{"command":"argv rendered for humans","status":"passed|failed|skipped","summary":"optional result"}],
   "toolRequest": {"id":"provider.tool-id","input":{},"reason":"optional reason; allowed only with state=needs_tool"}${taskOutputField}
-}`;
 }
-
-function encodeUntrustedData(value: string): string {
-  // Untrusted data is the terminal section: there is deliberately no closing
-  // sentinel for repository text to forge. The byte length makes truncation
-  // and transport boundaries explicit without re-escaping the JSON packet.
-  return value;
+Text fields in this fixed-envelope reference must be non-empty after trimming when present. Omit optional fields rather than emitting null, empty strings, or an object where a string is required. These non-empty and omission rules do not apply to properties inside taskOutput or toolRequest.input; those follow their trusted schema or tool input contract. findings, changePlan and verification are arrays; use [] for an empty array. summary and diagnosis are at most 12000 characters. findings, changePlan and verification contain at most 100 entries each.`;
 }
 
 function encodeTrustedJson(value: unknown): string {
@@ -237,7 +241,9 @@ export function buildDshPrompt(input: DshPromptInput): string {
     });
   const fits = (value: string): boolean => Buffer.byteLength(value, "utf8") <= limit;
   const trustedInstructions = removeMarkdownImages(input.trustedInstructions ?? "");
-  const complete = render(trustedInstructions, encodeUntrustedData(prompt), false);
+  // Untrusted data is terminal, with no closing sentinel to forge. Its byte
+  // length makes boundaries explicit without re-escaping the JSON packet.
+  const complete = render(trustedInstructions, prompt, false);
   if (fits(complete)) return complete;
 
   // Preserve the controller policy and as much trusted operator intent as

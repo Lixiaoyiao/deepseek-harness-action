@@ -18,6 +18,7 @@ import {
 import {
   DshConfigurationError,
   DshIsolationUnavailableError,
+  DshMalformedOutputError,
   DshProcessError,
   DshSpawnError,
   DshTimeoutError,
@@ -27,6 +28,7 @@ import { buildDshPrompt, DEFAULT_MAX_PROMPT_BYTES, WINDOWS_MAX_PROMPT_BYTES } fr
 import { startDeepSeekProxy } from "./proxy.js";
 import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "./proxy.js";
 import { parseDshOutput } from "./schema.js";
+import { repairDshOutput } from "./output-repair.js";
 import type { TaskOutputSchema } from "./task-output.js";
 import type { DshOperation, DshOutput } from "./schema.js";
 import type { AgentToolManifest } from "../agent/contracts.js";
@@ -164,6 +166,8 @@ export interface DshRunDependencies {
   /** Internal composition seam. The Action default remains ControlledComposition. */
   readonly composition?: DshComposition;
   readonly warning?: (message: string) => void;
+  /** Test seam for the single tool-free result formatting request. */
+  readonly resultRepairFetch?: typeof fetch;
 }
 
 function positiveInteger(value: number, name: string): void {
@@ -676,7 +680,36 @@ export async function runDsh(
             redactKnownSecrets(processResult.stderr.trim(), workerSecrets),
           );
         }
-        output = parseDshOutput(processResult.stdout, request.operation, request.taskOutputSchema);
+        try {
+          output = parseDshOutput(
+            processResult.stdout,
+            request.operation,
+            request.taskOutputSchema,
+          );
+          assertNoSecretOutput("stdout", JSON.stringify(output), workerSecrets);
+        } catch (error: unknown) {
+          if (!(error instanceof DshMalformedOutputError)) throw error;
+          output = await repairDshOutput({
+            raw: processResult.stdout,
+            originalError: error,
+            operation: request.operation,
+            ...(request.taskOutputSchema === undefined
+              ? {}
+              : { taskOutputSchema: request.taskOutputSchema }),
+            proxy,
+            secrets: workerSecrets,
+            maxOutputBytes: request.maxOutputBytes,
+            deadlineMs,
+            now,
+            ...(request.signal === undefined ? {} : { signal: request.signal }),
+            ...(dependencies.resultRepairFetch === undefined
+              ? {}
+              : { fetchImplementation: dependencies.resultRepairFetch }),
+          });
+          (dependencies.warning ?? core.warning)(
+            `DSH final output required one tool-free formatting repair: ${error.message}`,
+          );
+        }
       } catch (error: unknown) {
         executionFailure = error;
       }

@@ -177,7 +177,7 @@ export const ACTION_INPUT_CONTRACT = [
     required: false,
     default: "",
     description:
-      "Optional bounded maintainer-owned JSON Schema for a Controller-validated taskOutput. It never replaces result-json or grants authority.",
+      "Optional bounded maintainer-owned JSON Schema for a Controller-validated final taskOutput. Strict envelope validation still applies; it never replaces result-json or grants authority.",
     docsGroup: "operation",
   },
   {

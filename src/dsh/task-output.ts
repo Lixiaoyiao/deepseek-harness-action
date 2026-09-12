@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { renderDshSchemaIssues } from "./schema-diagnostics.js";
 
 export const TASK_OUTPUT_LIMITS = {
   schemaBytes: 12 * 1024,
@@ -348,19 +349,9 @@ function assertBoundedOutput(
       if (dangerousKeys.has(key)) throw new Error(`${path} contains dangerous key ${key}`);
       if (byteLength(key) > 128 || key.includes("\0"))
         throw new Error(`${path} has an invalid key`);
-      assertBoundedOutput(child, depth + 1, state, `${path}.${key}`);
+      assertBoundedOutput(child, depth + 1, state, `${path}.[field]`);
     }
   }
-}
-
-function renderIssues(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 8)
-    .map((issue) => {
-      const path = issue.path.length === 0 ? "$" : `$.${issue.path.join(".")}`;
-      return `${path}: ${issue.message}`;
-    })
-    .join("; ");
 }
 
 /** Validate untrusted model data with both global resource limits and the trusted schema. */
@@ -377,7 +368,9 @@ export function validateTaskOutput(value: unknown, schema: TaskOutputSchema): un
   assertBoundedOutput(value, 1, { nodes: 0 }, "$.taskOutput");
   const parsed = compileSchema(schema).safeParse(value);
   if (!parsed.success) {
-    throw new Error(`taskOutput failed trusted schema validation: ${renderIssues(parsed.error)}`);
+    throw new Error(
+      `taskOutput failed trusted schema validation: ${renderDshSchemaIssues(parsed.error)}`,
+    );
   }
   return parsed.data;
 }

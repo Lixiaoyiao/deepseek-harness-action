@@ -10,7 +10,7 @@ Give the Action step an `id`, then inspect `result-json` even when the step
 fails:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
+- uses: Lixiaoyiao/deepseek-harness-action@v0.8.2
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -345,17 +345,31 @@ before a GitHub mutation.
 
 ## DSH output is malformed or too large
 
+An `Issue changed while its snapshot was being collected` error occurs earlier,
+in the Controller's context phase. v0.8.2 can reread the Issue and its bounded
+comments once if only `updated_at` changes. Identity, state, content and original
+trigger text remain bound, and the closing read must still be consistent.
+Persistent drift or other changes are rejected with field-category diagnostics
+that do not reveal Issue content. This is a read-only retry before DSH starts;
+it does not repeat an Agent task or any GitHub mutation.
+
 Typical codes:
 
 - `DSH_MALFORMED_OUTPUT`: the root Agent did not return one complete
   schema-v1 JSON object that matches the Controller-selected operation; or
 - `DSH_OUTPUT_LIMIT`: DSH output exceeded the bounded output limit.
 
-For malformed output, retry once. If it persists:
+v0.8.2 can make one bounded, tool-free result-formatting request per worker
+turn after an otherwise successful exit with malformed output. This does not restart
+the worker, repeat tools, or waive the strict schema. Do not blindly rerun a
+workflow that may already have performed extension-owned side effects. If the
+result still fails:
 
 1. Confirm `dsh-version` is exactly `0.1.1-rc.2` and the Action version is
-   v0.8.1.
+   v0.8.2.
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
+   A `diagnosis` value, when present, must be a non-empty string; omit optional
+   fields when they do not apply. Do not substitute `null` or an empty string.
 3. Check that trusted prompts do not ask for fences, prefaces, suffixes, a
    separate citation list, or a different operation. Web Search Markdown
    citations may appear only inside JSON string fields.
@@ -380,7 +394,7 @@ bounded log message.
 
 ### DSH runtime
 
-- v0.8.1 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
+- v0.8.2 accepts only the exact `0.1.1-rc.2` DSH family. Do not use `latest`, a
   range, a floating Git ref, or mixed DSH package versions.
 - The runtime installs from the committed lockfile in an ephemeral,
   credential-free container and audits the installed DSH inventory. Registry,

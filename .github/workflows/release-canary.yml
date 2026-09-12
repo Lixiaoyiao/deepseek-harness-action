@@ -1,4 +1,4 @@
-name: v0.8.1 release canary
+name: v0.8.2 release canary
 
 on:
   workflow_dispatch:
@@ -65,9 +65,9 @@ jobs:
     if: needs.gate.result == 'success'
     runs-on: ubuntu-latest
     environment: core-e2e
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
-      RELEASE_TAG: v0.8.1
+      RELEASE_TAG: v0.8.2
       RELEASE_SHA: ${{ vars.DSH_RELEASE_CANARY_SHA }}
     steps:
       - name: Validate protected canary secret
@@ -131,6 +131,7 @@ jobs:
 
       - name: Controlled default strict read-only smoke
         id: controlled
+        continue-on-error: true
         uses: ./release-action
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -146,6 +147,8 @@ jobs:
           timeout-minutes: "12"
 
       - name: Assert controlled schema composition and tool policy
+        id: controlled_assert
+        continue-on-error: true
         env:
           DSH_RESULT_JSON: ${{ steps.controlled.outputs['result-json'] }}
           DSH_MODE: ${{ steps.controlled.outputs['dsh-mode'] }}
@@ -182,6 +185,7 @@ jobs:
 
       - name: Native read-only smoke
         id: native
+        continue-on-error: true
         uses: ./release-action
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -196,6 +200,8 @@ jobs:
           timeout-minutes: "12"
 
       - name: Assert native schema composition and observed tool policy
+        id: native_assert
+        continue-on-error: true
         env:
           DSH_RESULT_JSON: ${{ steps.native.outputs['result-json'] }}
           DSH_MODE: ${{ steps.native.outputs['dsh-mode'] }}
@@ -225,3 +231,45 @@ jobs:
             (.toolPolicy | has("requestedTools") | not) and
             (.toolPolicy | has("deniedTools") | not)
           ' <<<"$DSH_RESULT_JSON" >/dev/null
+
+      - name: Record diagnostics and require both release modes
+        if: always()
+        env:
+          CONTROLLED_OUTCOME: ${{ steps.controlled.outcome }}
+          CONTROLLED_ASSERTION: ${{ steps.controlled_assert.outcome }}
+          CONTROLLED_ERROR_CODE: ${{ steps.controlled.outputs['error-code'] }}
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          NATIVE_ASSERTION: ${{ steps.native_assert.outcome }}
+          NATIVE_ERROR_CODE: ${{ steps.native.outputs['error-code'] }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+
+          // Keep diagnostics independent of model-authored summary/result bytes.
+          // continue-on-error preserves the second mode's evidence, never the gate.
+          const outcome = (value) => ["success", "failure", "cancelled", "skipped"].includes(value)
+            ? value : "not-run";
+          const errorCode = (value) => !value ? "none"
+            : /^[A-Z][A-Z0-9_]{0,79}$/.test(value) ? value : "invalid-code";
+          const results = ["controlled", "native"].map((mode) => {
+            const prefix = mode.toUpperCase();
+            return {
+              mode,
+              action: outcome(process.env[`${prefix}_OUTCOME`]),
+              assertion: outcome(process.env[`${prefix}_ASSERTION`]),
+              errorCode: errorCode(process.env[`${prefix}_ERROR_CODE`]),
+            };
+          });
+          for (const result of results) console.log(JSON.stringify(result));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            "### Release canary diagnostics\n\n" +
+            "| Mode | Action | Schema / policy assertion | Error code |\n" +
+            "| --- | --- | --- | --- |\n" +
+            results.map((result) =>
+              `| ${result.mode} | ${result.action} | ${result.assertion} | ${result.errorCode} |`
+            ).join("\n") + "\n");
+          if (results.some((result) => result.action !== "success" || result.assertion !== "success")) {
+            console.error("Both release modes and all schema/policy assertions must succeed; see the independent diagnostics above.");
+            process.exitCode = 1;
+          }
+          NODE

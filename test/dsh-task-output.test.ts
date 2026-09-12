@@ -50,7 +50,7 @@ describe("trusted task output schema", () => {
     );
     expect(() =>
       validateTaskOutput({ releaseReady: true, risk: "low", authority: "write" }, schema),
-    ).toThrow(/Unrecognized key/u);
+    ).toThrow(/unknown fields are not allowed/u);
   });
 
   it.each([

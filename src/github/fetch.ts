@@ -22,6 +22,7 @@ const MAX_CHANGED_FILES = 1000;
 const MAX_FILE_METADATA_BYTES = 128 * 1024;
 const MAX_ENTITY_BODY_BYTES = 64 * 1024;
 const MAX_ENTITY_TITLE_BYTES = 4 * 1024;
+const MAX_ISSUE_SNAPSHOT_ATTEMPTS = 2;
 
 const triggerPayloadSchema = z
   .object({
@@ -170,14 +171,20 @@ function assertIssueTextMatchesTrigger(
     readonly body?: string | null;
     readonly user?: { login: string } | null;
   },
+  attempt: number,
 ): void {
-  if (
-    (original.title !== undefined && original.title !== issue.title) ||
-    (original.body !== undefined && original.body !== (issue.body ?? "")) ||
-    (original.author !== undefined &&
-      original.author.toLowerCase() !== (issue.user?.login ?? "").toLowerCase())
-  ) {
-    throw new Error("Issue content changed after the triggering event");
+  const fields = [
+    ...(original.title !== undefined && original.title !== issue.title ? ["title"] : []),
+    ...(original.body !== undefined && original.body !== (issue.body ?? "") ? ["body"] : []),
+    ...(original.author !== undefined &&
+    original.author.toLowerCase() !== (issue.user?.login ?? "").toLowerCase()
+      ? ["author"]
+      : []),
+  ];
+  if (fields.length > 0) {
+    throw new Error(
+      `Issue content changed after the triggering event (attempt ${String(attempt)}/${String(MAX_ISSUE_SNAPSHOT_ATTEMPTS)}; fields: ${fields.join(", ")})`,
+    );
   }
 }
 
@@ -557,6 +564,78 @@ export async function fetchPullRequestSnapshot(
   };
 }
 
+type IssueData = Awaited<ReturnType<GitHubClient["rest"]["issues"]["get"]>>["data"];
+
+interface IssueSnapshotBinding {
+  readonly id: number;
+  readonly state: string;
+  readonly fingerprint: string;
+}
+
+function issueSnapshotChange(fields: readonly string[], attempt: number): Error {
+  // Only fixed field categories are exposed, never issue titles/bodies,
+  // timestamps, identifiers, or fingerprint values supplied by GitHub.
+  return new Error(
+    `Issue changed while its snapshot was being collected (attempt ${String(attempt)}/${String(MAX_ISSUE_SNAPSHOT_ATTEMPTS)}; fields: ${fields.join(", ")})`,
+  );
+}
+
+function triggerIssueId(context: GitHubContext, issueNumber: number): number | undefined {
+  if (context.kind === "entity" && context.entityNumber !== issueNumber) {
+    throw issueSnapshotChange(["identity"], 1);
+  }
+  const issue = context.payload.issue;
+  if (typeof issue !== "object" || issue === null || Array.isArray(issue)) return undefined;
+  if ("number" in issue && issue.number !== issueNumber) {
+    throw issueSnapshotChange(["identity"], 1);
+  }
+  if (!("id" in issue)) return undefined;
+  if (typeof issue.id !== "number" || !Number.isSafeInteger(issue.id) || issue.id <= 0) {
+    throw issueSnapshotChange(["identity"], 1);
+  }
+  return issue.id;
+}
+
+function issueSnapshotBinding(
+  issue: IssueData,
+  issueNumber: number,
+  expectedId: number | undefined,
+  attempt: number,
+): IssueSnapshotBinding {
+  if (
+    issue.number !== issueNumber ||
+    !Number.isSafeInteger(issue.id) ||
+    issue.id <= 0 ||
+    (expectedId !== undefined && issue.id !== expectedId) ||
+    issue.pull_request !== undefined
+  ) {
+    throw issueSnapshotChange(["identity"], attempt);
+  }
+  return {
+    id: issue.id,
+    state: issue.state,
+    fingerprint: issueContentFingerprint({
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      authorId: issue.user?.id,
+    }),
+  };
+}
+
+function assertSameIssueSnapshotBinding(
+  expected: IssueSnapshotBinding,
+  actual: IssueSnapshotBinding,
+  attempt: number,
+): void {
+  const fields = [
+    ...(expected.id !== actual.id ? ["identity"] : []),
+    ...(expected.state !== actual.state ? ["state"] : []),
+    ...(expected.fingerprint !== actual.fingerprint ? ["content"] : []),
+  ];
+  if (fields.length > 0) throw issueSnapshotChange(fields, attempt);
+}
+
 export async function fetchIssueSnapshot(
   client: GitHubClient,
   context: GitHubContext,
@@ -564,49 +643,50 @@ export async function fetchIssueSnapshot(
   actorFilter: CommentActorFilter = {},
 ): Promise<IssueSnapshot> {
   const { owner, repo } = context.repository;
-  const issue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
   const original = originalEntityText(context, "issue");
-  assertIssueTextMatchesTrigger(original, issue.data);
-  const fingerprint = issueContentFingerprint({
-    number: issue.data.number,
-    title: issue.data.title,
-    body: issue.data.body,
-    authorId: issue.data.user?.id,
-  });
-  const comments = await listExistingComments(
-    client,
-    owner,
-    repo,
-    issueNumber,
-    context,
-    actorFilter,
-  );
-  const verifiedIssue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
-  if (
-    issue.data.number !== verifiedIssue.data.number ||
-    issue.data.updated_at !== verifiedIssue.data.updated_at ||
-    issue.data.state !== verifiedIssue.data.state ||
-    fingerprint !==
-      issueContentFingerprint({
-        number: verifiedIssue.data.number,
-        title: verifiedIssue.data.title,
-        body: verifiedIssue.data.body,
-        authorId: verifiedIssue.data.user?.id,
-      })
-  ) {
-    throw new Error("Issue changed while its snapshot was being collected");
+  const expectedId = triggerIssueId(context, issueNumber);
+  let frozen: IssueSnapshotBinding | undefined;
+  for (let attempt = 1; attempt <= MAX_ISSUE_SNAPSHOT_ATTEMPTS; attempt += 1) {
+    const issue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
+    const binding = issueSnapshotBinding(issue.data, issueNumber, expectedId, attempt);
+    frozen ??= binding;
+    assertSameIssueSnapshotBinding(frozen, binding, attempt);
+    assertIssueTextMatchesTrigger(original, issue.data, attempt);
+    const comments = await listExistingComments(
+      client,
+      owner,
+      repo,
+      issueNumber,
+      context,
+      actorFilter,
+    );
+    const verifiedIssue = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
+    assertSameIssueSnapshotBinding(
+      frozen,
+      issueSnapshotBinding(verifiedIssue.data, issueNumber, frozen.id, attempt),
+      attempt,
+    );
+    assertIssueTextMatchesTrigger(original, verifiedIssue.data, attempt);
+    if (issue.data.updated_at !== verifiedIssue.data.updated_at) {
+      // Timestamp-only changes (including comment/metadata propagation) can
+      // invalidate a read interval without changing the bound task. Discard
+      // that entire interval and read it once more; never rebase content/state,
+      // replay a task/tool, ignore a mismatch, or retry an API/cancellation error.
+      continue;
+    }
+    return {
+      kind: "issue",
+      number: issue.data.number,
+      title: boundedUtf8(original.title ?? issue.data.title, MAX_ENTITY_TITLE_BYTES).text,
+      body: boundedUtf8(original.body ?? issue.data.body ?? "", MAX_ENTITY_BODY_BYTES).text,
+      author: original.author ?? issue.data.user?.login ?? "ghost",
+      state: issue.data.state,
+      updatedAt: issue.data.updated_at,
+      contentFingerprint: binding.fingerprint,
+      comments,
+    };
   }
-  return {
-    kind: "issue",
-    number: issue.data.number,
-    title: boundedUtf8(original.title ?? issue.data.title, MAX_ENTITY_TITLE_BYTES).text,
-    body: boundedUtf8(original.body ?? issue.data.body ?? "", MAX_ENTITY_BODY_BYTES).text,
-    author: original.author ?? issue.data.user?.login ?? "ghost",
-    state: issue.data.state,
-    updatedAt: issue.data.updated_at,
-    contentFingerprint: fingerprint,
-    comments,
-  };
+  throw issueSnapshotChange(["updated_at"], MAX_ISSUE_SNAPSHOT_ATTEMPTS);
 }
 
 export async function fetchEntitySnapshot(

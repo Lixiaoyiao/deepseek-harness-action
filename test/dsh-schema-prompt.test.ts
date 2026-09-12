@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DshConfigurationError, DshMalformedOutputError } from "../src/dsh/errors.js";
-import { buildDshPrompt, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
+import { buildDshPrompt, outputContract, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
 import { parseDshOutput } from "../src/dsh/schema.js";
 import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
 
@@ -14,6 +14,36 @@ const validOutput = {
 } as const;
 
 describe("parseDshOutput", () => {
+  it("explains invalid optional diagnosis types and empty values without locale-dependent messages", () => {
+    expect(() => parseDshOutput(JSON.stringify({ ...validOutput, diagnosis: null }))).toThrow(
+      /diagnosis: expected string/u,
+    );
+    expect(() => parseDshOutput(JSON.stringify({ ...validOutput, diagnosis: "  " }))).toThrow(
+      /diagnosis: must meet minimum 1/u,
+    );
+  });
+
+  it("does not echo untrusted unknown keys or taskOutput property names in diagnostics", () => {
+    const secret = "not-a-known-token-but-still-private";
+    try {
+      parseDshOutput(JSON.stringify({ ...validOutput, [secret.repeat(1000)]: true }));
+      throw new Error("expected failure");
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(DshMalformedOutputError);
+      expect((error as Error).message).not.toContain(secret);
+      expect((error as Error).message.length).toBeLessThan(300);
+    }
+    const schema = parseTaskOutputSchema(
+      JSON.stringify({ type: "object", properties: { [secret]: { type: "boolean" } } }),
+    );
+    expect(() =>
+      parseDshOutput(
+        JSON.stringify({ ...validOutput, operation: "task", taskOutput: { [secret]: "yes" } }),
+        "task",
+        schema,
+      ),
+    ).toThrow(/\[field\]: expected boolean/u);
+  });
   it("accepts one strict JSON object", () => {
     expect(parseDshOutput(JSON.stringify(validOutput), "review")).toEqual(validOutput);
   });
@@ -99,6 +129,34 @@ describe("parseDshOutput", () => {
 });
 
 describe("buildDshPrompt", () => {
+  it.each(["task", "review", "diagnose", "fix", "implement"] as const)(
+    "provides a valid minimal %s result before the field reference",
+    (operation) => {
+      const contract = outputContract(operation);
+      expect(() => parseDshOutput(contract.split("\n")[1] ?? "", operation)).not.toThrow();
+      expect(contract).toContain("never null or empty");
+      expect(contract).toContain("do not copy its placeholders as values");
+    },
+  );
+  it("does not advertise a schema-invalid minimal final task when taskOutput is required", () => {
+    const schema = parseTaskOutputSchema(
+      JSON.stringify({
+        type: "object",
+        properties: { ready: { type: "boolean" } },
+        required: ["ready"],
+        additionalProperties: false,
+      }),
+    );
+    const contract = outputContract("task", schema);
+    expect(contract).not.toContain("Minimal final result");
+    expect(contract).toContain("A final task requires taskOutput matching the trusted schema");
+    expect(contract).toContain('"taskOutput":');
+    expect(contract).toContain("do not apply to properties inside taskOutput or toolRequest.input");
+    expect(() =>
+      parseDshOutput(JSON.stringify({ ...validOutput, operation: "task" }), "task", schema),
+    ).toThrow(/taskOutput: is required/u);
+  });
+
   it("frames injection text as escaped untrusted JSON", () => {
     const prompt = buildDshPrompt({
       operation: "review",
