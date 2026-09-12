@@ -24,6 +24,11 @@ versioning for published action releases.
   Controller rejection, receipt and no-mutation assertions remain. A dedicated
   secretless Docker CI regression verifies this path; representative live-model
   controlled/native coverage is retained.
+- Added one bounded, complete Issue snapshot reread when only its timestamp
+  changes during collection. Original identity, state, content and trigger-text
+  bindings stay fixed; comments are collected again, and the final timestamp
+  must agree. Other drift and persistent instability still fail closed before
+  task execution; the read retry cannot replay tools or GitHub writes.
 - Replaced the upstream canary's first-historical-successor selection with
   separate current stable/RC candidates and complete isolated dependency
   installations, including the candidate's Cordis requirements. Reports now

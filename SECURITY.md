@@ -122,6 +122,11 @@ controller instructions.
   own higher-priority classifications.
 - CI evidence is selected by repository and immutable head SHA, bounded,
   redacted and explicitly labelled as untrusted before it reaches DSH.
+- Issue context collection may reread one complete snapshot when only
+  `updated_at` changes. It keeps the initial issue identity, state, content and
+  trigger-text bindings fixed, reapplies comment cutoffs/filters, and requires a
+  stable closing read. Identity, state or content drift and repeated timestamp
+  drift fail closed; the read retry cannot execute or replay an Agent task.
 - Comment bodies are stripped of reserved markers and sanitized before
   publication. Tracking comments are indexed only when authored by the
   configured numeric bot user ID, so a forged marker does not gain ownership.

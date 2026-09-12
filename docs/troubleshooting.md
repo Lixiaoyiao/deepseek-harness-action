@@ -345,6 +345,14 @@ before a GitHub mutation.
 
 ## DSH output is malformed or too large
 
+An `Issue changed while its snapshot was being collected` error occurs earlier,
+in the Controller's context phase. v0.8.2 can reread the Issue and its bounded
+comments once if only `updated_at` changes. Identity, state, content and original
+trigger text remain bound, and the closing read must still be consistent.
+Persistent drift or other changes are rejected with field-category diagnostics
+that do not reveal Issue content. This is a read-only retry before DSH starts;
+it does not repeat an Agent task or any GitHub mutation.
+
 Typical codes:
 
 - `DSH_MALFORMED_OUTPUT`: the root Agent did not return one complete
