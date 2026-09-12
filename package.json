@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-action",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "DeepSeek Harness for GitHub - controlled and native DSH composition, coding tasks, review, and safe automation",
   "author": "Lixiaoyiao",
   "repository": {

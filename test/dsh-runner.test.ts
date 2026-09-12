@@ -13,6 +13,7 @@ import {
   DshTimeoutError,
 } from "../src/dsh/errors.js";
 import type { DeepSeekProxyHandle, DeepSeekProxyOptions } from "../src/dsh/proxy.js";
+import { startDeepSeekProxy } from "../src/dsh/proxy.js";
 import type {
   DshComposition,
   PreparedDockerDshComposition,
@@ -349,6 +350,157 @@ describe("runDsh", () => {
     expect(captured?.env.DEEPSEEK_API_KEY).toBe("ephemeral-worker-token");
     expect(proxy.closeMock).toHaveBeenCalledOnce();
   });
+
+  it.each(["controlled", "native"] as const)(
+    "repairs a completed %s result over the real Controller proxy without repeating worker effects",
+    async (mode) => {
+      const fixture = await fixtures();
+      const output = {
+        protocolVersion: 1,
+        operation: "task",
+        state: "final",
+        summary: "README inspected.",
+        findings: [],
+      };
+      const upstream = vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { role: "assistant", content: JSON.stringify(output) },
+            },
+          ],
+        }),
+      );
+      const warning = vi.fn();
+      let workerExecutions = 0;
+      let workerSpec: DshProcessSpec | undefined;
+      const result = await runDsh(
+        request({
+          operation: "task",
+          prompt: "private-original-task-context",
+          trustedInstructions: "private-original-operator-instruction",
+          workspacePath: fixture.workspace,
+          ...(mode === "native" ? { isolation: "docker" } : { dshExecutable: fixture.executable }),
+        }),
+        {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          environment: { PATH: process.env.PATH, GITHUB_TOKEN: "controller-github-token" },
+          warning,
+          ...(mode === "native" ? { composition: new NativeComposition() } : {}),
+          startProxy: (options) =>
+            startDeepSeekProxy({ ...options, fetchImplementation: upstream }),
+          executeProcess: async (spec) => {
+            const inspected = networkInspectResult(spec);
+            if (inspected !== undefined) return inspected;
+            const worker = mode === "controlled" || spec.args.includes(CONTAINER_NATIVE_LAUNCHER);
+            if (worker) {
+              workerExecutions += 1;
+              workerSpec = spec;
+              // A single existing side effect is enough to make an execution retry unsafe.
+              await writeFile(join(fixture.workspace, "execution-count"), String(workerExecutions));
+              if (mode === "native")
+                await writeFile(
+                  join(actionStateDirectory(spec), "native-observed-tools.jsonl"),
+                  JSON.stringify({
+                    schemaVersion: 1,
+                    source: "ctx.tools.schemas(agent)",
+                    observedTools: ["read"],
+                  }) + "\n",
+                  { flag: "a" },
+                );
+            }
+            return {
+              stdout: worker ? "README inspected." : "",
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            };
+          },
+        },
+      );
+      expect(result.output).toEqual(output);
+      expect(result.rawStdout).toBe("README inspected.");
+      expect(workerExecutions).toBe(1);
+      expect(await readFile(join(fixture.workspace, "execution-count"), "utf8")).toBe("1");
+      if (mode === "native") expect(result.observedTools).toEqual(["read"]);
+      expect(upstream).toHaveBeenCalledOnce();
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("one tool-free formatting repair"),
+      );
+      const upstreamRequest = upstream.mock.calls[0]?.[1];
+      expect(upstreamRequest?.headers).toMatchObject({
+        authorization: "Bearer controller-real-key",
+      });
+      for (const excluded of [
+        "private-original-task-context",
+        "private-original-operator-instruction",
+        "controller-real-key",
+        "controller-github-token",
+      ]) {
+        expect(upstreamRequest?.body).not.toContain(excluded);
+      }
+      expect(JSON.stringify(workerSpec)).not.toContain("controller-real-key");
+      expect(JSON.stringify(workerSpec)).not.toContain("controller-github-token");
+    },
+  );
+
+  it.each(["process", "credential", "escaped-credential", "limit", "cancel", "empty"] as const)(
+    "does not format or rerun a worker after %s failure",
+    async (kind) => {
+      const fixture = await fixtures();
+      const proxy = fakeProxy();
+      const resultRepairFetch = vi.fn<typeof fetch>();
+      const executeProcess = vi.fn(() => {
+        if (kind === "limit") throw new DshOutputLimitError("stdout", 100);
+        if (kind === "cancel") throw new DshAbortedError();
+        const escaped = JSON.stringify({
+          protocolVersion: 1,
+          operation: "review",
+          state: "final",
+          summary: "controller-real-key",
+          findings: [],
+        }).replace("controller", "\\u0063ontroller");
+        return Promise.resolve({
+          stdout:
+            kind === "credential"
+              ? "controller-real-key"
+              : kind === "escaped-credential"
+                ? escaped
+                : kind === "empty"
+                  ? "  \n"
+                  : "invalid result",
+          stderr: "",
+          exitCode: kind === "process" ? 1 : 0,
+          signal: null,
+        });
+      });
+      await expect(
+        runDsh(request({ workspacePath: fixture.workspace, dshExecutable: fixture.executable }), {
+          assetsDirectory: fixture.assets,
+          temporaryDirectory: fixture.root,
+          startProxy: () => Promise.resolve(proxy),
+          executeProcess,
+          resultRepairFetch,
+        }),
+      ).rejects.toMatchObject({
+        code:
+          kind === "process"
+            ? "DSH_PROCESS_FAILED"
+            : kind === "limit"
+              ? "DSH_OUTPUT_LIMIT"
+              : kind === "cancel"
+                ? "DSH_ABORTED"
+                : kind === "empty"
+                  ? "DSH_MALFORMED_OUTPUT"
+                  : "DSH_CREDENTIAL_LEAK",
+      });
+      expect(executeProcess).toHaveBeenCalledOnce();
+      expect(resultRepairFetch).not.toHaveBeenCalled();
+      expect(proxy.closeMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("uses the DshComposition boundary for launch artifacts and runtime identity", async () => {
     const fixture = await fixtures();

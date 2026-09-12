@@ -41,15 +41,15 @@ secret recipient.
 
 <!-- BEGIN GENERATED ACTION INPUTS: operation -->
 
-| Input                | Required/default | Description                                                                                                                             |
-| -------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `allow-write`        | `false`          | Allow trusted same-repository task/fix/implement writes after all trust gates pass.                                                     |
-| `command`            | `auto`           | Optional explicit operation: task, review, diagnose, fix, implement, or auto.                                                           |
-| `task-access`        | `read`           | Capability requested by an explicit task: read or write. Write still requires allow-write and every policy gate.                        |
-| `prompt`             | Empty            | Trusted task prompt. With command=auto on dispatch/schedule events, a non-empty prompt selects generic task mode.                       |
-| `task-output-schema` | Empty            | Optional bounded maintainer-owned JSON Schema for a Controller-validated taskOutput. It never replaces result-json or grants authority. |
-| `max-findings`       | `20`             | Maximum high-confidence findings to publish.                                                                                            |
-| `progress-comment`   | `true`           | Create or update one controller-owned sticky comment at major lifecycle stages, reusing the operation's result marker.                  |
+| Input                | Required/default | Description                                                                                                                                                                             |
+| -------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow-write`        | `false`          | Allow trusted same-repository task/fix/implement writes after all trust gates pass.                                                                                                     |
+| `command`            | `auto`           | Optional explicit operation: task, review, diagnose, fix, implement, or auto.                                                                                                           |
+| `task-access`        | `read`           | Capability requested by an explicit task: read or write. Write still requires allow-write and every policy gate.                                                                        |
+| `prompt`             | Empty            | Trusted task prompt. With command=auto on dispatch/schedule events, a non-empty prompt selects generic task mode.                                                                       |
+| `task-output-schema` | Empty            | Optional bounded maintainer-owned JSON Schema for a Controller-validated final taskOutput. Strict envelope validation still applies; it never replaces result-json or grants authority. |
+| `max-findings`       | `20`             | Maximum high-confidence findings to publish.                                                                                                                                            |
+| `progress-comment`   | `true`           | Create or update one controller-owned sticky comment at major lifecycle stages, reusing the operation's result marker.                                                                  |
 
 <!-- END GENERATED ACTION INPUTS: operation -->
 
@@ -92,6 +92,15 @@ typed object properties, required fields, arrays, scalar constraints, `enum`,
 patterns, unknown keywords, dangerous keys, and excessive size or complexity
 fail closed. A configured final task must return a valid object; intermediate
 tool requests and blocked tasks omit it. The value remains untrusted task data.
+
+Both compositions use the same strict final-output schema. Optional text such
+as `diagnosis` must be omitted when inapplicable, or supplied as a non-empty
+string. The Controller may make one bounded, tool-free formatting request per worker
+turn for malformed output after a successful exit. It sends only result data and
+the output contract, never reruns the task or its tools, and validates the new
+complete JSON value through the unchanged schema. Formatting cannot grant a
+tool or bypass validation, credential checks, cancellation, or GitHub write
+revalidation. This request shares the existing overall deadline.
 
 ### Runtime, isolation, and limits
 
@@ -697,7 +706,7 @@ proves identity, not safety; review and maintain the image separately.
 
 ### GitHub image attachments
 
-v0.8.1 does not download or forward GitHub image attachments. The exact audited
+v0.8.2 does not download or forward GitHub image attachments. The exact audited
 `@deepseek-ai/dsh-headless@0.1.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
@@ -828,7 +837,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.8.1
+- uses: Lixiaoyiao/deepseek-harness-action@v0.8.2
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

@@ -8,6 +8,7 @@ import {
 } from "../review/schema.js";
 import { DshMalformedOutputError } from "./errors.js";
 import { validateTaskOutput, type TaskOutputSchema } from "./task-output.js";
+import { renderDshSchemaIssues } from "./schema-diagnostics.js";
 
 export const dshOperationSchema = z.enum(["task", "review", "diagnose", "fix", "implement"]);
 export type DshOperation = z.infer<typeof dshOperationSchema>;
@@ -73,16 +74,6 @@ export const dshOutputSchema = z
 
 export type DshOutput = z.infer<typeof dshOutputSchema>;
 
-function renderIssues(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 8)
-    .map((issue) => {
-      const path = issue.path.length === 0 ? "$" : `$.${issue.path.join(".")}`;
-      return `${path}: ${issue.message}`;
-    })
-    .join("; ");
-}
-
 /** Parse one complete JSON value. Markdown fences and trailing prose fail. */
 export function parseDshOutput(
   raw: string,
@@ -101,7 +92,7 @@ export function parseDshOutput(
   const parsed = dshOutputSchema.safeParse(value);
   if (!parsed.success) {
     throw new DshMalformedOutputError(
-      `DSH output failed schema validation: ${renderIssues(parsed.error)}`,
+      `DSH output failed schema validation: ${renderDshSchemaIssues(parsed.error)}`,
     );
   }
   if (expectedOperation !== undefined && parsed.data.operation !== expectedOperation) {

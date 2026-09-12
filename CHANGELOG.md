@@ -3,6 +3,38 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.8.2] - 2026-09-12
+
+### Fixed
+
+- Added an actual valid minimal envelope ahead of the production prompt's
+  field reference, with explicit optional-field rules. DSH rc.2 emits the final
+  assistant text verbatim, so output generation must agree with the strict
+  Controller schema rather than relying on downstream parsing alone.
+- Added a bounded, tool-free result-formatting fallback after a successful
+  worker exits with malformed output. It never restarts the worker or replays
+  tasks or tools, and its result must pass the unchanged Controller schema and
+  all existing validation and GitHub authority gates.
+- Made controlled and native release-canary outcomes and assertions independent,
+  with bounded failure diagnostics and an aggregate gate that requires both
+  modes to pass. A controlled failure no longer hides all native evidence.
+- Replaced the upstream canary's first-historical-successor selection with
+  separate current stable/RC candidates and complete isolated dependency
+  installations, including the candidate's Cordis requirements. Reports now
+  distinguish untested candidates, install failures, interface incompatibility,
+  and successful smoke tests.
+
+### Compatibility and release
+
+- Retained exact production DSH `0.1.1-rc.2`, the dependency lock, strict output
+  schemas, Controller credential isolation, Gateway validation/revalidation,
+  permissions, and compatible Action inputs/outputs/defaults. No Session or
+  new GitHub capability is added; upstream results remain advisory only.
+- Updated configuration, troubleshooting, generated Action metadata, examples,
+  and release checks. The separately versioned installer `0.2.1` is prepared
+  only after the formal v0.8.2 Action identity is qualified; installer `0.2.0`
+  keeps its existing v0.8.0 binding until that companion is published.
+
 ## [0.8.1] - 2026-08-26
 
 ### Changed

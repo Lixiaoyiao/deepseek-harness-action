@@ -205,7 +205,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("binds the v0.8.1 canary to the formal release and runs both read-only modes", async () => {
+  it("binds the v0.8.2 canary to the formal release and runs both read-only modes", async () => {
     const canary = await readFile(
       new URL("../.github/workflows/release-canary.yml", import.meta.url),
       "utf8",
@@ -332,7 +332,7 @@ describe("Marketplace action metadata", () => {
     }
   });
 
-  it("ships the v0.8.1 task example with the standard coding profile", async () => {
+  it("ships the v0.8.2 task example with the standard coding profile", async () => {
     const example = await readFile(
       new URL("../examples/task-automation.yml", import.meta.url),
       "utf8",
@@ -346,7 +346,7 @@ describe("Marketplace action metadata", () => {
     expect(example).toContain("test-commands:");
   });
 
-  it("ships a fail-closed v0.8.1 GitHub integration example", async () => {
+  it("ships a fail-closed v0.8.2 GitHub integration example", async () => {
     const example = await readFile(
       new URL("../examples/github-integration.yml", import.meta.url),
       "utf8",
