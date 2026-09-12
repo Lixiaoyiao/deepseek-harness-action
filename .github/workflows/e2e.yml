@@ -302,6 +302,10 @@ jobs:
           curl --fail --silent "$(jq -r .healthUrl "$endpoint")" >/dev/null
           echo "pid=$pid" >> "$GITHUB_OUTPUT"
           echo "audit=$audit" >> "$GITHUB_OUTPUT"
+          echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          proof="$(jq -r .expectedProof "$endpoint")"
+          [[ "$proof" =~ ^[0-9a-f]{48}$ ]]
+          echo "::add-mask::$proof"
           echo "worker_url=$(jq -r .workerUrl "$endpoint")" >> "$GITHUB_OUTPUT"
 
       - name: MCP allow and deny
@@ -313,7 +317,8 @@ jobs:
           dsh-version: 0.1.1-rc.2
           command: task
           task-access: read
-          prompt: Call the available MCP echo tool exactly once with marker rc2-mcp-allow. Never call hidden or any other tool. Report the returned text.
+          prompt: Call the available MCP echo tool exactly once with marker rc2-mcp-allow. Its response contains an opaque proof that is unavailable before the call. Copy the actual returned proof into taskOutput.proof. Never call hidden or any other tool, and do not invent the proof.
+          task-output-schema: '{"type":"object","properties":{"proof":{"type":"string","minLength":48,"maxLength":48}},"required":["proof"],"additionalProperties":false}'
           permission-profile: custom
           allowed-tools: '["workspace.read","workspace.search","mcp.fixture.echo","mcp.fixture.hidden"]'
           disallowed-tools: '["mcp.fixture.hidden"]'
@@ -324,12 +329,18 @@ jobs:
           timeout-minutes: "12"
 
       - name: Assert MCP allow/deny and receipts
+        if: always()
         shell: bash
         env:
           RESULT_JSON: ${{ steps.mcp.outputs['result-json'] }}
           MCP_AUDIT: ${{ steps.mcp_server.outputs.audit }}
+          MCP_ENDPOINT: ${{ steps.mcp_server.outputs.endpoint }}
+          MCP_EVIDENCE: ${{ runner.temp }}/dsh-e2e-mcp-evidence.json
+          MCP_ACTION_OUTCOME: ${{ steps.mcp.outcome }}
         run: |
           set -euo pipefail
+          node .github/e2e/mcp-proof-evidence.mjs capture
+          jq -e '.actionOutcome == "success" and .proofMatches == true' "$MCP_EVIDENCE" >/dev/null
           jq -e '
             .conclusion == "success" and .permissions.profile == "custom" and
             .permissions.effectiveTools == ["mcp.fixture.echo","workspace.read","workspace.search"] and
@@ -341,8 +352,8 @@ jobs:
             .permissions.network == "bridge" and
             (.permissions.deniedTools | any(.id == "mcp.fixture.hidden")) and
             (.permissions.trustedExtensions | any(.id == "fixture" and .kind == "mcp" and .network == true)) and
-            (.loop.dshToolReceipts | map(select(.id == "mcp.fixture.echo" and .provider == "mcp" and .completed == true and .ok == true)) | length == 1) and
-            (.loop.dshToolReceipts | all(.id != "mcp.fixture.hidden"))
+            (.loop.dshToolReceipts // [] | map(select(.id == "mcp.fixture.echo" and .provider == "mcp" and .completed == true and .ok == true)) | length == 1) and
+            (.loop.dshToolReceipts // [] | all(.id != "mcp.fixture.hidden"))
           ' <<<"$RESULT_JSON" >/dev/null
           [[ "$(wc -l < "$MCP_AUDIT")" -eq 1 ]]
           jq -e '.tool == "echo" and .input.marker == "rc2-mcp-allow"' "$MCP_AUDIT" >/dev/null
@@ -358,6 +369,26 @@ jobs:
             kill -TERM "$MCP_PID" 2>/dev/null || true
             wait "$MCP_PID" 2>/dev/null || true
           fi
+
+      - name: Report bounded MCP proof diagnostics
+        if: always()
+        shell: bash
+        env:
+          MCP_EVIDENCE: ${{ runner.temp }}/dsh-e2e-mcp-evidence.json
+          MCP_ACTION_OUTCOME: ${{ steps.mcp.outcome }}
+          MCP_ERROR_CODE: ${{ steps.mcp.outputs['error-code'] }}
+        run: node .github/e2e/mcp-proof-evidence.mjs report
+
+      - name: Preserve MCP execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcp-execution-evidence
+          path: |
+            ${{ runner.temp }}/dsh-e2e-mcp-evidence.json
+            ${{ runner.temp }}/dsh-e2e-mcp-audit.jsonl
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Real mediated Web Search
         id: web

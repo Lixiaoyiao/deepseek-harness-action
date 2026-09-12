@@ -24,6 +24,11 @@ versioning for published action releases.
   Controller rejection, receipt and no-mutation assertions remain. A dedicated
   secretless Docker CI regression verifies this path; representative live-model
   controlled/native coverage is retained.
+- Strengthened the live MCP smoke with an opaque server-generated proof that
+  the model cannot infer from the prompt. Success still requires exactly one
+  real echo receipt and server audit entry, no hidden-tool call, and now a
+  matching returned proof. Bounded diagnostics and sanitized audit artifacts
+  survive an early assertion failure.
 - Added one bounded, complete Issue snapshot reread when only its timestamp
   changes during collection. Original identity, state, content and trigger-text
   bindings stay fixed; comments are collected again, and the final timestamp

@@ -163,6 +163,13 @@ depend on a live model agreeing to disable a security verifier. CI separately
 runs its frozen-SHA Docker regression without provider secrets; the other
 controlled/native representative paths continue to use the real provider.
 
+The live MCP smoke also requires a fresh opaque proof returned only by the
+actual echo tool. The expected value stays in the Controller's temporary
+endpoint file, outside the model prompt, schema and worker mounts. Exact
+receipt/call-count and hidden-tool denial assertions remain mandatory; a model
+summary is not execution evidence. Always-running diagnostics retain bounded
+counts and proof equality plus a sanitized server audit, including on failure.
+
 | Area                        | Required evidence                                                                                                                                                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Strict read-only            | Controlled `github-action` Profile and official Bundle identity with no write capability                                                                                                                                                                 |

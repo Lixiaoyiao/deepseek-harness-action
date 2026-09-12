@@ -76,6 +76,36 @@ describe("trusted core E2E workflow", () => {
     );
   });
 
+  it("requires an unknown MCP proof from the real model without exposing its expected value", () => {
+    const start = stepBlock(workflow, "Start real Streamable HTTP MCP fixture");
+    const launch = stepBlock(workflow, "MCP allow and deny");
+    const assertion = stepBlock(workflow, "Assert MCP allow/deny and receipts");
+    const report = stepBlock(workflow, "Report bounded MCP proof diagnostics");
+    const artifact = stepBlock(workflow, "Preserve MCP execution evidence");
+
+    expect(launch).toContain("deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}");
+    expect(launch).toContain("taskOutput.proof");
+    expect(launch).toContain('"proof":{"type":"string","minLength":48,"maxLength":48}');
+    expect(launch).not.toMatch(/expectedProof|expected_proof|\.endpoint|const.*proof/iu);
+    expect(launch).toContain('maxCalls":1');
+    expect(launch).toContain("disallowed-tools: '[\"mcp.fixture.hidden\"]'");
+    expect(start).toContain('echo "::add-mask::$proof"');
+    expect(assertion).toContain("if: always()");
+    expect(assertion.indexOf("mcp-proof-evidence.mjs capture")).toBeLessThan(
+      assertion.indexOf("jq -e"),
+    );
+    expect(assertion).toContain('.actionOutcome == "success" and .proofMatches == true');
+    expect(assertion).toContain('[[ "$(wc -l < "$MCP_AUDIT")" -eq 1 ]]');
+    expect(assertion).toContain("length == 1");
+    expect(assertion).toContain('all(.id != "mcp.fixture.hidden")');
+    expect(report).toContain("if: always()");
+    expect(report).not.toMatch(/RESULT_JSON|task-output|summary:|MCP_ENDPOINT|DEEPSEEK_API_KEY/u);
+    expect(artifact).toContain("if: always()");
+    expect(artifact).toContain("dsh-e2e-mcp-evidence.json");
+    expect(artifact).toContain("dsh-e2e-mcp-audit.jsonl");
+    expect(artifact).not.toMatch(/endpoint|server\.log|\.stdout|result-json/u);
+  });
+
   it("runs an exact-candidate native read-only smoke with observed DSH inventory", () => {
     const launch = stepBlock(workflow, "Native headless read-only smoke");
     const assertion = stepBlock(workflow, "Assert native composition and observed inventory");
