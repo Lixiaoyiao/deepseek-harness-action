@@ -8,7 +8,8 @@ versioning for published action releases.
 ### Fixed
 
 - Added an actual valid minimal envelope ahead of the production prompt's
-  field reference, with explicit optional-field rules. DSH rc.2 emits the final
+  field reference where no custom task schema applies, with explicit
+  optional-field rules limited to the fixed envelope. DSH rc.2 emits the final
   assistant text verbatim, so output generation must agree with the strict
   Controller schema rather than relying on downstream parsing alone.
 - Added a bounded, tool-free result-formatting fallback after a successful

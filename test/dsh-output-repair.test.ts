@@ -227,6 +227,35 @@ describe("tool-free result formatting", () => {
     },
   );
 
+  it.each(["reasoning", "metadata", "invalid-envelope"])(
+    "rejects Unicode-escaped credentials in the whole completion before discarding %s",
+    async (location) => {
+      const response = {
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: JSON.stringify(final),
+              ...(location === "reasoning" ? { reasoning_content: "controller-real-key" } : {}),
+            },
+          },
+        ],
+        ...(location !== "reasoning" ? { metadata: "controller-real-key" } : {}),
+      };
+      if (location === "invalid-envelope") response.choices = [];
+      const raw = JSON.stringify(response).replace(
+        "controller-real-key",
+        "\\u0063ontroller-real-key",
+      );
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(raw));
+      await expect(
+        repairDshOutput({ ...options(), fetchImplementation: fetcher }),
+      ).rejects.toBeInstanceOf(DshCredentialLeakError);
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
+
   it("bounds the entire input without truncation and the response while streaming", async () => {
     const fetcher = vi.fn<typeof fetch>();
     await expect(

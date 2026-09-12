@@ -138,6 +138,25 @@ describe("buildDshPrompt", () => {
       expect(contract).toContain("do not copy its placeholders as values");
     },
   );
+  it("does not advertise a schema-invalid minimal final task when taskOutput is required", () => {
+    const schema = parseTaskOutputSchema(
+      JSON.stringify({
+        type: "object",
+        properties: { ready: { type: "boolean" } },
+        required: ["ready"],
+        additionalProperties: false,
+      }),
+    );
+    const contract = outputContract("task", schema);
+    expect(contract).not.toContain("Minimal final result");
+    expect(contract).toContain("A final task requires taskOutput matching the trusted schema");
+    expect(contract).toContain('"taskOutput":');
+    expect(contract).toContain("do not apply to properties inside taskOutput or toolRequest.input");
+    expect(() =>
+      parseDshOutput(JSON.stringify({ ...validOutput, operation: "task" }), "task", schema),
+    ).toThrow(/taskOutput: is required/u);
+  });
+
   it("frames injection text as escaped untrusted JSON", () => {
     const prompt = buildDshPrompt({
       operation: "review",

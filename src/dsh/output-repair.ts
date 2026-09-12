@@ -86,13 +86,15 @@ async function boundedResponse(response: Response, limit: number): Promise<strin
   return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
-function completionContent(raw: string): string {
+function completionContent(raw: string, secrets: readonly string[]): string {
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
     throw new DshMalformedOutputError("DSH result repair returned an invalid completion envelope");
   }
+  // Inspect the whole decoded response, including metadata that is not retained.
+  assertNoSecretOutput("stdout", JSON.stringify(value), secrets);
   if (!object(value) || !Array.isArray(value.choices) || value.choices.length !== 1) {
     throw new DshMalformedOutputError("DSH result repair requires exactly one completion choice");
   }
@@ -191,7 +193,7 @@ export async function repairDshOutput(options: RepairOptions): Promise<DshOutput
     }
     const rawCompletion = await boundedResponse(response, options.maxOutputBytes);
     assertNoSecretOutput("stdout", rawCompletion, options.secrets);
-    const content = completionContent(rawCompletion);
+    const content = completionContent(rawCompletion, options.secrets);
     // JSON escapes in the HTTP envelope must not conceal credential bytes.
     assertNoSecretOutput("stdout", content, options.secrets);
     let decoded: unknown;

@@ -35,8 +35,12 @@ export function outputContract(
     operation === "task" && taskOutputSchema !== undefined
       ? ',\n  "taskOutput": {"maintainer-defined":"object matching the trusted schema below; required only when state=final"}'
       : "";
-  return `Minimal final result (replace summary with the actual result):
-${JSON.stringify({ protocolVersion: 1, operation, state: "final", summary: "Task result.", findings: [] })}
+  const minimalExample =
+    taskOutputField === ""
+      ? `Minimal final result (replace summary with the actual result):
+${JSON.stringify({ protocolVersion: 1, operation, state: "final", summary: "Task result.", findings: [] })}`
+      : "A final task requires taskOutput matching the trusted schema below, in addition to protocolVersion, operation, state, summary, and findings. Its values must come from the completed task; do not invent values merely to satisfy the schema.";
+  return `${minimalExample}
 Field reference below describes types and alternatives; do not copy its placeholders as values:
 {
   "protocolVersion": 1,
@@ -62,7 +66,7 @@ Field reference below describes types and alternatives; do not copy its placehol
   "verification": [{"command":"argv rendered for humans","status":"passed|failed|skipped","summary":"optional result"}],
   "toolRequest": {"id":"provider.tool-id","input":{},"reason":"optional reason; allowed only with state=needs_tool"}${taskOutputField}
 }
-All text fields must be non-empty after trimming when present. Omit optional fields rather than emitting null, empty strings, or an object where a string is required. findings, changePlan and verification are arrays; use [] for an empty array. summary and diagnosis are at most 12000 characters. findings, changePlan and verification contain at most 100 entries each.`;
+Text fields in this fixed-envelope reference must be non-empty after trimming when present. Omit optional fields rather than emitting null, empty strings, or an object where a string is required. These non-empty and omission rules do not apply to properties inside taskOutput or toolRequest.input; those follow their trusted schema or tool input contract. findings, changePlan and verification are arrays; use [] for an empty array. summary and diagnosis are at most 12000 characters. findings, changePlan and verification contain at most 100 entries each.`;
 }
 
 function encodeTrustedJson(value: unknown): string {
