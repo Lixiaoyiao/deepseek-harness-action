@@ -16,6 +16,8 @@ versioning for published action releases.
   worker exits with malformed output. It never restarts the worker or replays
   tasks or tools, and its result must pass the unchanged Controller schema and
   all existing validation and GitHub authority gates.
+  Residual `toolRequest` fields in known final/blocked results can only be
+  removed, never dispatched; actual nonterminal requests remain ineligible.
 - Clarified the production distinction between enabled direct DSH tools and
   Controller catalog requests. The final-JSON rule applies to the final text,
   and an empty Controller catalog does not forbid already-authorized direct

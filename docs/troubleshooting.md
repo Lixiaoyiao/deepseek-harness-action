@@ -370,6 +370,10 @@ result still fails:
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
    A `diagnosis` value, when present, must be a non-empty string; omit optional
    fields when they do not apply. Do not substitute `null` or an empty string.
+   The entire `toolRequest` field is allowed only in `state=needs_tool`;
+   omit it for `final` and `blocked`, including after receiving tool feedback.
+   Terminal output repair may discard that residual field but cannot execute
+   it, repeat completed work, or change the terminal state.
 3. Check that trusted prompts do not ask for fences, prefaces, suffixes, a
    separate citation list, or a different operation. Web Search Markdown
    citations may appear only inside JSON string fields.

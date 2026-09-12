@@ -64,8 +64,9 @@ Field reference below describes types and alternatives; do not copy its placehol
   "diagnosis": "non-empty root-cause string (optional; omit when absent, never null or empty)",
   "changePlan": [{"path":"repository/relative/path","summary":"change made or planned"}],
   "verification": [{"command":"argv rendered for humans","status":"passed|failed|skipped","summary":"optional result"}],
-  "toolRequest": {"id":"provider.tool-id","input":{},"reason":"optional reason; allowed only with state=needs_tool"}${taskOutputField}
+  "toolRequest": {"id":"provider.tool-id","input":{},"reason":"optional reason"}${taskOutputField}
 }
+The entire toolRequest field is allowed and required only when state=needs_tool. For state=final or state=blocked, omit toolRequest entirely; do not include it even as null or copied from an earlier turn.
 Text fields in this fixed-envelope reference must be non-empty after trimming when present. Omit optional fields rather than emitting null, empty strings, or an object where a string is required. These non-empty and omission rules do not apply to properties inside taskOutput or toolRequest.input; those follow their trusted schema or tool input contract. findings, changePlan and verification are arrays; use [] for an empty array. summary and diagnosis are at most 12000 characters. findings, changePlan and verification contain at most 100 entries each.`;
 }
 

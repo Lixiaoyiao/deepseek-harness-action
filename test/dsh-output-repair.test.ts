@@ -116,7 +116,6 @@ describe("tool-free result formatting", () => {
     { ...final, state: "unknown", diagnosis: "" },
     { ...final, operation: "fix", diagnosis: "" },
     { ...final, protocolVersion: 2, diagnosis: "" },
-    { ...final, toolRequest: { id: "github.comment" }, diagnosis: "" },
     [final],
     null,
     "final",
@@ -128,8 +127,39 @@ describe("tool-free result formatting", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { state: "final", toolRequest: { id: "command.prepare-validation", input: {} } },
+    { state: "blocked", toolRequest: { id: "command.prepare-validation", input: {} } },
+    { state: "final", toolRequest: null },
+    { state: "blocked", toolRequest: null },
+  ] as const)(
+    "discards leftover terminal toolRequest data without authorizing it: %j",
+    async ({ state, toolRequest }) => {
+      const output = { ...final, state };
+      const raw = JSON.stringify({ ...output, toolRequest });
+      expect(() => parseDshOutput(raw, "task")).toThrow(DshMalformedOutputError);
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(completion(JSON.stringify(output)));
+      expect(await repairDshOutput({ ...options(), raw, fetchImplementation: fetcher })).toEqual(
+        output,
+      );
+      expect(fetcher).toHaveBeenCalledOnce();
+      const body = fetcher.mock.calls[0]?.[1]?.body;
+      if (typeof body !== "string") throw new Error("expected a serialized formatting request");
+      const request = JSON.parse(body) as Record<string, unknown>;
+      expect(request).not.toHaveProperty("tools");
+      expect(request).not.toHaveProperty("functions");
+      expect(body).toContain("remove that leftover field only");
+      expect(body).toContain("do not execute, replay, continue, or infer completion");
+    },
+  );
+
   it.each(["final", "blocked"] as const)("freezes an existing %s state", async (state) => {
-    const raw = JSON.stringify({ ...final, state, diagnosis: "" });
+    const raw = JSON.stringify({
+      ...final,
+      state,
+      diagnosis: "",
+      toolRequest: { id: "command.prepare-validation", input: {} },
+    });
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(
@@ -159,6 +189,8 @@ describe("tool-free result formatting", () => {
 
   it.each([
     { ...final, state: "needs_tool", toolRequest: { id: "command.test", input: {} } },
+    { ...final, toolRequest: { id: "command.prepare-validation", input: {} } },
+    { ...final, toolRequest: null },
     { ...final, operation: "fix" },
     { ...final, diagnosis: null },
     { ...final, "untrusted-secret-key": "authority" },
@@ -211,6 +243,27 @@ describe("tool-free result formatting", () => {
     ).rejects.toBeInstanceOf(DshCredentialLeakError);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "rejects a credential in a leftover request before formatting (escaped=%s)",
+    async (escaped) => {
+      const original = JSON.stringify({
+        ...final,
+        toolRequest: {
+          id: "command.prepare-validation",
+          input: { credential: "controller-real-key" },
+        },
+      });
+      const raw = escaped
+        ? original.replace("controller-real-key", "\\u0063ontroller-real-key")
+        : original;
+      const fetcher = vi.fn<typeof fetch>();
+      await expect(
+        repairDshOutput({ ...options(), raw, fetchImplementation: fetcher }),
+      ).rejects.toBeInstanceOf(DshCredentialLeakError);
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([{}, { diagnosis: "" }])(
     "rejects credential escapes before validating even an invalid repaired result",

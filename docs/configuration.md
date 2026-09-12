@@ -101,6 +101,9 @@ the output contract, never reruns the task or its tools, and validates the new
 complete JSON value through the unchanged schema. Formatting cannot grant a
 tool or bypass validation, credential checks, cancellation, or GitHub write
 revalidation. This request shares the existing overall deadline.
+An already declared `final` or `blocked` state remains fixed. A residual
+`toolRequest` in that terminal result can only be removed, never executed;
+an actual `needs_tool` result is ineligible for terminal formatting repair.
 
 ### Runtime, isolation, and limits
 

@@ -129,6 +129,28 @@ describe("parseDshOutput", () => {
 });
 
 describe("buildDshPrompt", () => {
+  it.each(["final", "blocked"] as const)(
+    "requires the entire toolRequest field to be absent from a %s result",
+    (state) => {
+      const contract = outputContract("task");
+      expect(contract).toContain(
+        "The entire toolRequest field is allowed and required only when state=needs_tool",
+      );
+      expect(contract).toContain("For state=final or state=blocked, omit toolRequest entirely");
+      expect(contract).toContain("do not include it even as null or copied from an earlier turn");
+      for (const toolRequest of [null, { id: "command.prepare-validation", input: {} }]) {
+        expect(() =>
+          parseDshOutput(
+            JSON.stringify({ ...validOutput, operation: "task", state, toolRequest }),
+            "task",
+          ),
+        ).toThrow(DshMalformedOutputError);
+      }
+      expect(() =>
+        parseDshOutput(JSON.stringify({ ...validOutput, operation: "task", state }), "task"),
+      ).not.toThrow();
+    },
+  );
   it.each(["task", "review", "diagnose", "fix", "implement"] as const)(
     "provides a valid minimal %s result before the field reference",
     (operation) => {
