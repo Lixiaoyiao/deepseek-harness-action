@@ -220,6 +220,111 @@ describe("buildDshPrompt", () => {
     expect(prompt).not.toContain('"operation": "task|review|diagnose|fix|implement"');
   });
 
+  it.each([
+    {
+      tool: "native.web-search",
+      capability: "Controller-mediated web_search",
+      deny: "Do not access the web.",
+    },
+    {
+      tool: "native.bash",
+      capability: "bounded foreground Bash",
+      deny: "Do not use shell or execute repository code directly.",
+    },
+    {
+      tool: "native.subagent",
+      capability: "foreground depth-1 subagent",
+      deny: "Do not spawn subagents.",
+    },
+  ] as const)(
+    "keeps authorized $tool callable through DSH when the Controller catalog is empty",
+    ({ tool, capability, deny }) => {
+      const prompt = buildDshPrompt({
+        operation: "task",
+        prompt: "Complete the authorized task.",
+        trust: "trusted-write",
+        nativeTools: [tool],
+        toolCatalog: [],
+      });
+      expect(prompt).toContain(capability);
+      expect(prompt).not.toContain(deny);
+      expect(prompt).toContain(
+        "invoke its DSH-provided tool directly through the runtime tool-call interface",
+      );
+      expect(prompt).toContain(
+        "only requests through state=needs_tool must use an exact catalog ID",
+      );
+      expect(prompt).toContain("an empty array does not disable authorized DSH runtime tools");
+      expect(prompt).toContain("<TRUSTED_TOOL_CATALOG_JSON>[]</TRUSTED_TOOL_CATALOG_JSON>");
+      expect(prompt).toContain("Your final assistant text must be exactly one JSON object");
+      expect(prompt).toContain(
+        "does not replace or forbid authorized DSH runtime tool calls before the final text",
+      );
+      expect(prompt).toContain("Describing a tool call in JSON is not evidence that it executed");
+      expect(prompt).not.toContain(
+        "You may request only an exact tool ID from the controller catalog",
+      );
+    },
+  );
+
+  it("keeps Controller tool requests separate without granting omitted runtime capabilities", () => {
+    const tool = {
+      id: "command.test",
+      description: "Run the fixed test command",
+      provider: "command" as const,
+      permissions: ["execute" as const],
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    };
+    const prompt = buildDshPrompt({
+      operation: "task",
+      prompt: "Analyze the supplied context.",
+      trust: "trusted-read",
+      nativeTools: [],
+      toolCatalog: [tool],
+    });
+    expect(prompt).toContain("You may only analyze the supplied context");
+    expect(prompt).toContain(
+      "Use state=needs_tool only to request one Controller command or typed GitHub operation",
+    );
+    expect(prompt).toContain("never for DSH direct runtime tools");
+    expect(prompt).toContain(
+      `<TRUSTED_TOOL_CATALOG_JSON>${JSON.stringify([tool])}</TRUSTED_TOOL_CATALOG_JSON>`,
+    );
+    expect(prompt).toContain("Do not access the web.");
+    expect(prompt).toContain("Do not use shell or execute repository code directly.");
+    expect(prompt).toContain("Do not spawn subagents.");
+    expect(prompt).not.toContain("use Controller-mediated web_search");
+    expect(prompt).not.toContain("run bounded foreground Bash");
+    expect(prompt).not.toContain("delegate to one foreground depth-1 subagent");
+  });
+
+  it("retains untrusted tool denial and native DSH inventory ownership under the final-text rule", () => {
+    const untrusted = buildDshPrompt({
+      operation: "review",
+      prompt: "Review provided context.",
+      trust: "untrusted",
+      nativeTools: [],
+    });
+    expect(untrusted).toContain(
+      "Do not execute repository code or use shell, filesystem, search, edit, web, skill, instruction-loading, or subagent tools.",
+    );
+    expect(untrusted).not.toContain("invoke its DSH-provided tool directly");
+    expect(untrusted).not.toContain("does not replace or forbid authorized DSH runtime tool calls");
+    expect(untrusted).not.toContain("an empty array does not disable authorized DSH runtime tools");
+    const native = buildDshPrompt({
+      operation: "task",
+      prompt: "Complete the native task.",
+      trust: "trusted-read",
+      toolPolicy: { policyOwner: "dsh" },
+      toolCatalog: [],
+    });
+    expect(native).toContain("DSH owns the internal model-visible capability graph");
+    expect(native).toContain("current DSH permission mode");
+    expect(native).toContain("an empty array does not disable authorized DSH runtime tools");
+    expect(native).toContain("Your final assistant text must be exactly one JSON object");
+    expect(native).toContain("GitHub effects require an explicitly listed typed Controller tool");
+  });
+
   it("keeps trusted operator instructions outside the untrusted data envelope", () => {
     const prompt = buildDshPrompt({
       operation: "review",

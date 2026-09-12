@@ -368,6 +368,14 @@ Native mode does not translate DSH's internal names into this controlled ID
 set. Inspect `result-json.toolPolicy.observedTools` for the actual root-Agent
 inventory and treat it only as telemetry.
 
+In controlled mode, enabled direct DSH tools are separate from the Controller
+command and typed GitHub request catalog. An empty Controller catalog does not
+remove those enabled direct tools; DSH invocation guards still enforce their
+permissions. `state=needs_tool` requests only a catalog operation, while direct
+tools run through DSH before the final JSON response. A summary claiming tool
+use is not execution evidence: consumers that require a particular native call
+must also verify its completed successful `loop.dshToolReceipts` entry.
+
 ## Controller-owned GitHub tools
 
 The first GitHub tool set is deliberately typed and closed:

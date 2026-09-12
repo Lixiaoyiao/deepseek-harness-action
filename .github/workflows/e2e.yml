@@ -399,7 +399,8 @@ jobs:
           dsh-version: 0.1.1-rc.2
           command: task
           task-access: read
-          prompt: Use the web search tool exactly once to find the official DeepSeek Harness repository, then report the repository name and stop.
+          prompt: Call the actual DSH runtime web_search tool exactly once with one query, "site:api-docs.deepseek.com context caching". Copy the first source returned by that tool into taskOutput, using its displayed title as title and its absolute URL as url. Do not answer from repository context or memory, and do not invent a source. If the tool returns no source, report blocked. Call no other tool.
+          task-output-schema: '{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":512},"url":{"type":"string","format":"uri","minLength":1,"maxLength":2048}},"required":["title","url"],"additionalProperties":false}'
           permission-profile: custom
           allowed-tools: '["native.web-search"]'
           progress-comment: "false"
@@ -407,17 +408,34 @@ jobs:
           timeout-minutes: "12"
 
       - name: Assert Web Search mediation and receipt
+        if: always()
         shell: bash
         env:
           RESULT_JSON: ${{ steps.web.outputs['result-json'] }}
+          WEB_ACTION_OUTCOME: ${{ steps.web.outcome }}
+          WEB_EVIDENCE: ${{ runner.temp }}/dsh-e2e-web-evidence.json
         run: |
           set -euo pipefail
+          node .github/e2e/web-search-evidence.mjs
+          jq -e '
+            .actionOutcome == "success" and .sourceReported == true and
+            .receiptCount == 1 and .completedWebSearchCount == 1
+          ' "$WEB_EVIDENCE" >/dev/null
           jq -e '
             .conclusion == "success" and
             .permissions.effectiveTools == ["native.web-search"] and
             .permissions.network == "mediated-web" and
-            (.loop.dshToolReceipts | map(select(.id == "native.web-search" and .completed == true and .ok == true)) | length == 1)
+            (.loop.dshToolReceipts // [] | map(select(.id == "native.web-search" and .completed == true and .ok == true)) | length == 1)
           ' <<<"$RESULT_JSON" >/dev/null
+
+      - name: Preserve bounded Web Search evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-search-execution-evidence
+          path: ${{ runner.temp }}/dsh-e2e-web-evidence.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Revalidate candidate identity
         shell: bash

@@ -106,6 +106,31 @@ describe("trusted core E2E workflow", () => {
     expect(artifact).not.toMatch(/endpoint|server\.log|\.stdout|result-json/u);
   });
 
+  it("requires a source from a real Web Search and records evidence before failed assertions", () => {
+    const launch = stepBlock(workflow, "Real mediated Web Search");
+    const assertion = stepBlock(workflow, "Assert Web Search mediation and receipt");
+    const artifact = stepBlock(workflow, "Preserve bounded Web Search evidence");
+    expect(launch).toContain("deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}");
+    expect(launch).toContain("actual DSH runtime web_search tool exactly once");
+    expect(launch).toContain("first source returned by that tool");
+    expect(launch).toContain("site:api-docs.deepseek.com context caching");
+    expect(launch).toContain("allowed-tools: '[\"native.web-search\"]'");
+    expect(launch).toContain("task-output-schema:");
+    expect(launch).not.toMatch(
+      /base-url:|mcp-config:|isolation: none|official DeepSeek Harness repository/u,
+    );
+    expect(assertion).toContain("if: always()");
+    expect(assertion.indexOf("node .github/e2e/web-search-evidence.mjs")).toBeLessThan(
+      assertion.indexOf("jq -e"),
+    );
+    expect(assertion).toContain(".receiptCount == 1 and .completedWebSearchCount == 1");
+    expect(assertion).toContain('.permissions.network == "mediated-web"');
+    expect(assertion).toContain(".loop.dshToolReceipts // []");
+    expect(artifact).toContain("if: always()");
+    expect(artifact).toContain("dsh-e2e-web-evidence.json");
+    expect(artifact).not.toMatch(/result-json|\.log|\.stdout/u);
+  });
+
   it("runs an exact-candidate native read-only smoke with observed DSH inventory", () => {
     const launch = stepBlock(workflow, "Native headless read-only smoke");
     const assertion = stepBlock(workflow, "Assert native composition and observed inventory");

@@ -16,6 +16,11 @@ versioning for published action releases.
   worker exits with malformed output. It never restarts the worker or replays
   tasks or tools, and its result must pass the unchanged Controller schema and
   all existing validation and GitHub authority gates.
+- Clarified the production distinction between enabled direct DSH tools and
+  Controller catalog requests. The final-JSON rule applies to the final text,
+  and an empty Controller catalog does not forbid already-authorized direct
+  tool calls. Permission enforcement and the structured-output schema remain
+  unchanged; a textual claim of execution is not a tool receipt.
 - Made controlled and native release-canary outcomes and assertions independent,
   with bounded failure diagnostics and an aggregate gate that requires both
   modes to pass. A controlled failure no longer hides all native evidence.
@@ -29,6 +34,10 @@ versioning for published action releases.
   real echo receipt and server audit entry, no hidden-tool call, and now a
   matching returned proof. Bounded diagnostics and sanitized audit artifacts
   survive an early assertion failure.
+- Required live Web Search evidence to include a returned source and exactly
+  one successful DSH receipt, with safe outcome/count artifacts preserved even
+  when the assertion fails. An answer copied from repository context cannot
+  substitute for actual search execution.
 - Added one bounded, complete Issue snapshot reread when only its timestamp
   changes during collection. Original identity, state, content and trigger-text
   bindings stay fixed; comments are collected again, and the final timestamp
