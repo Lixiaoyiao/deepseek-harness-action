@@ -32,6 +32,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Linux Docker frozen-SHA Validation Integrity regression
+        timeout-minutes: 10
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DSH_E2E_INTEGRITY_DOCKER: "1"
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          git diff --exit-code "$CANDIDATE_SHA" -- \
+            .github/workflows/ci.yml .github/e2e/integrity-llm.mjs \
+            test/integrity-docker.integration.test.ts scripts/verify-dsh-config.mjs \
+            src assets/dsh package.json package-lock.json
+          ./node_modules/.bin/vitest run test/integrity-docker.integration.test.ts
       - name: Linux Docker frozen-SHA DSH rc.2 native ecosystem smoke
         shell: bash
         env:

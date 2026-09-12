@@ -46,6 +46,17 @@ describe("trusted core E2E workflow", () => {
     expect(integrity).toContain(`allowed-tools: '["workspace.edit","native.bash"]'`);
     expect(integrity).toContain('max-turns: "1"');
     expect(integrity).not.toContain("permission-profile: standard");
+    expect(integrity).toContain("deepseek-api-key: dsh-e2e-integrity-fixture-key");
+    expect(integrity).toContain("base-url: ${{ steps.integrity_fixture.outputs.base_url }}");
+    expect(integrity).toContain("DSH_E2E_INTEGRITY_FIXTURE");
+    expect(integrity).not.toContain("secrets.DEEPSEEK_API_KEY");
+    const start = stepBlock(workflow, "Start deterministic integrity fixture");
+    expect(start).toContain("node .github/e2e/integrity-llm.mjs");
+    expect(start).not.toContain("secrets.");
+    expect(stepBlock(workflow, "Stop deterministic integrity fixture")).toContain("if: always()");
+    expect(stepBlock(workflow, "Assert integrity failure")).toContain(
+      'map(.phase) == ["bash-issued", "bash-observed"]',
+    );
   });
 
   it("locks controlled tool-policy semantics into the strict and MCP golden paths", () => {

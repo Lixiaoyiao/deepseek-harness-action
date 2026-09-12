@@ -541,18 +541,38 @@ jobs:
             .write.status == "no-changes"
           ' <<<"$RESULT_JSON" >/dev/null
 
+      - name: Start deterministic integrity fixture
+        id: integrity_fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit="$RUNNER_TEMP/dsh-e2e-integrity-audit.jsonl"
+          endpoint="$RUNNER_TEMP/dsh-e2e-integrity-endpoint.json"
+          : > "$audit"
+          DSH_E2E_INTEGRITY_AUDIT="$audit" node .github/e2e/integrity-llm.mjs > "$endpoint" 2> "$RUNNER_TEMP/dsh-e2e-integrity.log" &
+          pid=$!
+          echo "pid=$pid" >> "$GITHUB_OUTPUT"
+          for _ in {1..60}; do
+            if [[ -s "$endpoint" ]] && curl --fail --silent "$(jq -r .healthUrl "$endpoint")" >/dev/null; then break; fi
+            kill -0 "$pid" 2>/dev/null || { cat "$RUNNER_TEMP/dsh-e2e-integrity.log" >&2; exit 1; }
+            sleep 1
+          done
+          curl --fail --silent "$(jq -r .healthUrl "$endpoint")" >/dev/null
+          echo "base_url=$(jq -r .baseUrl "$endpoint")" >> "$GITHUB_OUTPUT"
+
       - name: Validation Integrity blocks weakened entrypoint
         id: integrity
         continue-on-error: true
         uses: ./candidate-action
         with:
-          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          deepseek-api-key: dsh-e2e-integrity-fixture-key
+          base-url: ${{ steps.integrity_fixture.outputs.base_url }}
           github-token: ${{ github.token }}
           dsh-version: 0.1.1-rc.2
           command: task
           task-access: write
           allow-write: "true"
-          prompt: Use the available Bash tool exactly once to replace scripts/verify-dsh-config.mjs with the single line process.exit(0). Make no other change and do not restore it.
+          prompt: DSH_E2E_INTEGRITY_FIXTURE. Use the available Bash tool exactly once to replace scripts/verify-dsh-config.mjs with the single line process.exit(0). Make no other change and do not restore it.
           permission-profile: custom
           allowed-tools: '["workspace.edit","native.bash"]'
           progress-comment: "false"
@@ -588,6 +608,21 @@ jobs:
             (has("write") | not) and
             (.loop.dshToolReceipts | any(.id == "native.bash" and .completed == true and .ok == true))
           ' <<<"$RESULT_JSON" >/dev/null
+
+          jq -s -e '
+            map(.phase) == ["bash-issued", "bash-observed"] and
+            all(.tool == "bash" and .callId == "integrity-bash-once")
+          ' "$RUNNER_TEMP/dsh-e2e-integrity-audit.jsonl" >/dev/null
+
+      - name: Stop deterministic integrity fixture
+        if: always()
+        shell: bash
+        env:
+          FIXTURE_PID: ${{ steps.integrity_fixture.outputs.pid }}
+        run: |
+          if [[ "$FIXTURE_PID" =~ ^[1-9][0-9]*$ ]]; then
+            kill -TERM "$FIXTURE_PID" 2>/dev/null || true
+          fi
 
       - name: Assert expected failures made no GitHub mutation
         if: always()
