@@ -170,6 +170,13 @@ receipt/call-count and hidden-tool denial assertions remain mandatory; a model
 summary is not execution evidence. Always-running diagnostics retain bounded
 counts and proof equality plus a sanitized server audit, including on failure.
 
+The live Web Search smoke requests a source title and URL from the actual
+search response, separately from repository context. It still requires exactly
+one completed successful `native.web-search` receipt and mediated network
+authority. A final JSON answer without that receipt fails even if its text
+looks correct. Always-running diagnostics preserve safe outcome/count fields
+when the Action or its assertion fails; they do not print model text or URLs.
+
 | Area                        | Required evidence                                                                                                                                                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Strict read-only            | Controlled `github-action` Profile and official Bundle identity with no write capability                                                                                                                                                                 |

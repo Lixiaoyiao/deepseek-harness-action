@@ -100,6 +100,9 @@ controller instructions.
   formatter receives result data and the output contract, not execution hooks
   or a tool catalog. Its terminal result remains untrusted, must pass the same
   strict schema, and cannot request a tool or override a known operation/state.
+  A residual `toolRequest` field in an already known `final` or `blocked`
+  result may only be discarded as invalid formatting, never dispatched or
+  replayed. An actual `needs_tool` result cannot enter this terminal repair.
   It uses the run-scoped credential proxy and the remaining deadline. Existing
   validation failures, cancellation, credential checks, Gateway revalidation,
   and write postconditions remain authoritative.

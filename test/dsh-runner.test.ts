@@ -351,17 +351,35 @@ describe("runDsh", () => {
     expect(proxy.closeMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["controlled", "native"] as const)(
-    "repairs a completed %s result over the real Controller proxy without repeating worker effects",
-    async (mode) => {
+  it.each([
+    { mode: "controlled", representation: "prose", state: "final" },
+    { mode: "native", representation: "prose", state: "final" },
+    { mode: "controlled", representation: "leftover-request", state: "final" },
+    { mode: "native", representation: "leftover-request", state: "final" },
+    { mode: "controlled", representation: "leftover-request", state: "blocked" },
+    { mode: "native", representation: "leftover-request", state: "blocked" },
+  ] as const)(
+    "repairs $mode $state $representation over the real Controller proxy without repeating worker effects",
+    async ({ mode, representation, state }) => {
       const fixture = await fixtures();
       const output = {
         protocolVersion: 1,
         operation: "task",
-        state: "final",
+        state,
         summary: "README inspected.",
         findings: [],
       };
+      const raw =
+        representation === "prose"
+          ? "README inspected."
+          : JSON.stringify({
+              ...output,
+              toolRequest: {
+                id: "command.prepare-validation",
+                input: {},
+                reason: "RESIDUAL_REQUEST_DO_NOT_EXECUTE",
+              },
+            });
       const upstream = vi.fn<typeof fetch>().mockResolvedValue(
         Response.json({
           choices: [
@@ -412,7 +430,7 @@ describe("runDsh", () => {
                 );
             }
             return {
-              stdout: worker ? "README inspected." : "",
+              stdout: worker ? raw : "",
               stderr: "",
               exitCode: 0,
               signal: null,
@@ -421,7 +439,8 @@ describe("runDsh", () => {
         },
       );
       expect(result.output).toEqual(output);
-      expect(result.rawStdout).toBe("README inspected.");
+      expect(result.rawStdout).toBe(raw);
+      expect(result.output).not.toHaveProperty("toolRequest");
       expect(workerExecutions).toBe(1);
       expect(await readFile(join(fixture.workspace, "execution-count"), "utf8")).toBe("1");
       if (mode === "native") expect(result.observedTools).toEqual(["read"]);

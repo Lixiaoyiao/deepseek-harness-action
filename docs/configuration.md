@@ -101,6 +101,9 @@ the output contract, never reruns the task or its tools, and validates the new
 complete JSON value through the unchanged schema. Formatting cannot grant a
 tool or bypass validation, credential checks, cancellation, or GitHub write
 revalidation. This request shares the existing overall deadline.
+An already declared `final` or `blocked` state remains fixed. A residual
+`toolRequest` in that terminal result can only be removed, never executed;
+an actual `needs_tool` result is ineligible for terminal formatting repair.
 
 ### Runtime, isolation, and limits
 
@@ -367,6 +370,14 @@ These canonical IDs apply to `dsh-mode: controlled`:
 Native mode does not translate DSH's internal names into this controlled ID
 set. Inspect `result-json.toolPolicy.observedTools` for the actual root-Agent
 inventory and treat it only as telemetry.
+
+In controlled mode, enabled direct DSH tools are separate from the Controller
+command and typed GitHub request catalog. An empty Controller catalog does not
+remove those enabled direct tools; DSH invocation guards still enforce their
+permissions. `state=needs_tool` requests only a catalog operation, while direct
+tools run through DSH before the final JSON response. A summary claiming tool
+use is not execution evidence: consumers that require a particular native call
+must also verify its completed successful `loop.dshToolReceipts` entry.
 
 ## Controller-owned GitHub tools
 
