@@ -1,4 +1,0 @@
-Release checklist data:
-- Confirm the exact runtime version is locked.
-- Confirm documentation examples use the intended released Action.
-- Confirm the documented security boundaries match actual behavior.
