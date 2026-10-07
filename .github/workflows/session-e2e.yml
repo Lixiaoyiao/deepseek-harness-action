@@ -1,4 +1,5 @@
 name: Session E2E
+run-name: dsh-session-${{ inputs.session_key }}
 
 on:
   workflow_dispatch:
@@ -20,19 +21,16 @@ on:
         required: false
         type: number
       phase:
-        description: Two independent runs, save first and then resume its successful run ID
+        description: Prove a first task, a follow-up, or automatically detect the expected phase
         required: true
-        default: save
+        default: auto
         type: choice
         options:
+          - auto
           - save
           - resume
-      source_run_id:
-        description: Successful save run ID, required only for resume
-        default: ""
-        type: string
       session_key:
-        description: Fresh logical key, identical for the two runs; choose a new key for another pair
+        description: Maintainer-selected logical key; repeated runs automatically continue its Session
         required: true
         type: string
       dsh_mode:
@@ -43,12 +41,32 @@ on:
         options:
           - controlled
           - native
+      hold_seconds:
+        description: Optional 0-60 second hold for proving same-key serialization and different-key overlap
+        default: 0
+        type: number
+      force_failure:
+        description: Deliberately fail after a verified checkpoint to seed a failed-history boundary
+        default: false
+        type: boolean
+      expected_failure:
+        description: Explicit failure boundary to verify through the real Action before any worker task
+        default: none
+        type: choice
+        options:
+          - none
+          - failed
+          - expired
+          - missing
+          - corrupt
+          - unknown
+          - incompatible
 
 permissions: {}
 
-# This literal serializes every opt-in Session workflow in this repository.
+# A logical Session serializes across independent runs; other keys can execute together.
 concurrency:
-  group: dsh-session
+  group: dsh-session-${{ inputs.session_key }}
   cancel-in-progress: false
 
 jobs:
@@ -179,9 +197,9 @@ jobs:
       HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
       CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
       PHASE: ${{ inputs.phase }}
-      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       SESSION_KEY: ${{ inputs.session_key }}
       DSH_MODE: ${{ inputs.dsh_mode }}
+      EXPECTED_FAILURE: ${{ inputs.expected_failure }}
     steps:
       - name: Checkout permanent harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -234,6 +252,15 @@ jobs:
         id: task
         run: node .github/e2e/session-e2e-proof.mjs prepare
 
+      - name: Hold the verified producer job for concurrency qualification
+        shell: bash
+        env:
+          HOLD_SECONDS: ${{ inputs.hold_seconds }}
+        run: |
+          set -euo pipefail
+          [[ "$HOLD_SECONDS" =~ ^[0-9]+$ && "$HOLD_SECONDS" -le 60 ]]
+          sleep "$HOLD_SECONDS"
+
       - name: Execute one live official Session task
         id: action
         continue-on-error: true
@@ -242,7 +269,7 @@ jobs:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           github-token: ${{ github.token }}
           command: task
-          task-access: ${{ inputs.phase == 'save' && 'write' || 'read' }}
+          task-access: ${{ steps.task.outputs.phase == 'save' && 'write' || 'read' }}
           allow-write: "true"
           dsh-mode: ${{ inputs.dsh_mode }}
           isolation: docker
@@ -256,9 +283,8 @@ jobs:
           test-commands: '[["npm","ci","--ignore-scripts"],["npm","run","typecheck"],["npm","test"]]'
           max-turns: "1"
           timeout-minutes: "12"
-          session-mode: ${{ inputs.phase }}
+          session-mode: auto
           session-key: ${{ inputs.session_key }}
-          session-source-run-id: ${{ inputs.source_run_id }}
           session-retention-days: "3"
 
       - name: Verify memory, new request, current permissions and raw checkpoint
@@ -279,10 +305,14 @@ jobs:
           if-no-files-found: error
 
       - name: Save successful pair proof outside the worker
-        if: steps.verify.outcome == 'success'
+        if: steps.verify.outcome == 'success' && inputs.expected_failure == 'none'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: session-e2e-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/session-e2e/proof/proof.json
           retention-days: 3
           if-no-files-found: error
+
+      - name: Deliberately seed a failed producer history
+        if: steps.verify.outcome == 'success' && inputs.force_failure
+        run: exit 1
