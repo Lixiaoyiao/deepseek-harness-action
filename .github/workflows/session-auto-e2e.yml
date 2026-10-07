@@ -1,0 +1,318 @@
+name: Automatic Session E2E
+run-name: dsh-session-${{ inputs.session_key }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_mode:
+        description: Qualification target
+        required: true
+        default: pull-request
+        type: choice
+        options:
+          - pull-request
+          - main
+      candidate_sha:
+        description: Exact approved candidate Action SHA
+        required: true
+        type: string
+      pull_request:
+        description: Open same-repository PR; omit for main mode
+        required: false
+        type: number
+      phase:
+        description: Prove a first task, a follow-up, or automatically detect the expected phase
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - save
+          - resume
+      session_key:
+        description: Maintainer-selected logical key; repeated runs automatically continue its Session
+        required: true
+        type: string
+      dsh_mode:
+        description: Keep the same runtime composition for the pair
+        required: true
+        default: controlled
+        type: choice
+        options:
+          - controlled
+          - native
+      hold_seconds:
+        description: Optional 0-60 second hold for proving same-key serialization and different-key overlap
+        default: 0
+        type: number
+      force_failure:
+        description: Deliberately fail after a verified checkpoint to seed a failed-history boundary
+        default: false
+        type: boolean
+      expected_failure:
+        description: Explicit failure boundary to verify through the real Action before any worker task
+        default: none
+        type: choice
+        options:
+          - none
+          - failed
+          - expired
+          - missing
+          - corrupt
+          - unknown
+          - incompatible
+
+permissions: {}
+
+# A logical Session serializes across independent runs; other keys can execute together.
+concurrency:
+  group: dsh-session-${{ inputs.session_key }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Bind candidate to PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run_e2e: ${{ steps.bind.outputs.run_e2e }}
+      candidate_mode: ${{ steps.bind.outputs.candidate_mode }}
+      candidate_sha: ${{ steps.bind.outputs.candidate_sha }}
+      candidate_branch: ${{ steps.bind.outputs.candidate_branch }}
+      pull_request: ${{ steps.bind.outputs.pull_request }}
+      harness_sha: ${{ steps.bind.outputs.harness_sha }}
+    steps:
+      - name: Validate immutable candidate identity
+        id: bind
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          CANDIDATE_MODE: ${{ inputs.candidate_mode }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_PR: ${{ inputs.pull_request }}
+          APPROVED_CANDIDATE_SHA: ${{ vars.DSH_E2E_CANDIDATE_SHA }}
+        run: |
+          set -euo pipefail
+          sha_pattern='^[a-f0-9]{40}$'
+
+          [[ "$WORKFLOW_REF" == "refs/heads/$DEFAULT_BRANCH" ]] || {
+            echo "Session E2E must be dispatched from the default branch workflow" >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SHA" =~ $sha_pattern ]] || {
+            echo "The trusted workflow SHA must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          [[ "$DISPATCH_SHA" =~ $sha_pattern && "$DISPATCH_SHA" == "$WORKFLOW_SHA" ]] || {
+            echo "The dispatched commit must be the immutable workflow commit" >&2
+            exit 1
+          }
+          default_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
+          [[ "$DISPATCH_SHA" == "$default_sha" ]] || {
+            echo "The dispatch SHA must equal the live default-branch SHA" >&2
+            exit 1
+          }
+          [[ "$CANDIDATE_SHA" =~ $sha_pattern ]] || {
+            echo "candidate_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          [[ "$APPROVED_CANDIDATE_SHA" =~ $sha_pattern && "$APPROVED_CANDIDATE_SHA" == "$CANDIDATE_SHA" ]] || {
+            echo "DSH_E2E_CANDIDATE_SHA must exactly match candidate_sha" >&2
+            exit 1
+          }
+
+          permission="$(gh api "repos/$REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || true)"
+          [[ "$permission" == "write" || "$permission" == "maintain" || "$permission" == "admin" ]] || {
+            echo "The triggering actor must have repository write permission" >&2
+            exit 1
+          }
+
+          case "$CANDIDATE_MODE" in
+            pull-request)
+              [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]] || {
+                echo "pull_request must be a positive integer in pull-request mode" >&2
+                exit 1
+              }
+              pr_json="$(gh api "repos/$REPOSITORY/pulls/$CANDIDATE_PR")"
+              jq -e \
+                --arg sha "$CANDIDATE_SHA" \
+                --arg repo "${REPOSITORY,,}" \
+                --arg base "$DEFAULT_BRANCH" \
+                '(.state == "open") and (.draft == false) and
+                 (.head.sha == $sha) and (.head.repo.full_name | ascii_downcase) == $repo and
+                 (.base.repo.full_name | ascii_downcase) == $repo and (.base.ref == $base)' \
+                <<<"$pr_json" >/dev/null
+              candidate_branch="$(jq -r .head.ref <<<"$pr_json")"
+              summary="Bound PR #$CANDIDATE_PR to candidate $CANDIDATE_SHA"
+              ;;
+            main)
+              [[ -z "$CANDIDATE_PR" || "$CANDIDATE_PR" == "0" ]] || {
+                echo "pull_request must be omitted in main mode" >&2
+                exit 1
+              }
+              [[ "$CANDIDATE_SHA" == "$DISPATCH_SHA" && "$CANDIDATE_SHA" == "$default_sha" ]] || {
+                echo "main mode requires candidate_sha to equal the live immutable default-branch commit" >&2
+                exit 1
+              }
+              CANDIDATE_PR=""
+              candidate_branch="$DEFAULT_BRANCH"
+              summary="Bound post-merge qualification to live $DEFAULT_BRANCH commit $CANDIDATE_SHA"
+              ;;
+            *)
+              echo "candidate_mode must be pull-request or main" >&2
+              exit 1
+              ;;
+          esac
+          echo "run_e2e=true" >> "$GITHUB_OUTPUT"
+          echo "candidate_mode=$CANDIDATE_MODE" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "candidate_branch=$candidate_branch" >> "$GITHUB_OUTPUT"
+          echo "pull_request=$CANDIDATE_PR" >> "$GITHUB_OUTPUT"
+          echo "harness_sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"
+          echo "$summary from the trusted default-branch workflow" >> "$GITHUB_STEP_SUMMARY"
+
+  session:
+    # Exactly one static producer job/Action step, with no matrix or reusable job.
+    needs: gate
+    if: needs.gate.outputs.run_e2e == 'true'
+    runs-on: ubuntu-latest
+    environment: core-e2e
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      HARNESS_SHA: ${{ needs.gate.outputs.harness_sha }}
+      CANDIDATE_SHA: ${{ needs.gate.outputs.candidate_sha }}
+      PHASE: ${{ inputs.phase }}
+      SESSION_KEY: ${{ inputs.session_key }}
+      DSH_MODE: ${{ inputs.dsh_mode }}
+      EXPECTED_FAILURE: ${{ inputs.expected_failure }}
+    steps:
+      - name: Checkout permanent harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.harness_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.candidate_sha }}
+          path: candidate-action
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check immutable checkouts and Docker
+        shell: bash
+        env:
+          DEEPSEEK_SECRET_PRESENT: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: |
+          set -euo pipefail
+          [[ "$DEEPSEEK_SECRET_PRESENT" == "true" ]]
+          [[ "$(git rev-parse HEAD)" == "$HARNESS_SHA" ]]
+          [[ "$(git -C candidate-action rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          ! git config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          ! git -C candidate-action config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null 2>&1
+          docker version
+
+      - name: Install immutable harness dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-fund
+
+      - name: Install exact candidate dependencies without lifecycle scripts
+        run: npm ci --prefix candidate-action --ignore-scripts --no-fund
+
+      - name: Prepare hidden memory and current challenge outside the worker
+        id: task
+        run: node .github/e2e/session-auto-e2e-proof.mjs prepare
+
+      - name: Hold the verified producer job for concurrency qualification
+        shell: bash
+        env:
+          HOLD_SECONDS: ${{ inputs.hold_seconds }}
+        run: |
+          set -euo pipefail
+          [[ "$HOLD_SECONDS" =~ ^[0-9]+$ && "$HOLD_SECONDS" -le 60 ]]
+          sleep "$HOLD_SECONDS"
+
+      - name: Revalidate candidate immediately before execution
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
+          CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
+        run: bash .github/e2e/assert-candidate-binding.sh
+
+      - name: Execute one live official Session task
+        id: action
+        continue-on-error: true
+        uses: ./candidate-action
+        with:
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github-token: ${{ github.token }}
+          command: task
+          task-access: ${{ steps.task.outputs.phase == 'save' && 'write' || 'read' }}
+          allow-write: "true"
+          dsh-mode: ${{ inputs.dsh_mode }}
+          isolation: docker
+          prompt: ${{ steps.task.outputs.prompt }}
+          task-output-schema: ${{ steps.task.outputs.schema }}
+          permission-profile: custom
+          allowed-tools: '["workspace.read","workspace.search","workspace.edit"]'
+          disallowed-tools: '["native.bash","native.subagent","native.web-search"]'
+          progress-comment: "false"
+          run-tests: "true"
+          test-commands: '[["npm","ci","--ignore-scripts"],["npm","run","typecheck"],["npm","test"]]'
+          max-turns: "1"
+          timeout-minutes: "12"
+          session-mode: auto
+          session-key: ${{ inputs.session_key }}
+          session-retention-days: "3"
+
+      - name: Verify memory, new request, current permissions and raw checkpoint
+        id: verify
+        if: always() && steps.task.outcome == 'success'
+        env:
+          RESULT_JSON: ${{ steps.action.outputs['result-json'] }}
+          ACTION_OUTCOME: ${{ steps.action.outcome }}
+        run: node .github/e2e/session-auto-e2e-proof.mjs verify
+
+      - name: Save safe qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: session-e2e-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/session-e2e/evidence/
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Save successful pair proof outside the worker
+        if: steps.verify.outcome == 'success' && inputs.expected_failure == 'none'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: session-e2e-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/session-e2e/proof/proof.json
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Deliberately seed a failed producer history
+        if: steps.verify.outcome == 'success' && inputs.force_failure
+        run: exit 1
