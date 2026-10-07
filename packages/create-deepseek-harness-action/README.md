@@ -40,7 +40,7 @@ It requires no source run ID. A previous failed or unknown run, or a missing,
 expired, corrupt or incompatible checkpoint must be reconciled before continuing.
 See the [Session contract](../../docs/session.md) for boundaries and explicit usage.
 
-Installer 0.4.1 accepts explicit maintainer-selected write validation:
+Installer 0.5.0 accepts explicit maintainer-selected write validation:
 
 ```bash
 npm create deepseek-harness-action@latest -- --mode commands \
@@ -61,10 +61,10 @@ For an offline static check from a reviewed Action source checkout, use
 `npm run check:config -- --config examples/config-check.json` as described in
 [Setup](../../docs/setup.md#check-configuration-before-the-first-model-run).
 
-Version `0.4.1` is prepared for the formal
-[v0.9.3 Action release](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.9.3)
-at immutable commit `e7da1b33a043b4e2e26daa7e731c266817677a4a`. Its formal
-[controlled/native release canary](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/37172280127) passed.
+Version `0.5.0` is prepared for the formal
+[v0.10.0 Action release](https://github.com/Lixiaoyiao/deepseek-harness-action/releases/tag/v0.10.0)
+at immutable commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1`. Its formal
+[controlled/native release canary](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/37654999388) passed.
 Installer source review, exact-source CI/tag, qualified tarball, npm publication
 and fresh public consumers remain distinct gates. The Action identity alone
 does not establish installer publication or consumer qualification.

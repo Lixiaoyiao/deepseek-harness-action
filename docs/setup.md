@@ -19,6 +19,7 @@ Choose what to install:
 | **PR Review**            | `.github/workflows/dsh-review.yml`   |
 | **@dsh Coding Commands** | `.github/workflows/dsh-commands.yml` |
 | **Both**                 | Both workflow files above            |
+| **Automatic Session**    | `.github/workflows/dsh-session.yml`  |
 
 For CI or another non-interactive environment, pass the mode explicitly. The installer will not wait for stdin:
 
@@ -34,10 +35,16 @@ native composition is intended:
 npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
+Automatic Session creates a read-only starter. Commit it to the default branch and dispatch there with a lowercase key for the logical task. Reuse that key with a new prompt for follow-ups; no source run ID is needed. Failed, expired, corrupt or unknown history is rejected explicitly.
+
+```bash
+npm create deepseek-harness-action@latest -- --mode session
+```
+
 The installer creates `.github/workflows/` when necessary and refuses to
 overwrite an existing target workflow. It does not add `DEEPSEEK_API_KEY`,
-commit or push changes, or open a pull request. Installer v0.4.1 targets the
-formal v0.9.3 Action commit `e7da1b33a043b4e2e26daa7e731c266817677a4a` and
+commit or push changes, or open a pull request. Installer v0.5.0 targets the
+formal v0.10.0 Action commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1` and
 the exact DSH `0.2.0-rc.2` pin in both composition modes. Packing must follow
 successful Action tag, GitHub Release, and release-canary identity checks and
 receive that commit as `DSH_ACTION_RELEASE_SHA`. Both source templates and
@@ -83,7 +90,7 @@ tests and untouched placeholders before model startup. A bounded, credential-fre
 `docker info` probe reports an unavailable CLI/daemon before runtime installation.
 These checks never grant authority or replace executed Controller validation.
 
-Installer 0.4.1 accepts optional `--test-commands` JSON argv arrays and
+Installer 0.5.0 accepts optional `--test-commands` JSON argv arrays and
 `--container-image name@sha256:<64 lowercase hex>` for `commands` or `both`. Maintainers must explicitly choose reviewed,
 credential-free commands. The installer never discovers or executes scripts,
 and omitting the flags preserves the fail-closed placeholder.
@@ -118,15 +125,15 @@ The default `github-token` is `${{ github.token }}` and is also Controller-only.
 The examples use the current release tag for readability:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
 ```
 
 For production, replace the tag with the full immutable commit SHA resolved
-from the formal release. Installer v0.4.1 targets the v0.9.3 commit shown below;
+from the formal release. Installer v0.5.0 targets the v0.10.0 commit shown below;
 its separately reviewed installer source commit is a different identity:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@e7da1b33a043b4e2e26daa7e731c266817677a4a # v0.9.3
+uses: Lixiaoyiao/deepseek-harness-action@9c52f682bbeed1b7752a9e21273e6c13b01e79b1 # v0.10.0
 ```
 
 The installer source tag and `DSH_ACTION_RELEASE_SHA` packing input must each
@@ -174,7 +181,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.2.0-rc.2
