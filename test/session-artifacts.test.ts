@@ -36,6 +36,15 @@ import {
 const sha = "a".repeat(40);
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const workflow = `concurrency:\n  group: dsh-session\n  cancel-in-progress: false\njobs:\n  session:\n    name: Session worker\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./candidate-action\n        with:\n          session-mode: \${{ inputs.mode }}\n`;
+const automaticWorkflow =
+  workflow
+    .replace("group: dsh-session", "group: dsh-session-${{ inputs.session_key }}")
+    .replace(
+      "session-mode: ${{ inputs.mode }}",
+      "session-mode: auto\n          session-key: ${{ inputs.session_key }}",
+    ) +
+  "on:\n  workflow_dispatch:\n    inputs:\n      session_key:\n        type: string\n        required: true\nrun-name: dsh-session-${{ inputs.session_key }}\n";
+const sessionTitle = "dsh-session-maintainer-key";
 const binding: SessionBinding = {
   repository: { id: 10, owner: "octo", repo: "repo" },
   workflow: { path: ".github/workflows/session.yml", jobId: "session", jobName: "Session worker" },
@@ -129,6 +138,14 @@ function fixture() {
     sourceActor: "maintainer",
     current: [] as Metadata[],
     sources: [] as Metadata[],
+    history: [] as {
+      id: number;
+      display_title: string;
+      status: string;
+      conclusion: string | null;
+      updated_at?: string;
+    }[],
+    title: sessionTitle,
   };
   const api = {
     repos: {
@@ -169,6 +186,7 @@ function fixture() {
           head_branch: state.branch,
           head_sha: sha,
           path: binding.workflow.path,
+          display_title: state.title,
           event: state.event,
           run_attempt: state.runAttempt,
           status: run_id === 200 ? "in_progress" : state.sourceStatus,
@@ -180,6 +198,26 @@ function fixture() {
           },
           created_at: saved.manifest.createdAt,
           updated_at: saved.manifest.createdAt,
+        },
+      })),
+      listWorkflowRuns: vi.fn(({ page = 1 }: { page?: number } = {}) => ({
+        data: {
+          total_count: state.history.length + 1,
+          workflow_runs: [
+            {
+              id: 200,
+              display_title: state.title,
+              status: "in_progress",
+              conclusion: null,
+              path: binding.workflow.path,
+              updated_at: saved.manifest.createdAt,
+            },
+            ...state.history.map((run) => ({
+              path: binding.workflow.path,
+              updated_at: saved.manifest.createdAt,
+              ...run,
+            })),
+          ].slice((page - 1) * 100, page * 100),
         },
       })),
       listJobsForWorkflowRunAttempt: vi.fn(({ run_id }: { run_id: number }) => ({
@@ -294,6 +332,37 @@ function fixture() {
 }
 
 describe("Session trusted workflow policy", () => {
+  it("accepts only the same maintainer key for auto run-name and concurrency", () => {
+    expect(assertSessionWorkflowPolicy(automaticWorkflow, "session", binding.keyHash).jobId).toBe(
+      "session",
+    );
+    for (const yaml of [
+      automaticWorkflow.replace(
+        "run-name: dsh-session-${{ inputs.session_key }}",
+        "run-name: unknown",
+      ),
+      automaticWorkflow.replace(
+        "group: dsh-session-${{ inputs.session_key }}",
+        "group: dsh-session",
+      ),
+      automaticWorkflow.replace("required: true", "required: false"),
+      automaticWorkflow.replace("type: string", "type: choice"),
+      automaticWorkflow.replace(
+        "session-key: ${{ inputs.session_key }}",
+        "session-key: ${{ github.event.issue.title }}",
+      ),
+    ])
+      expect(() => assertSessionWorkflowPolicy(yaml, "session", binding.keyHash)).toThrow(
+        PolicyDeniedError,
+      );
+  });
+  it("accepts a static maintained auto key and rejects a different literal key", () => {
+    const yaml = automaticWorkflow.replaceAll("${{ inputs.session_key }}", "maintainer-key");
+    expect(assertSessionWorkflowPolicy(yaml, "session", binding.keyHash).jobId).toBe("session");
+    expect(() => assertSessionWorkflowPolicy(yaml, "session", sessionKeyHash("different"))).toThrow(
+      /literal key/u,
+    );
+  });
   it("accepts one nonmatrix Action with a runtime input expression and normalizes static name", () => {
     expect(assertSessionWorkflowPolicy(workflow, "session")).toEqual({
       jobId: "session",
@@ -477,6 +546,204 @@ describe("Session manifest and restricted ZIP", () => {
 });
 
 describe("Controller Session artifact admission and advance", () => {
+  function automaticFixture() {
+    const f = fixture();
+    f.state.yaml = automaticWorkflow;
+    const options: PrepareSessionArtifactsOptions = { ...f.options, mode: "auto" };
+    return { ...f, options };
+  }
+  const successfulHistory = (id = 100, title = sessionTitle) => ({
+    id,
+    display_title: title,
+    status: "completed",
+    conclusion: "success",
+  });
+  it("auto creates only after complete history proves no previous key, and saves the first generation", async () => {
+    const f = automaticFixture();
+    f.state.history.push(successfulHistory(90, "dsh-session-an-independent-key"));
+    const prepared = await prepareSessionArtifacts(f.options);
+    expect(prepared).toMatchObject({ selection: "created", generation: 1 });
+    expect(prepared.source).toBeUndefined();
+    await expect(
+      saveSessionArtifact({
+        prepared,
+        checkpoint: checkpoint(200),
+        deadlineMs: f.options.deadlineMs,
+        signal: f.options.signal,
+      }),
+    ).resolves.toMatchObject({ generation: 1 });
+    expect(f.api.actions.listWorkflowRuns).toHaveBeenCalledTimes(2);
+  });
+  it("auto scans every history page before admitting a new independent key", async () => {
+    const f = automaticFixture();
+    for (let id = 1; id <= 100; id++)
+      f.state.history.push(successfulHistory(id, `dsh-session-other-${String(id)}`));
+    await expect(prepareSessionArtifacts(f.options)).resolves.toMatchObject({
+      selection: "created",
+    });
+    expect(f.api.actions.listWorkflowRuns).toHaveBeenCalledTimes(2);
+  });
+  it("auto restores an independent successful run by key without a source run input", async () => {
+    const f = automaticFixture();
+    f.state.history.push(successfulHistory());
+    f.state.sources.push(f.metadata(100));
+    const prepared = await prepareSessionArtifacts(f.options);
+    expect(prepared).toMatchObject({ selection: "resumed", generation: 2, source: { runId: 100 } });
+    expect(prepared.checkpoint?.payload).toEqual(f.saved.payload);
+    await expect(
+      saveSessionArtifact({
+        prepared,
+        checkpoint: checkpoint(200, 2),
+        deadlineMs: f.options.deadlineMs,
+        signal: f.options.signal,
+      }),
+    ).resolves.toMatchObject({ generation: 2 });
+  });
+  it("auto uses case-insensitive run titles matching GitHub key concurrency", async () => {
+    const f = automaticFixture();
+    f.state.title = sessionTitle.toUpperCase().replace("DSH-SESSION-", "dsh-session-");
+    f.state.history.push(successfulHistory());
+    f.state.sources.push(f.metadata(100));
+    await expect(prepareSessionArtifacts(f.options)).resolves.toMatchObject({
+      selection: "resumed",
+    });
+  });
+  it.each(["failed", "unknown", "missing", "expired", "corrupt", "incompatible"])(
+    "auto refuses %s history before a claim or worker and never falls back to an older success",
+    async (kind) => {
+      const f = automaticFixture();
+      f.state.history.push(successfulHistory());
+      if (kind === "failed")
+        f.state.history.push({ ...successfulHistory(150), conclusion: "failure" });
+      if (kind === "unknown")
+        f.state.history.push({
+          ...successfulHistory(150),
+          status: "in_progress",
+          conclusion: null,
+        });
+      if (!["missing"].includes(kind)) f.state.sources.push(f.metadata(100));
+      const source = f.state.sources[0];
+      if (kind === "expired" && source !== undefined) source.expired = true;
+      if (kind === "incompatible" && source !== undefined)
+        source.name = `dsh-session-${binding.keyHash}-${"f".repeat(64)}-g1-a1`;
+      if (kind === "corrupt") f.fetchArchive.mockResolvedValueOnce(new Response("invalid archive"));
+      const expected = kind === "corrupt" ? /SHA256/u : new RegExp(kind, "u");
+      await expect(prepareSessionArtifacts(f.options)).rejects.toThrow(expected);
+      expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+    },
+  );
+  it("auto refuses successful history with no checkpoint even when an older checkpoint remains", async () => {
+    const f = automaticFixture();
+    f.state.history.push(successfulHistory(), successfulHistory(150));
+    f.state.sources.push(f.metadata(100));
+    await expect(prepareSessionArtifacts(f.options)).rejects.toThrow(/missing/u);
+    expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+  });
+  it("auto rejects rerunning an old Actions run before any history discovery or claim", async () => {
+    const f = automaticFixture();
+    f.state.runAttempt = 2;
+    await expect(
+      prepareSessionArtifacts({
+        ...f.options,
+        currentRun: { ...f.options.currentRun, runAttempt: 2 },
+      }),
+    ).rejects.toThrow(/cannot rerun/u);
+    expect(f.api.actions.listWorkflowRuns).not.toHaveBeenCalled();
+    expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+  });
+  it.each(["success", "failure", null])(
+    "auto rejects older unkeyed workflow history with %s even when a matching checkpoint remains",
+    async (conclusion) => {
+      const f = automaticFixture();
+      f.state.history.push(successfulHistory(), {
+        ...successfulHistory(90, "Legacy explicit Session"),
+        conclusion,
+      });
+      f.state.sources.push(f.metadata(100));
+      await expect(prepareSessionArtifacts(f.options)).rejects.toThrow(
+        /unknown.*no verifiable key/u,
+      );
+      expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+    },
+  );
+  it("auto detects an active same-key conflict while another key can be active independently", async () => {
+    const f = automaticFixture();
+    f.state.history.push({
+      ...successfulHistory(210, "dsh-session-different"),
+      status: "in_progress",
+      conclusion: null,
+    });
+    const prepared = await prepareSessionArtifacts(f.options);
+    f.state.history.push({ ...successfulHistory(211), status: "in_progress", conclusion: null });
+    await expect(
+      saveSessionArtifact({
+        prepared,
+        checkpoint: checkpoint(200),
+        deadlineMs: f.options.deadlineMs,
+        signal: f.options.signal,
+      }),
+    ).rejects.toThrow(/same-key conflict/u);
+    expect(f.uploader.uploadArtifact).toHaveBeenCalledTimes(1);
+  });
+  it.each(["success", "failure", null])(
+    "auto rejects an older queued request after a newer same-key request completed with %s",
+    async (conclusion) => {
+      const f = automaticFixture();
+      f.state.history.push({ ...successfulHistory(210), conclusion });
+      await expect(prepareSessionArtifacts(f.options)).rejects.toThrow(
+        /stale or concurrent same-key conflict/u,
+      );
+      expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["queued", "waiting", "pending", "requested"])(
+    "auto permits a newer same-key request which is still %s",
+    async (status) => {
+      const f = automaticFixture();
+      f.state.history.push({ ...successfulHistory(210), status, conclusion: null });
+      await expect(prepareSessionArtifacts(f.options)).resolves.toMatchObject({
+        selection: "created",
+      });
+    },
+  );
+  it("auto rechecks changed parent history before checkpoint save", async () => {
+    const f = automaticFixture();
+    const prepared = await prepareSessionArtifacts(f.options);
+    f.state.history.push(successfulHistory());
+    await expect(
+      saveSessionArtifact({
+        prepared,
+        checkpoint: checkpoint(200),
+        deadlineMs: f.options.deadlineMs,
+        signal: f.options.signal,
+      }),
+    ).rejects.toThrow(/parent history changed/u);
+    expect(f.uploader.uploadArtifact).toHaveBeenCalledTimes(1);
+  });
+  it.each(["bound", "incomplete", "duplicate", "http", "wrong-title", "legacy-artifact"])(
+    "auto fails closed for %s history evidence",
+    async (kind) => {
+      const f = automaticFixture();
+      if (kind === "bound")
+        f.api.actions.listWorkflowRuns.mockReturnValueOnce({
+          data: { total_count: 1001, workflow_runs: [] },
+        });
+      if (kind === "incomplete")
+        f.api.actions.listWorkflowRuns.mockReturnValue({
+          data: { total_count: 1, workflow_runs: [] },
+        });
+      if (kind === "duplicate")
+        f.state.history.push(successfulHistory(100), successfulHistory(100));
+      if (kind === "http")
+        f.api.actions.listWorkflowRuns.mockImplementationOnce(() => {
+          throw new Error("history HTTP unavailable");
+        });
+      if (kind === "wrong-title") f.state.title = "unbound-title";
+      if (kind === "legacy-artifact") f.state.sources.push(f.metadata(100));
+      await expect(prepareSessionArtifacts(f.options)).rejects.toThrow();
+      expect(f.uploader.uploadArtifact).not.toHaveBeenCalled();
+    },
+  );
   it("creates one metadata-only claim before model, then checks fresh authority and saves exactly two files", async () => {
     const f = fixture();
     const prepared = await prepareSessionArtifacts(f.options);

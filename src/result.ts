@@ -72,9 +72,10 @@ export interface ValidationSummary {
 }
 
 export interface SessionRunSummary {
-  readonly mode: "save" | "resume";
+  readonly mode: "auto" | "save" | "resume";
   readonly status: "preparing" | "claimed" | "restored" | "saved" | "failed" | "not_saved";
   readonly sourceRunId?: number;
+  readonly selection?: "created" | "resumed";
   readonly sessionId?: string;
   readonly generation?: number;
   readonly claimArtifactId?: number;
@@ -674,6 +675,8 @@ export function formatStepSummary(outcome: RunOutcome): string {
     );
     if (session.sourceRunId !== undefined)
       lines.push(`**Session source run:** ${String(session.sourceRunId)}`);
+    if (session.selection !== undefined)
+      lines.push(`**Session selection:** ${inlineCode(session.selection)}.`);
     lines.push(
       "Session artifact SDK uploads use a separate job-scoped credential; SDK transport requests are not included in the GitHub client counters.",
     );

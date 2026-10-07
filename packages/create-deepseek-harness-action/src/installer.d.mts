@@ -1,6 +1,6 @@
 import type { Readable, Writable } from "node:stream";
 
-export type InstallerMode = "review" | "commands" | "both";
+export type InstallerMode = "review" | "commands" | "both" | "session";
 export type InstallerDshMode = "controlled" | "native";
 
 export interface InstallerOptions {

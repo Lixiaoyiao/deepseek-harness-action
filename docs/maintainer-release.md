@@ -4,6 +4,28 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
+For v0.10.0, retain the exact production DSH `0.2.0-rc.2` family. Qualify
+`session-mode: auto` with fresh keys in controlled and native compositions.
+Use the trusted [automatic Session E2E workflow](../.github/workflows/session-auto-e2e.yml)
+on live `main`: first creation and an
+independent follow-up run must prove the same Session, an incremented generation,
+raw-log prefix continuity, a fresh worker, current permissions and no replay.
+No source run ID is passed to the Action. Preserve evidence for overlapping
+different keys, serialized same-key runs and a failed-history rejection before
+worker startup. Expired, missing, corrupt, incompatible, incomplete and unknown
+history also require explicit failure evidence; unit fixtures alone do not prove
+the real Actions transport path.
+
+The Session harness changes must land through their own CI-qualified PR before
+candidate qualification so that credentials use trusted default-branch harness
+code. Freeze the candidate before the complete local check, PR CI and Core E2E.
+After merge, repeat exact-main CI/Core and Session qualification before tagging.
+Run the formal controlled/native canary against the immutable formal tag, then
+prepare the independently versioned installer with the actual formal Action SHA.
+The advisory stable/RC/alpha upstream canaries never replace these production gates.
+Do not rerun task-bearing failures without first reconciling their diagnostics
+and confirmed effects; preserve a bounded continuation record for external blocks.
+
 For v0.9.3, keep DSH `0.2.0-rc.2` fixed and retain every existing gate.
 The opt-in [Session contract](session.md) adds independent regressions and
 the trusted [Session E2E workflow](../.github/workflows/session-e2e.yml).

@@ -226,13 +226,15 @@ export function checkConfiguration(
     diagnostics: [
       ...diagnostics,
       ...uncheckedDiagnostics,
-      ...(raw["session-mode"] === "save" || raw["session-mode"] === "resume"
+      ...(raw["session-mode"] === "auto" ||
+      raw["session-mode"] === "save" ||
+      raw["session-mode"] === "resume"
         ? [
             {
               id: "session_provenance",
               status: "not_checked" as const,
               message:
-                "Session workflow source, repository-wide concurrency, producer run/attempt, artifact integrity, retention and latest generation require fresh execution-time checks; no artifact is read by this offline check.",
+                "Session workflow source, concurrency and key history, producer run/attempt, artifact integrity, retention and latest generation require fresh execution-time checks; no artifact is read by this offline check.",
             },
           ]
         : []),

@@ -80,7 +80,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.2.0-rc.2
@@ -109,7 +109,7 @@ Native mode is not an unsafe mode. It returns ownership of DSH's internal headle
 
 The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Controller Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane.
 
-The v0.9.3 follow-up adds [explicit Session save/resume](docs/session.md) in both existing compositions, using DSH's published persistence and Headless interfaces. It preserves Controller / DSH / Gateway / validation ownership, the exact `0.2.0-rc.2` pin and the default-off Session path. Current authority is recalculated; previous GitHub writes are not replayed. [Text file context](docs/text-files.md), [offline configuration checks](docs/configuration-check.md) and [bounded GitHub diagnostics](docs/github-requests.md) remain available. Native image and Office attachments remain deferred for the [documented runtime/transport reasons](docs/v0.9.2-runtime-audit.md).
+v0.10.0 adds [automatic Session creation and continuation by key](docs/session.md), retaining explicit save/resume. A trusted workflow discovers the latest successful compatible checkpoint; failed, unknown, missing, expired or corrupt history prevents silent fallback. Matching workflow identity and concurrency bindings serialize one key while allowing different keys to run concurrently. The existing Controller / DSH / Gateway / validation ownership, exact `0.2.0-rc.2` pin and default-off Session path remain. Current authority is recalculated; previous GitHub writes are not replayed. [Text file context](docs/text-files.md), [offline configuration checks](docs/configuration-check.md) and [bounded GitHub diagnostics](docs/github-requests.md) remain available. Native image and Office attachments remain deferred for the [documented runtime/transport reasons](docs/v0.9.2-runtime-audit.md).
 
 ## Live runs
 

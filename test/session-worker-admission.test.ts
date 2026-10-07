@@ -304,42 +304,54 @@ describe("published worker Session admission", () => {
       });
   }, 120_000);
 
-  it("restores through the actual production Profile builders and original launchers without a new Session or old tool replay", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dsh-session-production-report-"));
-    directories.push(directory);
-    const evidence = join(directory, "evidence.json");
-    await promisify(execFile)(
-      process.execPath,
-      ["scripts/probe-session-production-launchers.mjs", evidence],
-      { cwd: process.cwd(), timeout: 130_000, maxBuffer: 1024 * 1024, windowsHide: true },
-    );
-    const report = JSON.parse(await readFile(evidence, "utf8")) as {
-      runtimeVersion: string;
-      remoteModelCalls: number;
-      githubWrites: number;
-      titleDisabledByProbe: boolean;
-      checks: { mode: string; saveTitleRequests: number }[];
-    };
-    expect(report).toMatchObject({
-      runtimeVersion: "0.2.0-rc.2",
-      remoteModelCalls: 0,
-      githubWrites: 0,
-      titleDisabledByProbe: false,
-    });
-    expect(report.checks.map(({ mode }) => mode)).toEqual(["controlled", "native"]);
-    for (const check of report.checks)
-      expect(check).toMatchObject({
-        productionProfile: true,
-        originalLauncher: true,
-        newWorker: true,
-        sameSession: true,
-        currentPermission: "read-only/never",
-        historyRestored: true,
-        oldToolsReplayed: false,
-        extraSession: false,
-        mainRequests: 1,
+  it.each([
+    { outcome: "successful", flag: "--pruner-pressure", errorResult: false },
+    { outcome: "error", flag: "--pruner-error-result", errorResult: true },
+  ])(
+    "prunes a real $outcome read-tool result and strictly restores production logs without old tool replay",
+    async ({ flag, errorResult }) => {
+      const directory = await mkdtemp(join(tmpdir(), "dsh-session-production-report-"));
+      directories.push(directory);
+      const evidence = join(directory, "evidence.json");
+      await promisify(execFile)(
+        process.execPath,
+        ["scripts/probe-session-production-launchers.mjs", evidence, flag],
+        { cwd: process.cwd(), timeout: 130_000, maxBuffer: 1024 * 1024, windowsHide: true },
+      );
+      const report = JSON.parse(await readFile(evidence, "utf8")) as {
+        runtimeVersion: string;
+        remoteModelCalls: number;
+        githubWrites: number;
+        titleDisabledByProbe: boolean;
+        checks: { mode: string; saveTitleRequests: number }[];
+      };
+      expect(report).toMatchObject({
+        runtimeVersion: "0.2.0-rc.2",
+        remoteModelCalls: 0,
+        githubWrites: 0,
+        titleDisabledByProbe: false,
       });
-    expect(report.checks[0]?.saveTitleRequests).toBe(0);
-    expect(report.checks[1]?.saveTitleRequests).toBeGreaterThanOrEqual(1);
-  }, 140_000);
+      expect(report.checks.map(({ mode }) => mode)).toEqual(["controlled", "native"]);
+      for (const check of report.checks)
+        expect(check).toMatchObject({
+          productionProfile: true,
+          originalLauncher: true,
+          newWorker: true,
+          sameSession: true,
+          currentPermission: "read-only/never",
+          historyRestored: true,
+          oldToolsReplayed: false,
+          extraSession: false,
+          mainRequests: 1,
+          prunerEvents: 1,
+          strictSaveDecode: true,
+          malformedPruneRejected: true,
+          strictRestoredDecode: true,
+          pruneEvidence: [{ errorResult }],
+        });
+      expect(report.checks[0]?.saveTitleRequests).toBe(0);
+      expect(report.checks[1]?.saveTitleRequests).toBeGreaterThanOrEqual(1);
+    },
+    140_000,
+  );
 });

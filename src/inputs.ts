@@ -180,7 +180,7 @@ const actionInputsSchema = z.object({
   command: z.enum(["auto", "task", "review", "diagnose", "fix", "implement"]),
   taskAccess: z.enum(["read", "write"]),
   prompt: z.string(),
-  sessionMode: z.enum(["off", "save", "resume"]),
+  sessionMode: z.enum(["off", "auto", "save", "resume"]),
   sessionKey: z.string().regex(/^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/u),
   sessionSourceRunId: z.string().regex(/^(?:[1-9][0-9]{0,15})?$/u),
   sessionRetentionDays: integerInput(1, 7),

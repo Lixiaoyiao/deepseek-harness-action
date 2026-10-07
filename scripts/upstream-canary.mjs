@@ -49,6 +49,32 @@ export function selectCandidates(inventory, audited) {
   return { stable, rc };
 }
 
+// Alpha is an explicitly separate advisory stream. It never participates in
+// stable/RC selection, and an unrelated alpha series cannot replace 0.2.1.
+export function selectAlphaCandidate(inventory, audited) {
+  selectCandidates(inventory, audited);
+  const parts = (version) =>
+    /^0\.2\.1-alpha(?:\.(?:0|[1-9]\d*))*$/u.test(version)
+      ? version.split("-alpha")[1].split(".").slice(1).map(Number)
+      : null;
+  return (
+    Object.entries(inventory.versions)
+      .filter(([version, manifest]) => parts(version) !== null && !manifest.deprecated)
+      .map(([version]) => version)
+      .sort((left, right) => {
+        const a = parts(left);
+        const b = parts(right);
+        for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+          if (a[index] === undefined) return -1;
+          if (b[index] === undefined) return 1;
+          if (a[index] !== b[index]) return a[index] - b[index];
+        }
+        return 0;
+      })
+      .at(-1) ?? null
+  );
+}
+
 export function candidateManifest(production, candidate, graph, companions) {
   const source = { ...production.dependencies, ...production.devDependencies };
   const dependencies = Object.fromEntries(
@@ -249,8 +275,8 @@ async function runCommand(command, args, cwd, logPath, timeout) {
 }
 
 async function pathsFor(channel) {
-  if (!["stable", "rc"].includes(channel))
-    throw new Error("Candidate channel must be stable or rc");
+  if (!["stable", "rc", "alpha"].includes(channel))
+    throw new Error("Candidate channel must be stable, rc, or alpha");
   const root = join(process.env.RUNNER_TEMP ?? tmpdir(), `dsh-upstream-${channel}`);
   const evidence = join(root, "evidence");
   await mkdir(evidence, { recursive: true });
@@ -277,10 +303,16 @@ async function probe(channel) {
   try {
     const inventory = await metadata(dshName);
     report.distTags = inventory["dist-tags"];
-    report.candidate = selectCandidates(inventory, audited)[channel];
+    report.candidate =
+      channel === "alpha"
+        ? selectAlphaCandidate(inventory, audited)
+        : selectCandidates(inventory, audited)[channel];
     if (!report.candidate) {
       report.phase = "complete";
-      report.detail = `No newer official ${channel} candidate; an RC superseded by a stable release is not retested.`;
+      report.detail =
+        channel === "alpha"
+          ? "No official 0.2.1-alpha candidate in the registry inventory; compatibility was not tested."
+          : `No newer official ${channel} candidate; an RC superseded by a stable release is not retested.`;
       return;
     }
     report.phase = "resolution";
@@ -369,6 +401,7 @@ async function probe(channel) {
       : `Compatibility smoke did not pass (started: ${smoke.started}, exit: ${smoke.exitCode}, signal: ${smoke.signal}, timed out: ${smoke.timedOut}${smoke.spawnError ? `, spawn error: ${smoke.spawnError}` : ""}); see smoke.log.`;
     report.phase = "complete";
   } catch (error) {
+    report.failedPhase = report.phase;
     report.status = ["selection", "testing"].includes(report.phase)
       ? "not-tested"
       : "install-failed";
@@ -408,5 +441,5 @@ if (import.meta.main) {
   const [command, channel] = process.argv.slice(2);
   if (command === "run") await probe(channel);
   else if (command === "report") await summarize(channel);
-  else throw new Error("Usage: node scripts/upstream-canary.mjs <run|report> <stable|rc>");
+  else throw new Error("Usage: node scripts/upstream-canary.mjs <run|report> <stable|rc|alpha>");
 }

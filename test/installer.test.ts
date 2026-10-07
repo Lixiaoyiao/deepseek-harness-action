@@ -17,6 +17,8 @@ import {
 } from "../packages/create-deepseek-harness-action/src/installer.mjs";
 import { assertPinnedContainerImage } from "../src/dsh/docker-policy.js";
 import { DSH_VERSION } from "../src/release.js";
+import { sessionKeyHash } from "../src/session/contracts.js";
+import { assertSessionWorkflowPolicy } from "../src/session/workflow-policy.js";
 
 const execFileAsync = promisify(execFile);
 const INSTALLER_VERSION = "0.4.1";
@@ -57,7 +59,10 @@ async function createProject(): Promise<string> {
   return mkdtemp(join(suiteDirectory, "project-"));
 }
 
-async function workflow(project: string, name: "dsh-review.yml" | "dsh-commands.yml") {
+async function workflow(
+  project: string,
+  name: "dsh-review.yml" | "dsh-commands.yml" | "dsh-session.yml",
+) {
   return readFile(join(project, ".github", "workflows", name), "utf8");
 }
 
@@ -118,8 +123,12 @@ describe("create-deepseek-harness-action release build", () => {
     });
   });
 
-  it("requires the real release SHA and deterministically builds four bound templates", async () => {
-    expect((await readdir(sourceTemplates)).sort()).toEqual(["dsh-commands.yml", "dsh-review.yml"]);
+  it("requires the real release SHA and deterministically builds six bound templates", async () => {
+    expect((await readdir(sourceTemplates)).sort()).toEqual([
+      "dsh-commands.yml",
+      "dsh-review.yml",
+      "dsh-session.yml",
+    ]);
 
     const repeatedBuild = join(suiteDirectory, "repeated-build");
     await execFileAsync(process.execPath, [buildScript, "--output", repeatedBuild], {
@@ -127,7 +136,7 @@ describe("create-deepseek-harness-action release build", () => {
       windowsHide: true,
     });
 
-    for (const sourceName of ["dsh-review.yml", "dsh-commands.yml"] as const) {
+    for (const sourceName of ["dsh-review.yml", "dsh-commands.yml", "dsh-session.yml"] as const) {
       const source = await readFile(new URL(sourceName, sourceTemplates), "utf8");
       expect(source.split(RELEASE_TOKEN)).toHaveLength(2);
       expect(source.split(DSH_MODE_TOKEN)).toHaveLength(2);
@@ -140,6 +149,8 @@ describe("create-deepseek-harness-action release build", () => {
       ["dsh-review-native.yml", "native"],
       ["dsh-commands.yml", "controlled"],
       ["dsh-commands-native.yml", "native"],
+      ["dsh-session.yml", "controlled"],
+      ["dsh-session-native.yml", "native"],
     ] as const) {
       const built = await readFile(join(builtPackage, "templates", name), "utf8");
       await expect(readFile(join(repeatedBuild, "templates", name), "utf8")).resolves.toBe(built);
@@ -581,6 +592,53 @@ describe("installer modes", () => {
 });
 
 describe("safe filesystem and non-interactive behavior", () => {
+  it.each(["controlled", "native"] as const)(
+    "installs an automatic %s Session with matching key identity and concurrency",
+    async (dshMode) => {
+      const { project, output, result } = await install("session", dshMode);
+      const contents = await workflow(project, "dsh-session.yml");
+      expect(() =>
+        assertSessionWorkflowPolicy(contents, "session", sessionKeyHash("repository-summary")),
+      ).not.toThrow();
+      const document = parse(contents) as {
+        "run-name": string;
+        on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+        concurrency: { group: string; "cancel-in-progress": boolean };
+        jobs: { session: { steps: { uses?: string; with?: Record<string, unknown> }[] } };
+      };
+      expect(result.createdFiles).toEqual([".github/workflows/dsh-session.yml"]);
+      expect(document["run-name"]).toBe("dsh-session-${{ inputs.session_key }}");
+      expect(document.concurrency).toEqual({
+        group: document["run-name"],
+        "cancel-in-progress": false,
+      });
+      expect(document.on.workflow_dispatch.inputs.session_key).toMatchObject({
+        type: "string",
+        required: true,
+        default: "repository-summary",
+      });
+      const step = document.jobs.session.steps.at(-1);
+      expect(step?.uses).toBe(`Lixiaoyiao/deepseek-harness-action@${RELEASE_SHA}`);
+      expect(step?.with).toMatchObject({
+        "session-mode": "auto",
+        "session-key": "${{ inputs.session_key }}",
+        "allow-write": "false",
+        "dsh-version": DSH_VERSION,
+      });
+      expect(step?.with).not.toHaveProperty("session-source-run-id");
+      expect(step?.with?.["dsh-mode"]).toBe(dshMode === "native" ? "native" : undefined);
+      expect(output).toContain("no source run ID is needed");
+      await expect(install("session", dshMode, project)).rejects.toThrow(/Refusing to overwrite/u);
+      await expect(workflow(project, "dsh-session.yml")).resolves.toBe(contents);
+    },
+  );
+
+  it("rejects write configuration for the read-only Session starter", () => {
+    expect(() =>
+      parseArguments(["--mode", "session", "--test-commands", '[["node","test.mjs"]]']),
+    ).toThrow(/commands or both/u);
+  });
+
   it.each(["controlled", "native"] as const)(
     "preflights Both/%s and does not overwrite or partially create workflows",
     async (dshMode) => {

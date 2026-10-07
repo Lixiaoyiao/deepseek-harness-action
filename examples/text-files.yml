@@ -20,7 +20,7 @@ jobs:
     steps:
       # First commit the two referenced files to your default branch.
       # Keep these paths maintainer-authored; never interpolate PR/Issue/log data.
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           command: task

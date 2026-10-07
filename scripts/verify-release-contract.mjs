@@ -35,6 +35,7 @@ const [
   installerRuntime,
   installerReview,
   installerCommands,
+  installerSession,
 ] = await Promise.all([
   read("package.json"),
   read("package-lock.json"),
@@ -54,6 +55,7 @@ const [
   read("packages/create-deepseek-harness-action/src/installer.mjs"),
   read("packages/create-deepseek-harness-action/src/templates/dsh-review.yml"),
   read("packages/create-deepseek-harness-action/src/templates/dsh-commands.yml"),
+  read("packages/create-deepseek-harness-action/src/templates/dsh-session.yml"),
 ]);
 const manifest = JSON.parse(manifestText);
 const lock = JSON.parse(lockText);
@@ -313,6 +315,7 @@ assert.ok(
 for (const [name, template] of [
   ["review", installerReview],
   ["commands", installerCommands],
+  ["session", installerSession],
 ]) {
   const document = parseDocument(template, { strict: true, uniqueKeys: true });
   assert.deepEqual(document.errors, [], `${name} installer template must be valid YAML`);
@@ -362,6 +365,21 @@ for (const [name, template] of [
     `${name} installer template must not expose Controller credentials`,
   );
 }
+for (const expected of [
+  "run-name: dsh-session-${{ inputs.session_key }}",
+  "group: dsh-session-${{ inputs.session_key }}",
+  "cancel-in-progress: false",
+  "session-mode: auto",
+  "session-key: ${{ inputs.session_key }}",
+  "actions: read",
+  'allow-write: "false"',
+]) {
+  assert.ok(installerSession.includes(expected), `installer Session is missing: ${expected}`);
+}
+assert.ok(
+  !installerSession.includes("session-source-run-id:"),
+  "installer Session must discover its own source",
+);
 for (const expected of [
   "pull_request_target:",
   "ref: ${{ github.event.pull_request.base.sha }}",

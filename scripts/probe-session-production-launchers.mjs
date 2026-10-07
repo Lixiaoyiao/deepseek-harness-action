@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +31,22 @@ async function logs(path) {
 export async function runProductionSessionProbe({
   retainRoot = false,
   expectControlledRejection = false,
+  prunerPressure = false,
+  prunerErrorResult = false,
 } = {}) {
+  prunerPressure ||= prunerErrorResult;
+  const require = createRequire(import.meta.url);
+  const runtimeVersion = JSON.parse(
+    await readFile(require.resolve("@deepseek-ai/dsh/package.json"), "utf8"),
+  ).version;
+  const prunerVersion = JSON.parse(
+    await readFile(
+      require.resolve("@deepseek-ai/dsh-compaction-tool-result-pruner/package.json"),
+      "utf8",
+    ),
+  ).version;
+  assert.equal(runtimeVersion, "0.2.0-rc.2");
+  assert.equal(prunerVersion, runtimeVersion);
   const root = await mkdtemp(
     join(
       process.platform === "win32" ? (process.env.PUBLIC ?? tmpdir()) : tmpdir(),
@@ -53,6 +69,7 @@ export async function runProductionSessionProbe({
   const { writeNativeProfile } = await vite.ssrLoadModule("/src/dsh/native-composition.ts");
   const { resolveExtensionPlan, resolveNativeExtensionPlan } =
     await vite.ssrLoadModule("/src/extensions/plan.ts");
+  const { validateSessionPayload } = await vite.ssrLoadModule("/src/session/checkpoint.ts");
   await vite.close();
   const server = createServer(async (request, response) => {
     try {
@@ -79,6 +96,8 @@ export async function runProductionSessionProbe({
       }
       const callId = `production-${mode}-old-write`;
       const result = messageToolResults(body).find((block) => block.tool_use_id === callId);
+      const readId = `production-${mode}-oversized-read`;
+      const readResult = messageToolResults(body).find((block) => block.tool_use_id === readId);
       if (!second && result === undefined) {
         sendMessagesSse(
           response,
@@ -91,6 +110,27 @@ export async function runProductionSessionProbe({
                   arguments: JSON.stringify({
                     file_path: join(workspaces.get(mode), "created-once.txt"),
                     content: "PRODUCTION_FIRST_EFFECT",
+                  }),
+                },
+              },
+            ],
+          },
+          "tool_calls",
+        );
+      } else if (prunerPressure && !second && readResult === undefined) {
+        sendMessagesSse(
+          response,
+          {
+            tool_calls: [
+              {
+                id: readId,
+                function: {
+                  name: "read",
+                  arguments: JSON.stringify({
+                    file_path: join(
+                      workspaces.get(mode),
+                      prunerErrorResult ? "missing-" + "x".repeat(45_000) : "oversized.txt",
+                    ),
                   }),
                 },
               },
@@ -192,6 +232,22 @@ export async function runProductionSessionProbe({
       });
       await writeFile(join(state, "native-observed-tools.jsonl"), "");
     }
+    if (prunerPressure && write) {
+      const patchPath = join(profile, "cordis.patch.yml");
+      const patches = JSON.parse(await readFile(patchPath, "utf8"));
+      // Only this fixture lowers pressure. The original production compaction
+      // hook, token meter and pruner run against a real read-tool result.
+      patches.push({
+        id: "compaction-basic",
+        config: {
+          thresholdRatio: mode === "native" ? 0.012 : 0.005,
+          retainTokens: 0,
+          headroomTokens: 0,
+          maxTokens: 128,
+        },
+      });
+      await writeFile(patchPath, JSON.stringify(patches));
+    }
     await writeFile(
       join(state, "session-plan.json"),
       JSON.stringify({
@@ -252,6 +308,11 @@ export async function runProductionSessionProbe({
       const workspace = join(root, `${mode}-workspace`);
       await mkdir(workspace);
       workspaces.set(mode, workspace);
+      if (prunerPressure)
+        await writeFile(
+          join(workspace, "oversized.txt"),
+          "PRUNER_HEAD " + ("abcdefghij".repeat(100) + "\n").repeat(45) + "PRUNER_TAIL\n",
+        );
       const firstHome = await home(mode, "save");
       const first = await worker(mode, "save", firstHome);
       if (mode === "native" && expectControlledRejection) {
@@ -282,6 +343,72 @@ export async function runProductionSessionProbe({
       const firstRows = firstRaw.toString("utf8").trimEnd().split("\n").map(JSON.parse);
       const sessionId = firstRows[0].id;
       const eventCount = firstRows.length - 1;
+      const pruneEvidence = [];
+      if (prunerPressure) {
+        const prunes = firstRows.filter((row) => row.type === "compaction/prune");
+        assert.ok(prunes.length > 0, "pruner path was not triggered; this is not a passing probe");
+        for (const prune of prunes) {
+          const originalSeq = prune.data.shadowedSeqs[0];
+          const original = firstRows[originalSeq + 1];
+          const replacement = firstRows[prune.seq + 2];
+          assert.equal(original.type, "tool/result");
+          assert.equal(original.data.message.source.callId, `production-${mode}-oversized-read`);
+          assert.equal(replacement.type, "tool/result");
+          assert.equal(replacement.data.message.source.callId, original.data.message.source.callId);
+          assert.deepEqual(replacement.data.error, original.data.error);
+          assert.equal(replacement.data.message.isError, original.data.message.isError);
+          if (prunerErrorResult)
+            assert.ok(
+              original.data.message.isError === true,
+              "an actual tool error must reach the pruner",
+            );
+          assert.deepEqual(replacement.sourceEventSeqs, [originalSeq]);
+          assert.deepEqual(replacement.surfaceOp, {
+            op: "replace",
+            startSeq: originalSeq,
+            endSeq: originalSeq,
+          });
+          const chars = (row) =>
+            row.data.message.content
+              .filter((block) => block.type === "text")
+              .reduce((total, block) => total + Array.from(block.text).length, 0);
+          const charsBefore = chars(original);
+          const charsAfter = chars(replacement);
+          assert.ok(charsBefore > 8192, "a real large tool output must reach the pruner");
+          assert.ok(charsAfter <= 8192 && charsAfter < charsBefore);
+          assert.ok(
+            JSON.stringify(replacement.data.message.content).includes("tool result middle pruned"),
+          );
+          pruneEvidence.push({
+            pruneSeq: prune.seq,
+            originalSeq,
+            replacementSeq: replacement.seq,
+            callId: original.data.message.source.callId,
+            charsBefore,
+            charsAfter,
+            shadowedTokenCount: prune.data.shadowedTokenCount,
+            errorResult: original.data.message.isError === true,
+          });
+        }
+        const inspection = validateSessionPayload({
+          payload: firstRaw,
+          sessionId,
+          workspacePath: workspace,
+          knownSecrets: [...keys],
+        });
+        assert.equal(inspection.eventCount, eventCount);
+        // A malformed prune span must still fail the unchanged released codec.
+        const damagedRows = structuredClone(firstRows);
+        damagedRows.find((row) => row.type === "compaction/prune").data.shadowedSeqs = [];
+        assert.throws(() =>
+          validateSessionPayload({
+            payload: Buffer.from(damagedRows.map(JSON.stringify).join("\n") + "\n"),
+            sessionId,
+            workspacePath: workspace,
+            knownSecrets: [...keys],
+          }),
+        );
+      }
       const firstRequests = requests.filter((entry) => entry.mode === mode);
       const secondHome = await home(mode, "resume", sessionId, eventCount);
       await cp(join(firstHome, "sessions"), join(secondHome, "sessions"), { recursive: true });
@@ -317,6 +444,11 @@ export async function runProductionSessionProbe({
       assert.equal(main.length, 1);
       assert.ok(JSON.stringify(main[0].body.messages).includes("PRODUCTION_FIRST_MARKER"));
       assert.ok(JSON.stringify(main[0].body.messages).includes(`production-${mode}-old-write`));
+      if (prunerPressure)
+        assert.ok(
+          JSON.stringify(main[0].body.messages).includes("tool result middle pruned"),
+          "resumed provider must see the real pruned surface",
+        );
       const secondFiles = await logs(join(secondHome, "sessions"));
       assert.equal(
         secondFiles.length,
@@ -353,6 +485,24 @@ export async function runProductionSessionProbe({
         admissionAfterSeq: audit.afterSeq,
         restoredEventCount: secondRows.length - 1,
         payloadSha256: digest(secondRaw),
+        ...(prunerPressure
+          ? {
+              pressureFixture: true,
+              prunerEvents: pruneEvidence.length,
+              pruneEvidence,
+              savedPayloadSha256: digest(firstRaw),
+              strictSaveDecode: true,
+              malformedPruneRejected: true,
+              strictRestoredDecode: Boolean(
+                validateSessionPayload({
+                  payload: secondRaw,
+                  sessionId,
+                  workspacePath: workspace,
+                  knownSecrets: [...keys],
+                }),
+              ),
+            }
+          : {}),
       });
       paths.push({
         mode,
@@ -364,7 +514,13 @@ export async function runProductionSessionProbe({
     }
     return {
       schemaVersion: 1,
-      runtimeVersion: "0.2.0-rc.2",
+      runtimeVersion,
+      ...(prunerPressure
+        ? {
+            prunerVersion,
+            prunerScope: `${prunerErrorResult ? "error" : "successful"} text read-tool result, automatic pressure compaction; no claim for provider-overflow, image or subagent paths`,
+          }
+        : {}),
       scope:
         "actual production Profile builders + original Action launchers, real new Node workers and local fake provider; execution-world paths mapped to fixture cwd, no Docker/Live Actions claim",
       remoteModelCalls: 0,
@@ -383,6 +539,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const result = await runProductionSessionProbe({
     retainRoot: process.argv.includes("--retain-fake-state"),
     expectControlledRejection: process.argv.includes("--expect-controlled-rejection"),
+    prunerPressure: process.argv.includes("--pruner-pressure"),
+    prunerErrorResult: process.argv.includes("--pruner-error-result"),
   });
   const output = process.argv[2];
   if (output && !output.startsWith("--"))

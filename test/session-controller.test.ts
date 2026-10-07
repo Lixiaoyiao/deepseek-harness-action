@@ -26,6 +26,7 @@ import type {
   SessionManifestWithoutPayload,
   SessionRunIdentity,
 } from "../src/session/contracts.js";
+import { sessionKeyHash } from "../src/session/contracts.js";
 import { inputs, permissions, pullRequestContext } from "./helpers.js";
 
 const transport = vi.hoisted(() => ({
@@ -87,6 +88,7 @@ beforeEach(() => {
       },
       current: sourceIdentity(10),
       generation: 1,
+      selection: "created",
       claimArtifactId: 99,
       options,
     };
@@ -153,6 +155,34 @@ async function freshRuntime() {
 }
 
 describe("Controller Session integration with isolated transport", () => {
+  it("auto normalizes logical keys and reports automatic checkpoint selection", async () => {
+    const configured = options({ sessionMode: "auto", sessionKey: "Logical-Task" });
+    transport.prepare.mockImplementationOnce(async (request) => {
+      await request.authorizeCurrent();
+      return {
+        binding: request.binding,
+        current: sourceIdentity(10),
+        source: sourceIdentity(9),
+        generation: 2,
+        selection: "resumed",
+        claimArtifactId: 99,
+        options: request,
+      };
+    });
+    await prepareControllerSession(configured);
+    expect(transport.prepare.mock.calls[0]?.[0]).toMatchObject({
+      mode: "auto",
+      binding: { keyHash: sessionKeyHash("logical-task") },
+    });
+    expect(transport.prepare.mock.calls[0]?.[0]).not.toHaveProperty("sourceRunId");
+    expect(configured.state.session).toMatchObject({
+      mode: "auto",
+      status: "claimed",
+      selection: "resumed",
+      generation: 2,
+      sourceRunId: 9,
+    });
+  });
   it("retains an acknowledged claim when subsequent fresh metadata verification fails", async () => {
     const configured = options();
     transport.prepare.mockImplementationOnce((request) => {
@@ -280,6 +310,7 @@ describe("Controller Session integration with isolated transport", () => {
         source: sourceIdentity(9),
         checkpoint,
         generation: 2,
+        selection: "resumed",
         claimArtifactId: 99,
         options: original,
       }),

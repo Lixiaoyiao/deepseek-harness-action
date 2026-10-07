@@ -8,7 +8,7 @@ import { INSTALLER_ACTION_INPUTS } from "./action-inputs.generated.mjs";
 const DOCUMENTATION_URL =
   "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/create-deepseek-harness-action-v0.4.1/docs/setup.md";
 const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
-const MODES = new Set(["review", "commands", "both"]);
+const MODES = new Set(["review", "commands", "both", "session"]);
 const DSH_MODES = new Set(["controlled", "native"]);
 const DSH_MODE_INPUT_NAME = INSTALLER_ACTION_INPUTS.dshMode.name;
 const DSH_MODE_OPTION = `--${DSH_MODE_INPUT_NAME}`;
@@ -29,6 +29,10 @@ const WORKFLOWS = Object.freeze({
       source: "dsh-commands.yml",
       target: ".github/workflows/dsh-commands.yml",
     }),
+    session: Object.freeze({
+      source: "dsh-session.yml",
+      target: ".github/workflows/dsh-session.yml",
+    }),
   }),
   native: Object.freeze({
     review: Object.freeze({
@@ -39,18 +43,23 @@ const WORKFLOWS = Object.freeze({
       source: "dsh-commands-native.yml",
       target: ".github/workflows/dsh-commands.yml",
     }),
+    session: Object.freeze({
+      source: "dsh-session-native.yml",
+      target: ".github/workflows/dsh-session.yml",
+    }),
   }),
 });
 
 function usage() {
   return [
-    "Usage: create-deepseek-harness-action [--mode review|commands|both] [--dsh-mode controlled|native]",
+    "Usage: create-deepseek-harness-action [--mode review|commands|both|session] [--dsh-mode controlled|native]",
     "  [--test-commands '<JSON argv arrays>'] [--container-image '<name>@sha256:<digest>']",
     "",
     "Workflow choices:",
     "  1) PR Review",
     "  2) @dsh Coding Commands",
     "  3) Both",
+    "  4) Automatic Session",
     "",
     "DSH mode choices:",
     "  1) Controlled (default for non-interactive use)",
@@ -155,7 +164,7 @@ export function parseArguments(argv) {
     if (option === "mode") {
       if (mode !== undefined) throw new Error("--mode may be provided only once");
       if (value === undefined || value === "" || value.startsWith("--")) {
-        throw new Error(`--mode requires review, commands, or both\n\n${usage()}`);
+        throw new Error(`--mode requires review, commands, both, or session\n\n${usage()}`);
       }
       if (!MODES.has(value)) {
         throw new Error(`Invalid --mode value: ${value}\n\n${usage()}`);
@@ -190,9 +199,12 @@ export function parseArguments(argv) {
     dshMode = value;
   }
 
-  if (mode === "review" && (testCommands !== undefined || containerImage !== undefined)) {
+  if (
+    (mode === "review" || mode === "session") &&
+    (testCommands !== undefined || containerImage !== undefined)
+  ) {
     throw new Error(
-      "--test-commands/--container-image are for commands or both; review needs no write setup",
+      "--test-commands/--container-image are for commands or both; review and session need no write setup",
     );
   }
   return {
@@ -248,7 +260,8 @@ async function promptForMode(readline, output) {
           "  1) PR Review\n",
           "  2) @dsh Coding Commands\n",
           "  3) Both\n",
-          "Selection [1-3]: ",
+          "  4) Automatic Session\n",
+          "Selection [1-4]: ",
         ].join(""),
       )
     )
@@ -258,7 +271,8 @@ async function promptForMode(readline, output) {
     if (answer === "1" || answer === "review") return "review";
     if (answer === "2" || answer === "commands") return "commands";
     if (answer === "3" || answer === "both") return "both";
-    output.write("Please enter 1, 2, or 3.\n");
+    if (answer === "4" || answer === "session") return "session";
+    output.write("Please enter 1, 2, 3, or 4.\n");
   }
 }
 
@@ -307,6 +321,7 @@ function workflowDefinitions(mode, dshMode) {
   const workflows = WORKFLOWS[dshMode];
   if (mode === "review") return [workflows.review];
   if (mode === "commands") return [workflows.commands];
+  if (mode === "session") return [workflows.session];
   return [workflows.review, workflows.commands];
 }
 
@@ -457,6 +472,14 @@ function printSuccess(output, mode, dshMode, createdFiles, testCommands) {
   }
   if (mode === "commands" || mode === "both") {
     output.write("  @dsh: start an Issue or pull request comment with an @dsh command.\n");
+  }
+  if (mode === "session") {
+    output.write(
+      "  Session: commit this workflow to the default branch, then dispatch there with a lowercase session_key and a new prompt.\n",
+    );
+    output.write(
+      "  Reuse that key to continue automatically; no source run ID is needed. Failed, expired or unknown history requires maintainer reconciliation.\n",
+    );
   }
   output.write(`\nDocumentation: ${DOCUMENTATION_URL}\n`);
   output.write(

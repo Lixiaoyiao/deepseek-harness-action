@@ -8,7 +8,7 @@ npm create deepseek-harness-action@latest
 ```
 
 The interactive installer offers **PR Review**, **@dsh Coding Commands**, or
-**Both**, then lets you keep the compatible `controlled` DSH composition or
+**Both**, or **Automatic Session**, then lets you keep the compatible `controlled` DSH composition or
 explicitly select `native`. For non-interactive use, select the workflow mode
 explicitly; omitting `--dsh-mode` keeps `controlled`:
 
@@ -22,10 +22,23 @@ To generate native-mode workflows explicitly:
 npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
-Valid workflow modes are `review`, `commands`, and `both`; valid DSH modes are
+Valid workflow modes are `review`, `commands`, `both`, and `session`; valid DSH modes are
 `controlled` and `native`. The installer creates only workflow files. It does
 not add secrets, commit, push, or open a pull request. Existing workflow files
 are never overwritten.
+
+Automatic Session creates `.github/workflows/dsh-session.yml` with matching
+run-name, concurrency and key bindings. Commit it to the default branch, dispatch
+there with a lowercase key and a new prompt, then reuse the key for follow-ups:
+
+```bash
+npm create deepseek-harness-action@latest -- --mode session
+```
+
+This starter uses read-only authority and needs `contents: read` and `actions: read`.
+It requires no source run ID. A previous failed or unknown run, or a missing,
+expired, corrupt or incompatible checkpoint must be reconciled before continuing.
+See the [Session contract](../../docs/session.md) for boundaries and explicit usage.
 
 Installer 0.4.1 accepts explicit maintainer-selected write validation:
 
