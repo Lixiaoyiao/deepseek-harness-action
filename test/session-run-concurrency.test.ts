@@ -9,8 +9,10 @@ let inspect: (
   relation: string,
 ) => Record<string, unknown>;
 beforeAll(async () => {
-  inspect = (await import(pathToFileURL(resolve("scripts/probe-session-run-concurrency.mjs")).href))
-    .inspectSessionRunConcurrency;
+  const fixture = (await import(
+    pathToFileURL(resolve("scripts/probe-session-run-concurrency.mjs")).href
+  )) as { inspectSessionRunConcurrency: typeof inspect };
+  inspect = fixture.inspectSessionRunConcurrency;
 });
 
 const first = {
