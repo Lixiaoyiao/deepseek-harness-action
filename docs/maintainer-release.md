@@ -26,6 +26,12 @@ The advisory stable/RC/alpha upstream canaries never replace these production ga
 Do not rerun task-bearing failures without first reconciling their diagnostics
 and confirmed effects; preserve a bounded continuation record for external blocks.
 
+Installer `0.5.0` binds formal v0.10.0 commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1` only after
+[formal canary 37654999388](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/37654999388) succeeds.
+Pass this verified SHA as `DSH_ACTION_RELEASE_SHA`; qualify and publish the same
+actual tarball and repeat controlled/native and Session consumers against the
+official registry with a fresh anonymous cache. Historical identities below remain unchanged.
+
 For v0.9.3, keep DSH `0.2.0-rc.2` fixed and retain every existing gate.
 The opt-in [Session contract](session.md) adds independent regressions and
 the trusted [Session E2E workflow](../.github/workflows/session-e2e.yml).

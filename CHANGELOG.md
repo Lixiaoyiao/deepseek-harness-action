@@ -3,6 +3,12 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## Installer 0.5.0 - 2026-10-08
+
+- Adds controlled/native automatic Session starter workflows with matching key identity and concurrency; existing review/commands/both modes remain.
+- Binds only to formal Action v0.10.0 commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1` through `DSH_ACTION_RELEASE_SHA`, after formal controlled/native canary [37654999388](https://github.com/Lixiaoyiao/deepseek-harness-action/actions/runs/37654999388). Production DSH remains exactly `0.2.0-rc.2`.
+- Source CI, qualified tarball, official npm publication and fresh anonymous public installations remain separate release gates.
+
 ## [0.10.0] - 2026-10-07
 
 - Adds opt-in `session-mode: auto`: a maintainer-selected key creates a first

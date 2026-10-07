@@ -27,6 +27,7 @@ Choose one of these modes:
 - **PR Review** creates `.github/workflows/dsh-review.yml`.
 - **@dsh Coding Commands** creates `.github/workflows/dsh-commands.yml`.
 - **Both** creates both workflow files.
+- **Automatic Session** creates `.github/workflows/dsh-session.yml`.
 
 For CI or another non-interactive environment, pass the mode explicitly so the installer never waits for stdin:
 
@@ -42,10 +43,16 @@ native composition is intended:
 npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
+Automatic Session creates a read-only starter. Commit it to the default branch and dispatch there with a lowercase key for the logical task. Reuse that key with a new prompt for follow-ups; no source run ID is needed. Failed, expired, corrupt or unknown history is rejected explicitly.
+
+```bash
+npm create deepseek-harness-action@latest -- --mode session
+```
+
 The installer creates `.github/workflows/` when needed and refuses to overwrite
 an existing target workflow. It does not add secrets, commit or push changes,
-or open a pull request. Installer v0.4.1 targets the formal v0.9.3 Action
-release at `e7da1b33a043b4e2e26daa7e731c266817677a4a`, with DSH `0.2.0-rc.2`
+or open a pull request. Installer v0.5.0 targets the formal v0.10.0 Action
+release at `9c52f682bbeed1b7752a9e21273e6c13b01e79b1`, with DSH `0.2.0-rc.2`
 in both controlled and native workflows. Packing receives this verified
 immutable Action commit through `DSH_ACTION_RELEASE_SHA` after the tag,
 GitHub Release, and release canary agree. Source templates and packed
@@ -88,7 +95,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, pin the complete commit published in the corresponding GitHub Release. The existing v0.9.2 release remains `c184872f309ebfc5e57a0c5c1397c59e774709e0`; v0.9.3 is qualified separately. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, pin the complete commit published in the corresponding GitHub Release. The existing v0.9.2 release remains `c184872f309ebfc5e57a0c5c1397c59e774709e0`; v0.10.0 is qualified separately. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Core capabilities
 

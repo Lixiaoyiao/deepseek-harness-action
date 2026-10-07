@@ -19,6 +19,7 @@ npm create deepseek-harness-action@latest
 | **PR Review**            | `.github/workflows/dsh-review.yml`   |
 | **@dsh Coding Commands** | `.github/workflows/dsh-commands.yml` |
 | **Both**                 | 以上两个 workflow 文件               |
+| **Automatic Session**    | `.github/workflows/dsh-session.yml`  |
 
 在 CI 或其它非交互环境中，必须显式传入 mode，安装器不会等待 stdin：
 
@@ -33,9 +34,15 @@ npm create deepseek-harness-action@latest -- --mode both
 npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
+Automatic Session 生成只读 starter。提交到默认分支后，从默认分支 dispatch；为逻辑任务选择一个小写 key，后续使用同 key 和新的 prompt 自动续接，无需 source run ID。失败、过期、损坏或状态不明的历史会明确拒绝。
+
+```bash
+npm create deepseek-harness-action@latest -- --mode session
+```
+
 安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。
 它不会添加 `DEEPSEEK_API_KEY`、commit 或 push 改动，也不会创建 PR。安装器
-v0.4.1 对应正式 v0.9.3 Action commit `e7da1b33a043b4e2e26daa7e731c266817677a4a`，
+v0.5.0 对应正式 v0.10.0 Action commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1`，
 两种 composition 都保持精确 DSH `0.2.0-rc.2` pin。打包须在 Action Tag、GitHub
 Release 与 release canary 身份一致后，通过 `DSH_ACTION_RELEASE_SHA` 注入该
 核验出的完整、不可变 commit；源码模板与实际打包内容都须检查精确 DSH pin。
@@ -75,7 +82,7 @@ Action 的公开输入和扩展 schema，检查缺少凭据、DSH 精确版本�
 有时间上限、无 Controller 凭据的 `docker info` 预检会在安装 runtime 前
 报告 CLI/daemon 不可用。这些检查不授予权限，也不替代 Controller 的真实验证。
 
-安装器 0.4.1 为 `commands` / `both` 提供显式 `--test-commands` JSON argv
+安装器 0.5.0 为 `commands` / `both` 提供显式 `--test-commands` JSON argv
 和 `--container-image name@sha256:<64 位小写十六进制>`。维护者必须自行选择来源可信、经过审核、无凭据的验证命令。
 安装器不会自动发现或执行脚本；省略选项仍保留安全失败的验证占位符。
 
@@ -109,15 +116,15 @@ DEEPSEEK_API_KEY
 为了便于阅读，示例使用当前发布 Tag：
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
 ```
 
 生产环境应把 Tag 替换为从正式 Release 解析出的完整、不可变 commit SHA。
-installer v0.4.1 对应如下 v0.9.3 Action commit；独立审查的 installer 源码 commit
+installer v0.5.0 对应如下 v0.10.0 Action commit；独立审查的 installer 源码 commit
 是另一个身份：
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@e7da1b33a043b4e2e26daa7e731c266817677a4a # v0.9.3
+uses: Lixiaoyiao/deepseek-harness-action@9c52f682bbeed1b7752a9e21273e6c13b01e79b1 # v0.10.0
 ```
 
 必须分别核验 installer 源码 Tag 与 `DSH_ACTION_RELEASE_SHA` 打包输入；源码中的
@@ -164,7 +171,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.2.0-rc.2

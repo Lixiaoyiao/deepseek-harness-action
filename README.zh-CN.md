@@ -27,6 +27,7 @@ npm create deepseek-harness-action@latest
 - **PR Review** 创建 `.github/workflows/dsh-review.yml`。
 - **@dsh Coding Commands** 创建 `.github/workflows/dsh-commands.yml`。
 - **Both** 创建以上两个 workflow 文件。
+- **Automatic Session** 创建 `.github/workflows/dsh-session.yml`.
 
 在 CI 或其它非交互环境中，必须显式传入 mode，安装器不会等待 stdin：
 
@@ -41,9 +42,15 @@ npm create deepseek-harness-action@latest -- --mode both
 npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
+Automatic Session 生成只读 starter。提交到默认分支后，从默认分支 dispatch；为逻辑任务选择一个小写 key，后续使用同 key 和新的 prompt 自动续接，无需 source run ID。失败、过期、损坏或状态不明的历史会明确拒绝。
+
+```bash
+npm create deepseek-harness-action@latest -- --mode session
+```
+
 安装器会按需创建 `.github/workflows/`，如果目标 workflow 已存在则拒绝覆盖。
-它不会添加 Secret、commit 或 push 改动，也不会创建 PR。安装器 v0.4.1
-对应正式 v0.9.3 Action commit `e7da1b33a043b4e2e26daa7e731c266817677a4a`，
+它不会添加 Secret、commit 或 push 改动，也不会创建 PR。安装器 v0.5.0
+对应正式 v0.10.0 Action commit `9c52f682bbeed1b7752a9e21273e6c13b01e79b1`，
 controlled 与 native workflow 都保持 DSH `0.2.0-rc.2`。打包须在 Tag、GitHub
 Release 与 release canary 身份一致后，通过 `DSH_ACTION_RELEASE_SHA` 注入该
 核验过的完整、不可变 Action commit；源码模板与实际打包 workflow 都须保持精确 DSH pin。
@@ -85,7 +92,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应绑定对应 GitHub Release 公布的完整 commit。历史 v0.9.2 保持 `c184872f309ebfc5e57a0c5c1397c59e774709e0`，v0.9.3 单独验证与发布。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应绑定对应 GitHub Release 公布的完整 commit。历史 v0.9.2 保持 `c184872f309ebfc5e57a0c5c1397c59e774709e0`，v0.10.0 单独验证与发布。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 核心能力
 
