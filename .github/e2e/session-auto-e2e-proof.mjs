@@ -48,7 +48,10 @@ export function buildSessionTask(phase, challenge, memory) {
 
 export function assertSourceProof(proof, expected) {
   requireCheck(
-    proof?.schemaVersion === 1 && proof?.qualified === true && proof?.phase === "save",
+    proof?.schemaVersion === 1 &&
+      proof?.qualified === true &&
+      ["save", "resume"].includes(proof?.phase) &&
+      positive(proof?.generation),
     "SOURCE_PROOF",
   );
   for (const key of [
@@ -114,7 +117,7 @@ export function inspectCheckpointArchive(input, expected) {
       manifest.workflow.runAttempt === expected.runAttempt &&
       manifest.workflow.sourceSha === expected.harnessSha &&
       manifest.repository.owner + "/" + manifest.repository.repo === expected.repository &&
-      manifest.workflow.path === ".github/workflows/session-e2e.yml" &&
+      manifest.workflow.path === ".github/workflows/session-auto-e2e.yml" &&
       manifest.workflow.jobId === "session" &&
       manifest.workflow.jobName === "session",
     "MANIFEST_BINDING",
@@ -185,12 +188,15 @@ export function resultChecks(result, expected) {
         (expected.phase === "save" ? "read-write" : "read-only"),
     mode: result?.dsh?.mode === expected.dshMode,
     checkpoint:
-      session?.mode === expected.phase &&
+      session?.mode === (expected.sessionMode ?? expected.phase) &&
       session?.status === "saved" &&
-      session?.generation === (expected.phase === "save" ? 1 : 2) &&
+      session?.generation === (expected.generation ?? (expected.phase === "save" ? 1 : 2)) &&
       positive(session?.artifactId) &&
       HEX64.test(session?.payloadSha256) &&
       SESSION.test(session?.sessionId),
+    automaticSelection:
+      expected.sessionMode !== "auto" ||
+      session?.selection === (expected.phase === "save" ? "created" : "resumed"),
     newRun:
       expected.phase === "save" ||
       (session?.sourceRunId === expected.sourceRunId && expected.runId !== expected.sourceRunId),
@@ -210,6 +216,54 @@ export function resultChecks(result, expected) {
   };
 }
 
+/** Independent qualification oracle: key history comes from immutable run identity, not an artifact's survival. */
+export function selectSessionHistory(runs, current) {
+  requireCheck(Array.isArray(runs) && runs.length <= 1000, "HISTORY_BOUND");
+  const matches = runs.filter(
+    (run) =>
+      positive(run?.id) &&
+      run.id < current.runId &&
+      run.path === ".github/workflows/session-auto-e2e.yml" &&
+      run.event === "workflow_dispatch" &&
+      run.display_title?.toLowerCase() === current.runTitle.toLowerCase(),
+  );
+  matches.sort((a, b) => b.id - a.id);
+  const source = matches[0];
+  if (source === undefined) return { status: "first", source: undefined };
+  if (source.status !== "completed" || source.conclusion == null)
+    return { status: "unknown", source };
+  return { status: source.conclusion === "success" ? "success" : "failed", source };
+}
+
+/** Expected failure is a positive proof of denial before model/tool execution, never a success rewrite. */
+export function failureChecks(result, expected, actionOutcome) {
+  const diagnostic = result?.error?.message ?? "";
+  const patterns = {
+    failed: /Automatic Session history.*failed/iu,
+    unknown: /Automatic Session history.*unknown/iu,
+    expired: /Automatic Session history.*expired/iu,
+    missing: /Automatic Session history.*missing/iu,
+    incompatible: /Automatic Session history.*incompatible/iu,
+    corrupt: /Session (?:artifact|ZIP|manifest|payload)|checkpoint.*(?:invalid|corrupt)/iu,
+  };
+  return {
+    actionDenied: actionOutcome === "failure" && result?.conclusion === "failure",
+    checkpointError: result?.error?.code === "SESSION_CHECKPOINT",
+    exactBoundary: patterns[expected.expectedFailure]?.test(diagnostic) === true,
+    noWorkerStart: result?.isolation === undefined && result?.timing?.agentDurationMs === undefined,
+    noTaskExecution: (result?.loop?.turns ?? 0) === 0 && result?.taskOutput === undefined,
+    noToolExecution:
+      (result?.loop?.toolCalls ?? 0) === 0 &&
+      (result?.loop?.toolReceipts ?? []).length === 0 &&
+      (result?.loop?.dshToolReceipts ?? []).length === 0,
+    noCheckpoint: result?.session?.status === "failed" && result?.session?.artifactId === undefined,
+    noWrites:
+      !result?.write?.commitSha &&
+      !result?.write?.pullRequestNumber &&
+      (result?.write?.changedPaths ?? []).length === 0,
+  };
+}
+
 async function boundedFile(path, maximum) {
   const metadata = await lstat(path);
   requireCheck(
@@ -223,28 +277,30 @@ async function boundedFile(path, maximum) {
 
 function identity(env) {
   const value = {
-    phase: env.PHASE,
+    requestedPhase: env.PHASE,
+    sessionMode: "auto",
+    expectedFailure: env.EXPECTED_FAILURE ?? "none",
     repository: env.GITHUB_REPOSITORY,
     runId: Number(env.GITHUB_RUN_ID),
     runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
     candidateSha: env.CANDIDATE_SHA,
     harnessSha: env.HARNESS_SHA,
     dshMode: env.DSH_MODE,
-    sourceRunId: env.SOURCE_RUN_ID === "" ? undefined : Number(env.SOURCE_RUN_ID),
-    keyHash: digest(env.SESSION_KEY ?? ""),
+    keyHash: digest((env.SESSION_KEY ?? "").toLowerCase()),
+    runTitle: `dsh-session-${env.SESSION_KEY ?? ""}`,
   };
   requireCheck(
-    ["save", "resume"].includes(value.phase) &&
+    ["auto", "save", "resume"].includes(value.requestedPhase) &&
+      ["none", "failed", "expired", "missing", "corrupt", "unknown", "incompatible"].includes(
+        value.expectedFailure,
+      ) &&
       /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(value.repository) &&
       positive(value.runId) &&
       positive(value.runAttempt) &&
       HEX40.test(value.candidateSha) &&
       HEX40.test(value.harnessSha) &&
       ["controlled", "native"].includes(value.dshMode) &&
-      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(env.SESSION_KEY ?? "") &&
-      (value.phase === "save"
-        ? value.sourceRunId === undefined
-        : positive(value.sourceRunId) && value.sourceRunId !== value.runId),
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(env.SESSION_KEY ?? ""),
     "IDENTITY",
   );
   return value;
@@ -254,7 +310,7 @@ function identity(env) {
 function githubReader(env) {
   const audit = { credentialScope: "session-e2e-fixture-job-token", apiCommands: 0, retries: 0 };
   const read = (path, maximum = 1024 * 1024) => {
-    requireCheck(audit.apiCommands < 8, "REQUEST_BUDGET");
+    requireCheck(audit.apiCommands < 18, "REQUEST_BUDGET");
     audit.apiCommands += 1;
     try {
       return execFileSync("gh", ["api", "--method", "GET", path], {
@@ -277,15 +333,36 @@ function githubReader(env) {
 async function prepare(env, directory) {
   const current = identity(env);
   const reader = githubReader(env);
-  let parent;
-  if (current.phase === "resume") {
-    const run = reader.json(`repos/${current.repository}/actions/runs/${current.sourceRunId}`);
+  const runs = [];
+  for (let page = 1; page <= 10; page++) {
+    const listed = reader.json(
+      `repos/${current.repository}/actions/workflows/session-auto-e2e.yml/runs?event=workflow_dispatch&per_page=100&page=${page}`,
+    );
     requireCheck(
-      run.id === current.sourceRunId &&
+      listed.total_count <= 1000 && Array.isArray(listed.workflow_runs),
+      "HISTORY_BOUND",
+    );
+    runs.push(...listed.workflow_runs);
+    if (runs.length >= listed.total_count) break;
+    requireCheck(page < 10, "HISTORY_BOUND");
+  }
+  const history = selectSessionHistory(runs, current);
+  const phase = history.status === "first" ? "save" : "resume";
+  requireCheck(current.requestedPhase === "auto" || current.requestedPhase === phase, "PHASE");
+  if (current.expectedFailure !== "none") {
+    requireCheck(history.source !== undefined, "FAILURE_REQUIRES_HISTORY");
+    if (["failed", "unknown"].includes(current.expectedFailure))
+      requireCheck(history.status === current.expectedFailure, "FAILURE_HISTORY");
+  } else requireCheck(["first", "success"].includes(history.status), "HISTORY_NOT_SUCCESSFUL");
+  let parent;
+  if (phase === "resume" && current.expectedFailure === "none") {
+    const run = reader.json(`repos/${current.repository}/actions/runs/${history.source.id}`);
+    requireCheck(
+      run.id === history.source.id &&
         run.status === "completed" &&
         run.conclusion === "success" &&
         run.event === "workflow_dispatch" &&
-        run.path === ".github/workflows/session-e2e.yml" &&
+        run.path === ".github/workflows/session-auto-e2e.yml" &&
         run.head_sha === current.harnessSha &&
         run.head_branch === env.DEFAULT_BRANCH &&
         run.repository?.full_name === current.repository &&
@@ -324,8 +401,7 @@ async function prepare(env, directory) {
     );
     inspectCheckpointArchive(archive, {
       ...parent,
-      generation: 1,
-      permissionMode: "workspace-write",
+      permissionMode: parent.phase === "save" ? "workspace-write" : "read-only",
     });
     await writeFile(join(directory, "source-checkpoint.zip"), archive);
   }
@@ -333,6 +409,9 @@ async function prepare(env, directory) {
   const challenge = randomBytes(12).toString("hex");
   const expected = {
     ...current,
+    phase,
+    ...(history.source === undefined ? {} : { sourceRunId: history.source.id }),
+    generation: (parent?.generation ?? 0) + 1,
     memory,
     challenge,
     ...(parent === undefined
@@ -342,18 +421,20 @@ async function prepare(env, directory) {
   await writeFile(join(directory, "expected.json"), JSON.stringify(expected) + "\n", {
     mode: 0o600,
   });
-  const task = buildSessionTask(current.phase, challenge, memory);
+  const task = buildSessionTask(phase, challenge, memory);
   const delimiter = `session_task_${randomBytes(16).toString("hex")}`;
   await appendFile(
     env.GITHUB_OUTPUT,
-    `prompt<<${delimiter}\n${task.prompt}\n${delimiter}\nschema=${task.schema}\n`,
+    `prompt<<${delimiter}\n${task.prompt}\n${delimiter}\nschema=${task.schema}\nphase=${phase}\n`,
   );
   await writeFile(
     join(directory, "evidence", "preparation.json"),
     JSON.stringify({
-      phase: current.phase,
+      phase,
       runId: current.runId,
-      sourceRunId: current.sourceRunId,
+      sourceRunId: history.source?.id,
+      historyStatus: history.status,
+      expectedFailure: current.expectedFailure,
       fixtureRequests: reader.audit,
     }) + "\n",
   );
@@ -363,7 +444,9 @@ async function verify(env, directory) {
   const expected = JSON.parse(await boundedFile(join(directory, "expected.json"), 8 * 1024));
   const current = identity(env);
   for (const key of [
-    "phase",
+    "requestedPhase",
+    "sessionMode",
+    "expectedFailure",
     "runId",
     "runAttempt",
     "repository",
@@ -371,7 +454,7 @@ async function verify(env, directory) {
     "harnessSha",
     "dshMode",
     "keyHash",
-    "sourceRunId",
+    "runTitle",
   ])
     requireCheck(expected[key] === current[key], "CURRENT_BINDING");
   let result;
@@ -381,11 +464,14 @@ async function verify(env, directory) {
     /* A missing output is never a passing result. */
   }
   const reader = githubReader(env);
-  const checks = resultChecks(result, expected);
-  checks.actionOutcome = env.ACTION_OUTCOME === "success";
+  const isFailureProof = expected.expectedFailure !== "none";
+  const checks = isFailureProof
+    ? failureChecks(result, expected, env.ACTION_OUTCOME)
+    : resultChecks(result, expected);
+  if (!isFailureProof) checks.actionOutcome = env.ACTION_OUTCOME === "success";
   let checkpoint;
   let archiveError;
-  if (checks.checkpoint) {
+  if (!isFailureProof && checks.checkpoint) {
     try {
       const receipt = reader.json(
         `repos/${current.repository}/actions/artifacts/${result.session.artifactId}`,
@@ -406,10 +492,10 @@ async function verify(env, directory) {
         ...expected,
         sessionId: result.session.sessionId,
         payloadSha256: result.session.payloadSha256,
-        generation: current.phase === "save" ? 1 : 2,
-        permissionMode: current.phase === "save" ? "workspace-write" : "read-only",
+        generation: expected.generation,
+        permissionMode: expected.phase === "save" ? "workspace-write" : "read-only",
       });
-      if (current.phase === "resume") {
+      if (expected.phase === "resume") {
         const prior = unzipSync(
           await boundedFile(join(directory, "source-checkpoint.zip"), MAX_ARCHIVE),
         )["session.jsonl"];
@@ -426,12 +512,15 @@ async function verify(env, directory) {
           ? error.message
           : "SESSION_E2E_ARCHIVE_INVALID";
     }
-  } else checks.rawCheckpoint = false;
+  } else if (!isFailureProof) checks.rawCheckpoint = false;
   const qualified = Object.values(checks).every((value) => value === true);
   const evidence = {
     schemaVersion: 1,
     qualified,
     ...current,
+    phase: expected.phase,
+    sourceRunId: expected.sourceRunId,
+    expectedFailure: expected.expectedFailure,
     actionOutcome: outcome(env.ACTION_OUTCOME),
     errorCode: /^[A-Z][A-Z0-9_]{0,79}$/u.test(result?.error?.code ?? "") ? result.error.code : null,
     checks,
@@ -452,7 +541,7 @@ async function verify(env, directory) {
     join(directory, "evidence", "qualification.json"),
     JSON.stringify(evidence, null, 2) + "\n",
   );
-  if (qualified)
+  if (qualified && !isFailureProof)
     await writeFile(
       join(directory, "proof", "proof.json"),
       JSON.stringify({ ...evidence, memory: expected.memory, challenge: expected.challenge }) +

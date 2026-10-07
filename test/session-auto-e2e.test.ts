@@ -19,6 +19,15 @@ interface FixtureModule {
   ): { prompt: string; schema: string };
   assertSourceProof(proof: unknown, expected: Record<string, unknown>): unknown;
   resultChecks(result: unknown, expected: Record<string, unknown>): Record<string, boolean>;
+  failureChecks(
+    result: unknown,
+    expected: Record<string, unknown>,
+    actionOutcome: string,
+  ): Record<string, boolean>;
+  selectSessionHistory(
+    runs: unknown[],
+    current: Record<string, unknown>,
+  ): { status: string; source?: { id: number } };
   inspectCheckpointArchive(
     input: Uint8Array,
     expected: Record<string, unknown>,
@@ -39,7 +48,7 @@ const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("h
 
 beforeAll(async () => {
   fixture = (await import(
-    pathToFileURL(resolve(".github/e2e/session-e2e-proof.mjs")).href
+    pathToFileURL(resolve(".github/e2e/session-auto-e2e-proof.mjs")).href
   )) as FixtureModule;
 });
 
@@ -108,7 +117,7 @@ function checkpoint(
     schemaVersion: 1,
     repository: { id: 1, owner: "octo", repo: "repo" },
     workflow: {
-      path: ".github/workflows/session-e2e.yml",
+      path: ".github/workflows/session-auto-e2e.yml",
       jobId: "session",
       jobName: "session",
       runId: 10,
@@ -220,7 +229,10 @@ describe("independent Actions Session qualification fixture", () => {
 
       const workflow = object(
         parse(
-          await readFile(new URL("../.github/workflows/session-e2e.yml", import.meta.url), "utf8"),
+          await readFile(
+            new URL("../.github/workflows/session-auto-e2e.yml", import.meta.url),
+            "utf8",
+          ),
         ),
       );
       const steps = object(object(workflow.jobs).session).steps;
@@ -231,13 +243,12 @@ describe("independent Actions Session qualification fixture", () => {
         const expressions: Readonly<Record<string, string>> = {
           "${{ secrets.DEEPSEEK_API_KEY }}": "fixture-model-credential",
           "${{ github.token }}": "fixture-controller-credential",
-          "${{ inputs.phase == 'save' && 'write' || 'read' }}": phase === "save" ? "write" : "read",
+          "${{ steps.task.outputs.phase == 'save' && 'write' || 'read' }}":
+            phase === "save" ? "write" : "read",
           "${{ inputs.dsh_mode }}": mode,
           "${{ steps.task.outputs.prompt }}": task.prompt,
           "${{ steps.task.outputs.schema }}": task.schema,
-          "${{ inputs.phase }}": phase,
           "${{ inputs.session_key }}": "fixture-logical-task",
-          "${{ inputs.source_run_id }}": phase === "save" ? "" : "42",
         };
         const values = Object.fromEntries(
           Object.entries(declaredInputs).map(([name, raw]) => {
@@ -248,7 +259,11 @@ describe("independent Actions Session qualification fixture", () => {
             return [name, value];
           }),
         );
-        const parsed = loadInputs((name) => values[name] ?? "");
+        // This fixture also lands on the permanent harness before the candidate's auto parser.
+        // Session admission is asserted below; keep this schema-only parser check version-independent.
+        const parsed = loadInputs((name) =>
+          name === "session-mode" ? "off" : name === "session-key" ? "" : (values[name] ?? ""),
+        );
         expect(parsed.taskOutputSchema).toEqual(schema);
         expect(parsed.dshMode).toBe(mode);
         expect(parsed.taskAccess).toBe(phase === "save" ? "write" : "read");
@@ -320,6 +335,7 @@ describe("independent Actions Session qualification fixture", () => {
   it("requires genuine independent-run memory plus current read-only policy and fresh artifact", () => {
     const expected = identity({
       phase: "resume",
+      generation: 2,
       runId: 11,
       sourceRunId: 10,
       payloadSha256: "0".repeat(64),
@@ -361,12 +377,16 @@ describe("independent Actions Session qualification fixture", () => {
 
   it("keeps one static trusted producer, read-only fixture tokens and a real fail-closed validator", async () => {
     const workflow = await readFile(
-      new URL("../.github/workflows/session-e2e.yml", import.meta.url),
+      new URL("../.github/workflows/session-auto-e2e.yml", import.meta.url),
       "utf8",
     );
     const parsed = object(parse(workflow));
     expect(parsed.permissions).toEqual({});
-    expect(parsed.concurrency).toEqual({ group: "dsh-session", "cancel-in-progress": false });
+    expect(parsed["run-name"]).toBe("dsh-session-${{ inputs.session_key }}");
+    expect(parsed.concurrency).toEqual({
+      group: "dsh-session-${{ inputs.session_key }}",
+      "cancel-in-progress": false,
+    });
     const jobs = object(parsed.jobs);
     const producers = Object.entries(jobs).flatMap(([jobId, rawJob]) => {
       const steps = object(rawJob).steps;
@@ -390,8 +410,11 @@ describe("independent Actions Session qualification fixture", () => {
     const producer = object(producers[0]?.step);
     expect(producer.uses).toBe("./candidate-action");
     const inputs = object(producer.with);
-    expect(inputs["session-mode"]).toBe("${{ inputs.phase }}");
-    expect(inputs["task-access"]).toBe("${{ inputs.phase == 'save' && 'write' || 'read' }}");
+    expect(inputs["session-mode"]).toBe("auto");
+    expect(inputs["session-source-run-id"]).toBeUndefined();
+    expect(inputs["task-access"]).toBe(
+      "${{ steps.task.outputs.phase == 'save' && 'write' || 'read' }}",
+    );
     expect(inputs["deepseek-api-key"]).toBe("${{ secrets.DEEPSEEK_API_KEY }}");
     expect(inputs["base-url"]).toBeUndefined();
     expect(inputs["max-turns"]).toBe("1");
@@ -409,4 +432,110 @@ describe("independent Actions Session qualification fixture", () => {
     expect(JSON.stringify(jobs.gate)).not.toContain("secrets.");
     expect(workflow).not.toContain("continue-on-error: ${{");
   });
+
+  it("independently distinguishes first use, successful history, failed history and unknown history", () => {
+    const current = { runId: 20, runTitle: "dsh-session-Fixture-Key" };
+    const run = {
+      id: 10,
+      path: ".github/workflows/session-auto-e2e.yml",
+      event: "workflow_dispatch",
+      display_title: "dsh-session-fixture-key",
+      status: "completed",
+      conclusion: "success",
+    };
+    expect(fixture.selectSessionHistory([], current).status).toBe("first");
+    expect(fixture.selectSessionHistory([run], current)).toEqual({
+      status: "success",
+      source: run,
+    });
+    expect(
+      fixture.selectSessionHistory([run, { ...run, id: 11, conclusion: "failure" }], current)
+        .status,
+    ).toBe("failed");
+    expect(
+      fixture.selectSessionHistory(
+        [run, { ...run, id: 11, status: "in_progress", conclusion: null }],
+        current,
+      ).status,
+    ).toBe("unknown");
+    expect(fixture.selectSessionHistory([{ ...run, id: 21 }], current).status).toBe("first");
+    expect(
+      fixture.selectSessionHistory([{ ...run, display_title: "dsh-session-other" }], current)
+        .status,
+    ).toBe("first");
+  });
+
+  it("requires the auto selection, source run and advancing generation rather than a fresh replacement", () => {
+    const expected = identity({
+      sessionMode: "auto",
+      phase: "resume",
+      generation: 3,
+      runId: 12,
+      sourceRunId: 11,
+    });
+    const result = successResult({
+      taskOutput: { memory, challenge, phase: "resume" },
+      policy: { trust: "trusted-read" },
+      permissions: { workspaceWrite: false },
+      isolation: { backend: "docker", processIsolated: true, workspaceAccess: "read-only" },
+      session: {
+        mode: "auto",
+        selection: "resumed",
+        status: "saved",
+        generation: 3,
+        sourceRunId: 11,
+        sessionId: id,
+        artifactId: 32,
+        payloadSha256: "f".repeat(64),
+      },
+      write: {},
+    });
+    expect(Object.values(fixture.resultChecks(result, expected)).every(Boolean)).toBe(true);
+    expect(
+      fixture.resultChecks(
+        { ...result, session: { ...object(result.session), selection: "created" } },
+        expected,
+      ).automaticSelection,
+    ).toBe(false);
+    expect(
+      fixture.resultChecks(
+        { ...result, session: { ...object(result.session), generation: 1 } },
+        expected,
+      ).checkpoint,
+    ).toBe(false);
+  });
+
+  it.each(["failed", "unknown", "expired", "missing", "incompatible", "corrupt"])(
+    "requires actual fail-closed Action output for the %s boundary",
+    (expectedFailure) => {
+      const result = {
+        conclusion: "failure",
+        error: {
+          code: "SESSION_CHECKPOINT",
+          message:
+            expectedFailure === "corrupt"
+              ? "Session ZIP file metadata is invalid"
+              : `Automatic Session history is ${expectedFailure}`,
+        },
+        session: { mode: "auto", status: "failed" },
+        loop: { turns: 0, toolCalls: 0 },
+      };
+      const expected = { expectedFailure };
+      expect(Object.values(fixture.failureChecks(result, expected, "failure")).every(Boolean)).toBe(
+        true,
+      );
+      expect(fixture.failureChecks(result, expected, "success").actionDenied).toBe(false);
+      expect(
+        fixture.failureChecks({ ...result, loop: { turns: 1 } }, expected, "failure")
+          .noTaskExecution,
+      ).toBe(false);
+      expect(
+        fixture.failureChecks(
+          { ...result, error: { code: "SESSION_CHECKPOINT", message: "Unrelated failure" } },
+          expected,
+          "failure",
+        ).exactBoundary,
+      ).toBe(false);
+    },
+  );
 });

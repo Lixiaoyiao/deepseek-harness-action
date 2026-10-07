@@ -51,7 +51,7 @@ function readRun(repository, runId) {
   assert.equal(run.id, Number(runId));
   assert.equal(run.repository.full_name, repository);
   assert.equal(run.head_repository.full_name, repository);
-  assert.equal(run.path, ".github/workflows/session-e2e.yml");
+  assert.equal(run.path, ".github/workflows/session-auto-e2e.yml");
   assert.equal(run.event, "workflow_dispatch");
   assert.equal(run.status, "completed");
   const jobs = read(
