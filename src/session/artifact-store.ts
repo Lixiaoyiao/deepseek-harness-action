@@ -199,7 +199,7 @@ export interface SessionUploadReceipt {
 export interface PrepareSessionArtifactsOptions {
   readonly client: GitHubClient;
   readonly binding: SessionBinding;
-  readonly mode: "save" | "resume";
+  readonly mode: "auto" | "save" | "resume";
   readonly currentRun: {
     readonly runId: number;
     readonly runAttempt: number;
@@ -221,6 +221,7 @@ export interface PreparedSessionArtifacts {
   readonly source?: SessionRunIdentity;
   readonly checkpoint?: SessionCheckpoint;
   readonly generation: number;
+  readonly selection: "created" | "resumed";
   readonly claimArtifactId: number;
   readonly options: PrepareSessionArtifactsOptions;
 }
@@ -244,6 +245,7 @@ async function runArtifacts(
   signal: AbortSignal,
 ): Promise<ArtifactMetadata[]> {
   const found: ArtifactMetadata[] = [];
+  const seen = new Set<number>();
   for (let page = 1; page <= 10; page++) {
     const response = await client.rest.actions.listWorkflowRunArtifacts({
       ...args(binding, signal),
@@ -253,8 +255,12 @@ async function runArtifacts(
     });
     if (response.data.total_count > 1000)
       denied("Session run artifacts exceed the verification bound");
-    found.push(...response.data.artifacts);
-    if (found.length >= response.data.total_count) return found;
+    for (const artifact of response.data.artifacts) {
+      if (seen.has(artifact.id)) denied("Session run artifact listing was unstable or duplicated");
+      seen.add(artifact.id);
+      found.push(artifact);
+    }
+    if (found.length === response.data.total_count) return found;
   }
   return denied("Session run artifact listing was incomplete");
 }
@@ -274,6 +280,7 @@ async function verifyRun(
     runId,
     successful,
     signal,
+    ...(options.mode === "auto" ? { automaticKeyHash: binding.keyHash } : {}),
     ...(!successful
       ? {
           runAttempt: options.currentRun.runAttempt,
@@ -284,12 +291,94 @@ async function verifyRun(
   });
 }
 
+/** Run names retain evidence of a logical key when its short-lived artifacts expire. */
+async function automaticHistorySource(
+  options: PrepareSessionArtifactsOptions,
+  binding: SessionBinding,
+  current: VerifiedSessionWorkflowRun,
+  signal: AbortSignal,
+): Promise<number | undefined> {
+  if (current.sessionTitle === undefined || !Number.isFinite(Date.parse(current.runCreatedAt)))
+    denied("Automatic Session history has unknown current run identity");
+  const seen = new Set<number>();
+  let complete = false;
+  let currentFound = false;
+  let previous:
+    { id: number; updated: number; status: string | null; conclusion: string | null } | undefined;
+  for (let page = 1; page <= 10; page++) {
+    const response = await options.client.rest.actions.listWorkflowRuns({
+      ...args(binding, signal),
+      workflow_id: binding.workflow.path,
+      per_page: 100,
+      page,
+    });
+    if (response.data.total_count > 1000)
+      denied(
+        "Automatic Session history is unknown: workflow runs exceed the complete-history bound",
+      );
+    for (const run of response.data.workflow_runs) {
+      if (!Number.isSafeInteger(run.id) || run.id < 1 || typeof run.display_title !== "string")
+        denied("Automatic Session history is unknown: run identity or title is missing");
+      if (seen.has(run.id))
+        denied("Automatic Session history is unknown: unstable or duplicate run listing");
+      seen.add(run.id);
+      if (run.id === current.runId) {
+        currentFound = run.display_title.toLowerCase() === current.sessionTitle;
+        continue;
+      }
+      if (
+        run.id < current.runId &&
+        !/^dsh-session-[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(run.display_title)
+      )
+        denied(
+          "Automatic Session history is unknown: an earlier workflow run has no verifiable key; adopt a new workflow path and new key",
+        );
+      if (run.display_title.toLowerCase() !== current.sessionTitle) continue;
+      if (run.id > current.runId) {
+        if (!["queued", "waiting", "pending", "requested"].includes(run.status ?? ""))
+          denied(
+            "Automatic Session history has a stale or concurrent same-key conflict: a newer request already started or finished",
+          );
+        continue;
+      }
+      const updated = Date.parse(run.updated_at);
+      if (!Number.isFinite(updated) || run.path !== binding.workflow.path)
+        denied("Automatic Session history has unknown or inconsistent run provenance");
+      if (
+        previous === undefined ||
+        updated > previous.updated ||
+        (updated === previous.updated && run.id > previous.id)
+      )
+        previous = { id: run.id, updated, status: run.status, conclusion: run.conclusion };
+    }
+    if (seen.size === response.data.total_count) {
+      complete = true;
+      break;
+    }
+  }
+  if (!complete || !currentFound)
+    denied(
+      "Automatic Session history is unknown: complete workflow run listing could not be verified",
+    );
+  if (previous === undefined) return undefined;
+  if (previous.status !== "completed" || previous.conclusion === null)
+    denied(
+      "Automatic Session history is unknown: a previous same-key run is unfinished or uncertain; inspect effects and choose a new key",
+    );
+  if (previous.conclusion !== "success")
+    denied(
+      "Automatic Session history failed: the latest same-key run did not succeed; inspect effects and choose a new key",
+    );
+  return previous.id;
+}
+
 async function latestGeneration(
   options: PrepareSessionArtifactsOptions,
   binding: SessionBinding,
   signal: AbortSignal,
 ): Promise<number> {
   const candidates: ArtifactMetadata[] = [];
+  const seen = new Set<number>();
   let complete = false;
   for (let page = 1; page <= 10; page++) {
     const response = await options.client.rest.actions.listArtifactsForRepo({
@@ -299,6 +388,22 @@ async function latestGeneration(
     });
     if (response.data.total_count > 1000)
       denied("Repository artifacts exceed the bound needed to prove the latest Session generation");
+    for (const artifact of response.data.artifacts) {
+      if (seen.has(artifact.id)) denied("Repository artifact listing was unstable or duplicated");
+      seen.add(artifact.id);
+    }
+    if (
+      options.mode === "auto" &&
+      response.data.artifacts.some(
+        (item) =>
+          item.name.startsWith(`dsh-session-${binding.keyHash}-`) &&
+          !item.name.endsWith("-claim") &&
+          !item.name.startsWith(sessionArtifactPrefix(binding)),
+      )
+    )
+      denied(
+        "Automatic Session history is incompatible with the current workflow, task or runtime binding; choose a new key",
+      );
     candidates.push(
       ...response.data.artifacts.filter(
         (item) => item.name.startsWith(sessionArtifactPrefix(binding)) && !item.expired,
@@ -306,7 +411,7 @@ async function latestGeneration(
     );
     if (candidates.length > 20)
       denied("Session checkpoint candidates exceed the provenance verification bound");
-    if (page * 100 >= response.data.total_count) {
+    if (seen.size === response.data.total_count) {
       complete = true;
       break;
     }
@@ -573,6 +678,10 @@ export async function prepareSessionArtifacts(
     options.retentionDays > 7
   )
     denied("Session retention must be 1-7 days");
+  if (options.mode === "auto" && options.sourceRunId !== undefined)
+    denied(
+      "Automatic Session selects its own source; session-source-run-id is only for explicit resume",
+    );
   const signal = budget(options);
   const current = await verifyRun(
     options,
@@ -595,15 +704,19 @@ export async function prepareSessionArtifacts(
     )
   )
     denied("This run attempt already claimed or saved the Session; it cannot advance twice");
+  const selectedRunId =
+    options.mode === "auto"
+      ? await automaticHistorySource(options, binding, current, signal)
+      : options.sourceRunId;
   const latest = await latestGeneration(options, binding, signal);
   if (latest >= 1_000_000)
     denied("Session generation limit has been reached; choose a new explicit Session key");
   let checkpoint: SessionCheckpoint | undefined;
   let source: VerifiedSessionWorkflowRun | undefined;
-  if (options.mode === "resume") {
-    if (options.sourceRunId === undefined || options.sourceRunId === current.runId)
+  if (options.mode === "resume" || (options.mode === "auto" && selectedRunId !== undefined)) {
+    if (selectedRunId === undefined || selectedRunId === current.runId)
       denied("Resume requires an explicit distinct source run ID");
-    const producer = await verifyRun(options, binding, options.sourceRunId, true, signal);
+    const producer = await verifyRun(options, binding, selectedRunId, true, signal);
     source = producer;
     if (source.jobName !== binding.workflow.jobName)
       denied("Session producer job name differs from the current trusted workflow");
@@ -612,6 +725,15 @@ export async function prepareSessionArtifacts(
         item.name.startsWith(sessionArtifactPrefix(binding)) &&
         item.name.endsWith(`-a${String(producer.runAttempt)}`),
     );
+    if (options.mode === "auto" && candidates.length === 0)
+      denied(
+        "Automatic Session history checkpoint is missing; inspect the previous run and choose a new key",
+      );
+    if (
+      options.mode === "auto" &&
+      candidates.some((item) => item.expired || Date.parse(item.expires_at ?? "") <= Date.now())
+    )
+      denied("Automatic Session history checkpoint is expired; choose a new key");
     if (candidates.length !== 1 || candidates[0] === undefined)
       denied("Source run must contain exactly one checkpoint for this Session binding and attempt");
     checkpoint = await downloadCheckpoint(options, binding, source, candidates[0], signal);
@@ -622,7 +744,9 @@ export async function prepareSessionArtifacts(
       denied("Resume parent is stale or its generation is inconsistent");
   } else if (latest !== 0)
     denied(
-      "A successful Session checkpoint already exists; select resume with its exact source run instead of starting a fork",
+      options.mode === "auto"
+        ? "Automatic Session history is unknown: checkpoints exist without matching run-name history; choose a new key"
+        : "A successful Session checkpoint already exists; select resume with its exact source run instead of starting a fork",
     );
   const generation = latest + 1;
   const claim = {
@@ -646,6 +770,7 @@ export async function prepareSessionArtifacts(
     current,
     generation,
     claimArtifactId: receipt.id,
+    selection: checkpoint === undefined ? "created" : "resumed",
     options,
     ...(source === undefined ? {} : { source }),
     ...(checkpoint === undefined ? {} : { checkpoint }),
@@ -678,6 +803,14 @@ export async function saveSessionArtifact(options: {
     digest(checkpoint.payload) !== checkpoint.manifest.payload.sha256
   )
     denied("Session checkpoint generation or payload changed before save");
+  if (
+    prepared.options.mode === "auto" &&
+    (await automaticHistorySource(prepared.options, prepared.binding, current, signal)) !==
+      prepared.source?.runId
+  )
+    denied(
+      "Automatic Session parent history changed before save; conflicting advances are forbidden",
+    );
   if (
     (await latestGeneration(prepared.options, prepared.binding, signal)) !==
     prepared.generation - 1

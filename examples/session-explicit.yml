@@ -1,14 +1,19 @@
-name: DSH automatic Session
-run-name: dsh-session-${{ inputs.session_key }}
+name: DSH explicit Session
 
 on:
   workflow_dispatch:
     inputs:
-      session_key:
-        description: Reuse this key to continue the task; use a fresh key to start another Session
-        required: true
+      session_mode:
+        description: Save a new task or resume its latest successful run
+        type: choice
+        default: save
+        options:
+          - save
+          - resume
+      source_run_id:
+        description: For resume only, the latest successful run ID of this workflow
         type: string
-        default: repository-summary
+        default: ""
       mode:
         description: Keep the same composition when resuming
         type: choice
@@ -21,9 +26,9 @@ on:
         type: string
         default: Summarize this repository. If this Session already has a summary, refine it using the current repository context.
 
-# Keep the same key expression in run-name, concurrency and the Action input.
+# Keep this literal at workflow level: all Session workflows in the repo share it.
 concurrency:
-  group: dsh-session-${{ inputs.session_key }}
+  group: dsh-session
   cancel-in-progress: false
 
 permissions:
@@ -46,6 +51,8 @@ jobs:
           dsh-mode: ${{ inputs.mode }}
           isolation: docker
           # The Action default image is already digest-pinned.
-          session-mode: auto
-          session-key: ${{ inputs.session_key }}
+          session-mode: ${{ inputs.session_mode }}
+          # Literal maintainer-selected key; choose a fresh key for a new task.
+          session-key: repository-summary
+          session-source-run-id: ${{ inputs.source_run_id }}
           session-retention-days: "3"

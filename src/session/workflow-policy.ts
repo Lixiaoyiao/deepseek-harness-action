@@ -4,6 +4,7 @@ import { PolicyDeniedError } from "../errors.js";
 import type { GitHubClient } from "../github/client.js";
 import {
   SESSION_CONCURRENCY_GROUP,
+  sessionKeyHash,
   type SessionRepository,
   type SessionRunIdentity,
 } from "./contracts.js";
@@ -27,6 +28,7 @@ export interface SessionWorkflowPolicy {
 export function assertSessionWorkflowPolicy(
   source: string,
   expectedJobId: string,
+  automaticKeyHash?: string,
 ): SessionWorkflowPolicy {
   if (Buffer.byteLength(source) > MAX_WORKFLOW_BYTES)
     throw new PolicyDeniedError("Session workflow exceeds 256 KiB");
@@ -38,17 +40,13 @@ export function assertSessionWorkflowPolicy(
   } catch {
     throw new PolicyDeniedError("Session workflow aliases or mappings are not supported");
   }
-  const concurrency = object(workflow.concurrency);
-  if (
-    concurrency.group !== SESSION_CONCURRENCY_GROUP ||
-    concurrency["cancel-in-progress"] !== false
-  ) {
-    throw new PolicyDeniedError(
-      "Session requires workflow-level literal concurrency group dsh-session and cancel-in-progress: false",
-    );
-  }
   const jobs = object(workflow.jobs);
-  const producers: { jobId: string; job: Record<string, unknown>; stepIndex: number }[] = [];
+  const producers: {
+    jobId: string;
+    job: Record<string, unknown>;
+    stepIndex: number;
+    inputs: Record<string, unknown>;
+  }[] = [];
   for (const [jobId, rawJob] of Object.entries(jobs)) {
     const job = object(rawJob);
     if (!Array.isArray(job.steps)) continue;
@@ -60,7 +58,7 @@ export function assertSessionWorkflowPolicy(
       if (typeof step.uses !== "string" || step.uses === "" || step.run !== undefined) {
         throw new PolicyDeniedError("Session must be enabled explicitly on a direct Action step");
       }
-      producers.push({ jobId, job, stepIndex });
+      producers.push({ jobId, job, stepIndex, inputs });
     }
   }
   if (producers.length !== 1 || producers[0]?.jobId !== expectedJobId) {
@@ -69,6 +67,40 @@ export function assertSessionWorkflowPolicy(
     );
   }
   const producer = producers[0];
+  const concurrency = object(workflow.concurrency);
+  if (concurrency["cancel-in-progress"] !== false)
+    throw new PolicyDeniedError("Session requires workflow-level cancel-in-progress: false");
+  if (automaticKeyHash === undefined) {
+    if (concurrency.group !== SESSION_CONCURRENCY_GROUP)
+      throw new PolicyDeniedError(
+        "Explicit Session requires workflow-level literal concurrency group dsh-session",
+      );
+  } else {
+    const key = producer.inputs["session-key"];
+    if (typeof key !== "string")
+      throw new PolicyDeniedError("Automatic Session requires an explicit maintainer-selected key");
+    const input = /^\$\{\{ inputs\.([A-Za-z_][A-Za-z0-9_-]*) \}\}$/u.exec(key);
+    if (input !== null) {
+      const dispatch = object(object(workflow.on).workflow_dispatch);
+      const configured = object(object(dispatch.inputs)[input[1] ?? ""]);
+      if (
+        configured.required !== true ||
+        ![undefined, "string"].includes(configured.type as string | undefined)
+      )
+        throw new PolicyDeniedError(
+          "Automatic Session key input must be a required workflow_dispatch string",
+        );
+    } else if (sessionKeyHash(key.toLowerCase()) !== automaticKeyHash) {
+      throw new PolicyDeniedError(
+        "Automatic Session workflow literal key differs from the current key",
+      );
+    }
+    const scoped = `${SESSION_CONCURRENCY_GROUP}-${key}`;
+    if (concurrency.group !== scoped || workflow["run-name"] !== scoped)
+      throw new PolicyDeniedError(
+        "Automatic Session requires identical key-scoped workflow concurrency and run-name: dsh-session-<session-key>",
+      );
+  }
   if (
     producer.job.strategy !== undefined &&
     Object.hasOwn(object(producer.job.strategy), "matrix")
@@ -93,6 +125,8 @@ export interface VerifiedSessionWorkflowRun extends SessionRunIdentity {
   readonly jobName: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly sessionTitle?: string;
+  readonly runCreatedAt: string;
 }
 
 export interface VerifySessionWorkflowRunOptions {
@@ -105,6 +139,7 @@ export interface VerifySessionWorkflowRunOptions {
   readonly workflowSha?: string;
   readonly expectedActorLogin?: string;
   readonly successful: boolean;
+  readonly automaticKeyHash?: string;
   readonly signal: AbortSignal;
 }
 
@@ -140,6 +175,10 @@ export async function verifySessionWorkflowRun(
   }
   if (options.runAttempt !== undefined && run.run_attempt !== options.runAttempt)
     throw new PolicyDeniedError("Session run attempt has changed");
+  if (options.automaticKeyHash !== undefined && !options.successful && run.run_attempt !== 1)
+    throw new PolicyDeniedError(
+      "Automatic Session cannot rerun an old run; use a new maintainer workflow dispatch to avoid task replay",
+    );
   if (options.workflowSha !== undefined && run.head_sha !== options.workflowSha)
     throw new PolicyDeniedError("Session workflow SHA cannot be verified against the current run");
   if (!/^[a-f0-9]{40}$/u.test(run.head_sha) || run.run_attempt === undefined || run.run_attempt < 1)
@@ -205,7 +244,16 @@ export async function verifySessionWorkflowRun(
   } catch {
     throw new PolicyDeniedError("Session workflow must contain valid UTF-8");
   }
-  const policy = assertSessionWorkflowPolicy(source, options.jobId);
+  const policy = assertSessionWorkflowPolicy(source, options.jobId, options.automaticKeyHash);
+  let sessionTitle: string | undefined;
+  if (options.automaticKeyHash !== undefined) {
+    const key = /^dsh-session-([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u.exec(run.display_title);
+    if (key?.[1] === undefined || sessionKeyHash(key[1].toLowerCase()) !== options.automaticKeyHash)
+      throw new PolicyDeniedError(
+        "Automatic Session run-name does not match its verified logical key",
+      );
+    sessionTitle = run.display_title.toLowerCase();
+  }
   const jobs = await client.rest.actions.listJobsForWorkflowRunAttempt({
     ...parameters,
     run_id: run.id,
@@ -237,5 +285,7 @@ export async function verifySessionWorkflowRun(
     jobName: policy.jobName,
     createdAt: job.started_at,
     updatedAt: job.completed_at ?? run.updated_at,
+    runCreatedAt: run.created_at,
+    ...(sessionTitle === undefined ? {} : { sessionTitle }),
   };
 }

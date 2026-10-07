@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.9.3
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

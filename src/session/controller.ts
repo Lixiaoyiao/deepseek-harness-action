@@ -45,6 +45,7 @@ export async function prepareControllerSession(options: {
   const { inputs, authorized, state, composition, extensions, deadlineMs, signal } = options;
   if (inputs.sessionMode === "off") return undefined;
   const mode = inputs.sessionMode;
+  const logicalKey = mode === "auto" ? inputs.sessionKey.toLowerCase() : inputs.sessionKey;
   const sourceRunId =
     inputs.sessionSourceRunId === "" ? undefined : Number(inputs.sessionSourceRunId);
   state.session = {
@@ -129,7 +130,7 @@ export async function prepareControllerSession(options: {
               }
             : {
                 kind: "automation",
-                identity: `${authorized.command.operation}:${inputs.sessionKey}`,
+                identity: `${authorized.command.operation}:${logicalKey}`,
               },
         runtime: {
           dshVersion: "0.2.0-rc.2",
@@ -138,7 +139,7 @@ export async function prepareControllerSession(options: {
           containerImage: inputs.containerImage,
           extensionDigest: extensions.configurationDigest,
         },
-        keyHash: sessionKeyHash(inputs.sessionKey),
+        keyHash: sessionKeyHash(logicalKey),
       },
       currentRun: { runId, runAttempt, workflowSha, actorLogin: context.actor },
       ...(sourceRunId === undefined ? {} : { sourceRunId }),
@@ -194,6 +195,8 @@ export async function prepareControllerSession(options: {
       mode,
       status: "claimed",
       generation: prepared.generation,
+      selection: prepared.selection,
+      ...(prepared.source === undefined ? {} : { sourceRunId: prepared.source.runId }),
       claimArtifactId: prepared.claimArtifactId,
     };
   } catch (error: unknown) {

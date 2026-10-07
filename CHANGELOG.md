@@ -3,6 +3,21 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.10.0] - 2026-10-07
+
+- Adds opt-in `session-mode: auto`: a maintainer-selected key creates a first
+  Session or locates its latest successful compatible checkpoint without a
+  manually supplied source run ID. Existing explicit save/resume remains available.
+- Binds automatic discovery and workflow concurrency to the same key. Different
+  keys can execute concurrently. Bounded history scans, failed or unknown runs,
+  missing, expired, corrupt and incompatible checkpoints fail closed before a task
+  can silently restart or fall back to an older generation.
+- Retains the exact production DSH `0.2.0-rc.2` package family and the existing
+  controlled/native, credential, current-authorization, source, generation and
+  Gateway boundaries. The separate upstream alpha canary is advisory.
+- Adds a read-only automatic Session starter to the installer; its next npm
+  release is qualified and bound separately after the formal Action canary.
+
 ## [0.9.3] - 2026-10-04
 
 - Adds explicit `session-mode`, `session-key`, `session-source-run-id` and bounded

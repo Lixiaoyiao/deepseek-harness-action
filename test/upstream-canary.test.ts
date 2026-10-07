@@ -53,7 +53,7 @@ describe("DSH upstream compatibility canary", () => {
     expect(workflow).not.toMatch(/^\s+(?:pull_request|push|release):/mu);
     expect(workflow).toContain("continue-on-error: true");
     expect(workflow).toContain("fail-fast: false");
-    expect(workflow).toContain("channel: [stable, rc]");
+    expect(workflow).toContain("channel: [stable, rc, alpha]");
     expect(workflow).toContain('node scripts/upstream-canary.mjs run "$CANDIDATE_CHANNEL"');
     expect(workflow).toContain('node scripts/upstream-canary.mjs report "$CANDIDATE_CHANNEL"');
     expect(workflow).toContain("if: always()");
@@ -105,6 +105,34 @@ describe("DSH upstream compatibility canary", () => {
         audited,
       ),
     ).toEqual({ stable: null, rc: candidate });
+  });
+
+  it("selects the exact newest non-deprecated 0.2.1 alpha independently of release streams and dist-tags", () => {
+    const published = {
+      ...inventory(
+        audited,
+        "0.2.1-alpha.2",
+        "0.2.1-alpha.10",
+        "0.2.1-alpha",
+        "0.2.2-alpha.99",
+        "0.2.1-alpha.01",
+        "0.2.1",
+        "0.2.1-rc.1",
+      ),
+      "dist-tags": { alpha: "0.2.2-alpha.99" },
+    };
+    expect(invoke("selectAlphaCandidate", published, audited)).toBe("0.2.1-alpha.10");
+    expect(invoke("selectCandidates", published, audited)).toEqual({ stable: "0.2.1", rc: null });
+    expect(
+      invoke(
+        "selectAlphaCandidate",
+        { versions: { [audited]: {}, "0.2.1-alpha.10": { deprecated: "withdrawn" } } },
+        audited,
+      ),
+    ).toBeNull();
+    expect(() => invoke("selectAlphaCandidate", inventory("0.2.1-alpha.1"), audited)).toThrow(
+      "The audited DSH version is absent",
+    );
   });
 
   it("uses npm's supported media type for inventory and exact-version metadata endpoints", () => {

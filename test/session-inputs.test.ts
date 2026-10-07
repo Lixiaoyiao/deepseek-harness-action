@@ -24,6 +24,7 @@ describe("explicit Session configuration", () => {
   it.each(["controlled", "native"])("accepts a Docker %s save and explicit resume", (mode) => {
     const common = { "session-key": "maintainer-selected.task", "dsh-mode": mode };
     expect(configured({ ...common, "session-mode": "save" }).sessionMode).toBe("save");
+    expect(configured({ ...common, "session-mode": "auto" }).sessionMode).toBe("auto");
     expect(
       configured({ ...common, "session-mode": "resume", "session-source-run-id": "123456789" })
         .sessionSourceRunId,
@@ -36,6 +37,7 @@ describe("explicit Session configuration", () => {
     { "session-mode": "save", "session-key": "../runner-path" },
     { "session-mode": "resume", "session-key": "task" },
     { "session-mode": "save", "session-key": "task", "session-source-run-id": "123" },
+    { "session-mode": "auto", "session-key": "task", "session-source-run-id": "123" },
     {
       "session-mode": "resume",
       "session-key": "task",

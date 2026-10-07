@@ -106,7 +106,7 @@ export const ACTION_INPUT_CONTRACT = [
     required: false,
     default: "off",
     description:
-      "Explicit Session opt-in: off, save, or resume. Uses the fixed DSH public persistence interface; requires Docker and a verified trusted workflow with repository-wide dsh-session concurrency.",
+      "Session opt-in: off, auto, save, or resume. Auto creates or continues the latest successful compatible checkpoint by key, with verified key-scoped concurrency and run-name history. Requires Docker; explicit save/resume remain supported.",
     docsGroup: "runtime",
   },
   {
@@ -115,7 +115,7 @@ export const ACTION_INPUT_CONTRACT = [
     required: false,
     default: "",
     description:
-      "Maintainer-selected logical Session key, 1-64 ASCII letters, digits, dot, underscore or hyphen. Bound to the repository, workflow job, task and runtime; never grants authority.",
+      "Maintainer-selected logical Session key, 1-64 ASCII letters, digits, dot, underscore or hyphen. Auto keys are case-insensitive, matching GitHub concurrency. Bound to repository, workflow job, task and runtime; never grants authority.",
     docsGroup: "runtime",
   },
   {

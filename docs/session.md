@@ -1,4 +1,4 @@
-# Session checkpoints and explicit resume
+# Session checkpoints and automatic continuation
 
 [中文](zh-CN/session.md) · [Configuration](configuration.md) · [Security](../SECURITY.md)
 
@@ -9,19 +9,29 @@ NDJSON event projection or concatenated GitHub comments is not a Session log.
 
 Copy [the dispatch example](../examples/session.yml) to
 `.github/workflows/dsh-session.yml`, commit it to the default branch, and set
-`DEEPSEEK_API_KEY`. Pin the complete Action commit published in the v0.9.3
-Release for production. Dispatch `save` from the default branch. After
-that run succeeds, dispatch the **same workflow** with `resume`, the same key and
-mode, and its numeric Actions run ID as `source_run_id`. The new prompt may ask a
-follow-up about the same task. A successful resume saves the next generation;
-subsequent resumes must name that latest successful run.
+`DEEPSEEK_API_KEY`. Pin the complete Action commit published in the formal
+Release for production. Dispatch `auto` from the default branch with a
+maintainer-selected key. With no recorded history for that key, the Action starts
+generation 1. Dispatch the **same workflow** with the same key and mode to continue
+the latest successful compatible checkpoint automatically. No source run ID is
+needed. The new prompt may ask a follow-up about the same task; a successful
+continuation saves the next generation. The result records `selection: created`
+or `resumed`, generation and the selected `sourceRunId`.
 
-| Input                    | Meaning                                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `session-mode`           | `off` (default), `save` or `resume`. `save` starts a fresh logical Session.                                 |
-| `session-key`            | Maintainer-selected 1–64 ASCII letters, digits, dots, underscores or hyphens. Required for `save`/`resume`. |
-| `session-source-run-id`  | Explicit successful producer run ID, required only for `resume`. The current verified run attempt is used.  |
-| `session-retention-days` | Default `3`; integer `1`–`7`. Expired state is rejected.                                                    |
+The [explicit example](../examples/session-explicit.yml) retains `save` and
+`resume`. `save` starts a fresh logical key; `resume` requires the exact latest
+successful producer's numeric `source_run_id`. Explicit workflows retain their
+original concurrency contract. When adopting auto from an explicit workflow,
+choose a new workflow file path and a new key. An earlier run without a verifiable
+key run-name makes that workflow's history unknown and blocks auto, even if its
+artifacts have disappeared.
+
+| Input                    | Meaning                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `session-mode`           | `off` (default), `auto`, `save` or `resume`. `auto` creates or continues by key.                                                     |
+| `session-key`            | Maintainer-selected 1–64 ASCII letters, digits, dots, underscores or hyphens. Required when enabled. Auto keys are case-insensitive. |
+| `session-source-run-id`  | Explicit successful producer run ID, required only for `resume`. The current verified run attempt is used.                           |
+| `session-retention-days` | Default `3`; integer `1`–`7`. Expired state is rejected.                                                                             |
 
 Both controlled and native compositions require `isolation: docker`, a
 digest-pinned image and the fixed `/workspace` worker directory. Host execution
@@ -31,24 +41,44 @@ original stream settlements; it does not silently trim, redact or migrate them.
 
 ## Workflow and source binding
 
-Every Session workflow must declare this literal **workflow-level** concurrency:
+For auto, declare this **workflow-level** concurrency and identical run name, and
+pass exactly the same required string dispatch input to the Action:
 
 ```yaml
+run-name: dsh-session-${{ inputs.session_key }}
+on:
+  workflow_dispatch:
+    inputs:
+      session_key:
+        type: string
+        required: true
 concurrency:
-  group: dsh-session
+  group: dsh-session-${{ inputs.session_key }}
   cancel-in-progress: false
+# In the single producing Action step:
+# with:
+#   session-mode: auto
+#   session-key: ${{ inputs.session_key }}
 ```
 
-The group serializes Session workflows across this repository. Use exactly one
+The group serializes runs of the same logical key; different keys can run in
+parallel. Auto normalizes keys to lowercase, matching GitHub's case-insensitive
+concurrency groups. A static maintained key is also supported when `session-key`,
+the group suffix and the run-name suffix are identical literal values. Other
+expressions, mismatched key expressions and cancellation are rejected. Explicit
+save/resume workflows continue to use the literal group `dsh-session` with
+`cancel-in-progress: false`.
+
+Use exactly one
 Session-producing Action step in one statically named job. Matrix producers and
-reusable producer jobs are unsupported. Do not replace the literal group with an
-expression or configure cancellation. Keep Session modes, keys and source run
+reusable producer jobs are unsupported. Keep Session modes, keys and source run
 selection under maintainer control; PR text, issue text, logs and model output
 cannot choose them or grant permissions.
 
 The current run's GitHub triggering actor must match its freshly checked
-authorization identity. A rerun by a different actor is rejected; use a new
-maintainer dispatch to resume instead. Its actor may differ from the source run.
+authorization identity. Auto rejects reruns of an old Actions run: use a new
+maintainer dispatch. Explicit modes reject a rerun by a different actor. The new
+dispatch's actor may differ from the source run.
 
 The Controller freshly verifies the same repository ID, default branch,
 immutable workflow revision, workflow path, static job and run attempt. A source
@@ -76,6 +106,24 @@ checkpoint or a conflicting generation fails closed. A retained claim records a
 started attempt; a failed or uncertain run is not a resumable producer. Inspect
 its result and external effects before selecting a fresh logical key. Automatic
 task replay and write retries are not used to recover an ambiguous outcome.
+
+Auto checks the complete available workflow run history by the verified run name
+before model startup and again before saving. A previous same-key run with a
+failed, cancelled or unknown result blocks automatic continuation, even if an
+older successful checkpoint remains. A latest successful run with expired,
+missing, damaged or incompatible state also fails; it never becomes a new task
+or falls back to an older checkpoint. GitHub concurrency does not guarantee FIFO:
+an older request is rejected if a newer same-key request has already started or
+finished. Later requests still queued do not prevent the active run from saving.
+
+Discovery is bounded to 1,000 workflow runs, 1,000 repository artifacts and 20
+compatible retained checkpoint candidates. Incomplete, duplicated or unavailable
+listings fail closed. Retained run names distinguish missing/expired artifacts
+from a key with no recorded history. Administrators can delete both runs and
+artifacts; automatic discovery cannot reconstruct deleted evidence and does not
+promise permanent first-ever detection. Do not delete Session history to retry
+an ambiguous task. Reusing an auto key in a different workflow/task/runtime is
+incompatible; select a new key after reviewing previous effects.
 
 ## Permissions, credentials and retained data
 
