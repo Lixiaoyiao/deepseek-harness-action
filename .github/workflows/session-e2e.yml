@@ -240,14 +240,6 @@ jobs:
       - name: Install exact candidate dependencies without lifecycle scripts
         run: npm ci --prefix candidate-action --ignore-scripts --no-fund
 
-      - name: Revalidate candidate immediately before execution
-        shell: bash
-        env:
-          REPOSITORY: ${{ github.repository }}
-          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
-          CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
-        run: bash .github/e2e/assert-candidate-binding.sh
-
       - name: Prepare hidden memory and current challenge outside the worker
         id: task
         run: node .github/e2e/session-e2e-proof.mjs prepare
@@ -260,6 +252,14 @@ jobs:
           set -euo pipefail
           [[ "$HOLD_SECONDS" =~ ^[0-9]+$ && "$HOLD_SECONDS" -le 60 ]]
           sleep "$HOLD_SECONDS"
+
+      - name: Revalidate candidate immediately before execution
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          CANDIDATE_MODE: ${{ needs.gate.outputs.candidate_mode }}
+          CANDIDATE_PR: ${{ needs.gate.outputs.pull_request }}
+        run: bash .github/e2e/assert-candidate-binding.sh
 
       - name: Execute one live official Session task
         id: action
