@@ -287,6 +287,24 @@ it.each(["controlled", "native"] as const)(
   },
 );
 
+it("keeps a passed Gateway baseline when a no-change task loses publication authority", async () => {
+  await selectEntity("task", "issue");
+  vi.stubEnv("INPUT_ALLOWED-TOOLS", '["workspace.edit","github.comment.create"]');
+  ports.runDsh.mockImplementation(() => {
+    permission = "read";
+    return Promise.resolve(readonlyWorkerResult("final"));
+  });
+  const outcome = await runAction();
+  expect(outcome).toMatchObject({
+    conclusion: "failure",
+    validation: { status: "passed", commandCount: 1, integrity: { status: "clean" } },
+    error: { code: "POLICY_DENIED", phase: "publication" },
+  });
+  expect(ports.validate).toHaveBeenCalledOnce();
+  expect(published.comment).not.toHaveBeenCalled();
+  for (const effect of Object.values(created)) expect(effect).not.toHaveBeenCalled();
+});
+
 it("keeps failed native worker evidence and known usage without publishing a write", async () => {
   vi.stubEnv("INPUT_DSH-MODE", "native");
   const report = readonlyWorkerResult("final", "native");
@@ -333,6 +351,25 @@ it("denies an actor revoked during the model turn before any persistent GitHub e
   for (const effect of Object.values(created)) expect(effect).not.toHaveBeenCalled();
   await expect(readFile(join(workerPath, "hello.txt"))).rejects.toThrow();
 });
+
+it.each(["controlled", "native"] as const)(
+  "keeps unexecuted validation not applicable when a %s no-change task loses publication authority",
+  async (mode) => {
+    vi.stubEnv("INPUT_DSH-MODE", mode);
+    ports.runDsh.mockImplementation(() => {
+      permission = "read";
+      return Promise.resolve(readonlyWorkerResult("final", mode));
+    });
+    const outcome = await runAction();
+    expect(outcome).toMatchObject({
+      conclusion: "failure",
+      validation: { status: "not-applicable", commandCount: 0, integrity: { status: "clean" } },
+      error: { code: "POLICY_DENIED", phase: "publication" },
+    });
+    expect(ports.validate).not.toHaveBeenCalled();
+    for (const effect of Object.values(created)) expect(effect).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps passed validation and confirmed PR evidence when checkpoint upload fails", async () => {
   ports.session.mockResolvedValue({

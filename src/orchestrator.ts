@@ -145,11 +145,20 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
       ? describeCancellationFailure(state.phase)
       : describeActionFailure(effectiveError, state.phase);
     await finishProgressFailure(state, effectiveError, failure);
+    let validationStatus: ValidationSummary["status"] =
+      state.validationPassed === true ? "passed" : "not-applicable";
+    if (
+      state.validationIntegrity?.status === "blocked" ||
+      state.validationPassed === false ||
+      (state.validationPassed !== true && failure.phase === "validation")
+    )
+      validationStatus = "failed";
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
-            status: state.validationPassed === true ? "passed" : "failed",
-            commandCount: state.validationCommandCount ?? 0,
+            status: validationStatus,
+            commandCount:
+              validationStatus === "not-applicable" ? 0 : (state.validationCommandCount ?? 0),
             ...(state.validationIntegrity === undefined
               ? {}
               : { integrity: state.validationIntegrity }),

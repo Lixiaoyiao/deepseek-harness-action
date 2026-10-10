@@ -132,7 +132,9 @@ export async function finalizeAgentOperation(
     workspaceCopy === undefined ? undefined : await inspectWorkspaceChanges(workspaceCopy);
   if (changes !== undefined && workspaceCopy !== undefined && command.requestedAccess === "write") {
     state.phase = "validation";
-    state.validationPassed = false;
+    // An integrity audit alone does not start command validation. Keep any
+    // validated baseline evidence when a no-change task proceeds to publication.
+    if (changes.all.length > 0) state.validationPassed = false;
     remainingControllerMs();
     const validationWorkspace = workspaceCopy;
     const integrity = await withinValidationDeadline(async () =>

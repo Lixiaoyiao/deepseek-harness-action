@@ -14,6 +14,9 @@ versioning for published action releases.
   Action metadata filenames, `action.yml` and `action.yaml`.
 - Preserves successful validation and confirmed PR/commit evidence when later
   Session publication fails. Keeps terminal progress publication best effort.
+- Reports unexecuted validation as not applicable when a no-change task fails
+  during publication authority checks, instead of reporting configured commands
+  as failed validation.
 - Reports optional main-agent token usage with explicit completeness and known
   subtotals, including failed workers. It remains informational worker evidence.
 - Fixes POSIX descendant-held output pipes and late Docker network cleanup.
