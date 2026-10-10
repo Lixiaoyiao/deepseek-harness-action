@@ -25,6 +25,7 @@ export function inspectCheckpointArchive(
   payload: Buffer;
   payloadSha256: string;
   archiveSha256: string;
+  manifestSha256: string;
   eventCount: number;
   generation: number;
 };
