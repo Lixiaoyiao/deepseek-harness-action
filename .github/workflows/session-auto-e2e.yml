@@ -61,6 +61,22 @@ on:
           - corrupt
           - unknown
           - incompatible
+      fixture_kind:
+        description: After a verified first task, create a diagnostic artifact using only this run's SDK scope
+        default: none
+        type: choice
+        options:
+          - none
+          - corrupt
+          - orphan
+      fixture_target_key:
+        description: Fresh distinct target key for the orphan diagnostic; otherwise leave empty
+        default: ""
+        type: string
+      fixture_source_run_id:
+        description: Oracle-only source run for independently verifying an orphan provenance denial
+        default: 0
+        type: number
 
 permissions: {}
 
@@ -201,6 +217,10 @@ jobs:
       SESSION_KEY: ${{ inputs.session_key }}
       DSH_MODE: ${{ inputs.dsh_mode }}
       EXPECTED_FAILURE: ${{ inputs.expected_failure }}
+      FIXTURE_KIND: ${{ inputs.fixture_kind }}
+      FIXTURE_TARGET_KEY: ${{ inputs.fixture_target_key }}
+      FIXTURE_SOURCE_RUN_ID: ${{ inputs.fixture_source_run_id }}
+      FORCE_FAILURE: ${{ inputs.force_failure }}
     steps:
       - name: Checkout permanent harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -317,3 +337,19 @@ jobs:
       - name: Deliberately seed a failed producer history
         if: steps.verify.outcome == 'success' && inputs.force_failure
         run: exit 1
+      - name: Create a current-run diagnostic Session history artifact
+        id: fixture
+        if: steps.verify.outcome == 'success' && inputs.expected_failure == 'none' && inputs.fixture_kind != 'none'
+        env:
+          RESULT_JSON: ${{ steps.action.outputs['result-json'] }}
+          ACTION_OUTCOME: ${{ steps.action.outcome }}
+        run: node .github/e2e/session-history-fixture.mjs
+
+      - name: Preserve safe diagnostic artifact provenance
+        if: steps.fixture.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: session-e2e-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/session-e2e/fixture/receipt.json
+          retention-days: 3
+          if-no-files-found: error
