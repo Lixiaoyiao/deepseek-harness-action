@@ -33,6 +33,7 @@ describe("GitHub database writes", () => {
     await writeFile(join(worker, "a.txt"), "new\n");
 
     const createTree = vi.fn().mockResolvedValue({ data: { sha: "d".repeat(40) } });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = {
       rest: {
         git: {
@@ -59,6 +60,8 @@ describe("GitHub database writes", () => {
     "docs/CODEOWNERS",
     ".github/dependabot.yml",
     ".github/workflows/release.yml",
+    "action.yaml",
+    "ACTION.YAML",
     "SECURITY.md",
   ])("rejects protected control-plane path %s", (path) => {
     expect(() => assertWritablePath(path)).toThrow("Protected path");
@@ -68,6 +71,7 @@ describe("GitHub database writes", () => {
     const desired = "e".repeat(40);
     const updateError = new Error("response lost");
     const getRef = vi.fn().mockResolvedValue({ data: { object: { sha: desired } } });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = {
       rest: { git: { updateRef: vi.fn().mockRejectedValue(updateError), getRef } },
     } as unknown as GitHubClient;
@@ -78,6 +82,7 @@ describe("GitHub database writes", () => {
 
   it("preserves updateRef failure when reconciliation finds a different SHA", async () => {
     const updateError = new Error("update rejected");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = {
       rest: {
         git: {

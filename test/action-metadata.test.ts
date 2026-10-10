@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
@@ -28,10 +29,12 @@ describe("Marketplace action metadata", () => {
 
   it("publishes the typed Action input contract without metadata drift", async () => {
     const metadata = await readFile(new URL("../action.yml", import.meta.url), "utf8");
-    const parsed = YAML.parse(metadata) as {
-      readonly inputs: Readonly<Record<string, unknown>>;
-      readonly outputs: Readonly<Record<string, { readonly description: string }>>;
-    };
+    const parsed = z
+      .looseObject({
+        inputs: z.record(z.string(), z.unknown()),
+        outputs: z.record(z.string(), z.looseObject({ description: z.string() })),
+      })
+      .parse(YAML.parse(metadata));
     const expectedInputs = Object.fromEntries(
       ACTION_INPUT_CONTRACT.map((input) => [
         input.name,
@@ -54,19 +57,19 @@ describe("Marketplace action metadata", () => {
   });
 
   it("pins the official DSH rc.2 runtime and its lockfile exactly", async () => {
-    const manifest = JSON.parse(
-      await readFile(new URL("../package.json", import.meta.url), "utf8"),
-    ) as {
-      version: string;
-      scripts: Record<string, string>;
-      dependencies: Record<string, string>;
-      devDependencies: Record<string, string>;
-    };
-    const lock = JSON.parse(
-      await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
-    ) as {
-      packages: Record<string, { version?: string }>;
-    };
+    const manifest = z
+      .looseObject({
+        version: z.string(),
+        scripts: z.record(z.string(), z.string()),
+        dependencies: z.record(z.string(), z.string()),
+        devDependencies: z.record(z.string(), z.string()),
+      })
+      .parse(JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")));
+    const lock = z
+      .looseObject({
+        packages: z.record(z.string(), z.looseObject({ version: z.string().optional() })),
+      })
+      .parse(JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8")));
     const directDependencies = { ...manifest.dependencies, ...manifest.devDependencies };
 
     expect(manifest.version).toBe(ACTION_VERSION);
@@ -284,9 +287,9 @@ describe("Marketplace action metadata", () => {
     const sources = (
       await Promise.all(
         maps.map(async (file) => {
-          const map = JSON.parse(
-            await readFile(new URL(`../dist/${file}`, import.meta.url), "utf8"),
-          ) as { sources: string[] };
+          const map = z
+            .looseObject({ sources: z.array(z.string()) })
+            .parse(JSON.parse(await readFile(new URL(`../dist/${file}`, import.meta.url), "utf8")));
           return map.sources;
         }),
       )

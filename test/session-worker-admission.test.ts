@@ -1,21 +1,25 @@
+import { z } from "zod";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import * as plugin from "../assets/dsh/action-session.mjs";
+import type {
+  SessionPlan as Plan,
+  SessionAdmissionAgent,
+  SessionCreatedListener as Created,
+  SessionRequestListener as Requested,
+  SessionAdmissionGuard as Guard,
+  SessionAdmissionContext,
+  SessionAdmissionRegistration,
+} from "../assets/dsh/action-session.mjs";
 
-interface Plan {
-  schemaVersion: 1;
-  bindingDigest: string;
-  permissionMode: "read-only" | "workspace-write";
-  workingDirectory: string;
-  sessionId?: string;
-  checkpointEventCount?: number;
-}
-interface Agent {
+// These input fixtures deliberately drift after admission; the plugin exposes
+// read-only identity in its public contract, but must still reject JS mutation.
+interface Agent extends SessionAdmissionAgent {
   session: {
     id: string;
     seq: number;
@@ -24,37 +28,18 @@ interface Agent {
   };
   inbox: { nextTurn: readonly unknown[]; nextStep: readonly unknown[] };
 }
-interface Plugin {
-  validateSessionPlan(value: unknown): Plan;
-  readSessionPlan(path: string, home: string): Plan;
-  sessionHeadlessPatch(
-    value: unknown,
-    task: string,
-  ): {
-    id: "headless-runner";
-    config: { task: string; json: true; sessionId?: string };
-  };
-  installSessionAdmission(context: unknown, plan: unknown, options?: { auditPath?: string }): void;
-}
-type Created = (payload: { agent: Agent; source: string }) => void;
-type Requested = (payload: { agent: Agent }, next: () => Promise<unknown>) => Promise<unknown>;
-type Guard = (execution: { agent?: Agent }) => string | undefined;
+type MutablePlan = { -readonly [K in keyof Plan]: Plan[K] };
 
 const SESSION_ID = "session-11111111-1111-4111-8111-111111111111";
 const workspace = resolve("session-test-workspace");
 const directories: string[] = [];
-let plugin: Plugin;
-
-beforeAll(async () => {
-  plugin = (await import(pathToFileURL(resolve("assets/dsh/action-session.mjs")).href)) as Plugin;
-});
 afterEach(async () => {
   await Promise.all(
     directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 
-function plan(extra: Partial<Plan> = {}): Plan {
+function plan(extra: Partial<MutablePlan> = {}): MutablePlan {
   return {
     schemaVersion: 1,
     bindingDigest: "a".repeat(64),
@@ -72,7 +57,8 @@ function subject(): Agent {
   };
 }
 function fixture(options: { defaultMode?: string; approval?: string } = {}) {
-  const listeners = new Map<string, unknown>();
+  let created: Created | undefined;
+  let requested: Requested | undefined;
   let guard: Guard | undefined;
   const knobs = { mode: "workspace-write", approval: "ask", preset: "workspace-write" };
   const writes: string[] = [];
@@ -94,12 +80,17 @@ function fixture(options: { defaultMode?: string; approval?: string } = {}) {
       },
     },
   };
-  const context = {
-    on: (event: string, callback: unknown, registration?: { prepend?: boolean }) => {
+  const context: SessionAdmissionContext = {
+    on: (...[event, callback, registration]: SessionAdmissionRegistration) => {
       if (event === "agent/created") expect(registration?.prepend).toBe(true);
-      listeners.set(event, callback);
+      if (event === "agent/created") created = callback;
+      else requested = callback;
     },
-    get: (name: string) => service[name as keyof typeof service],
+    get: (name: string) => {
+      if (name !== "sandboxPolicy" && name !== "approval" && name !== "permissionPresets")
+        return undefined;
+      return service[name];
+    },
     inject: (
       _names: string[],
       setup: (scope: { tools: { guard(callback: Guard): void } }) => void,
@@ -117,10 +108,16 @@ function fixture(options: { defaultMode?: string; approval?: string } = {}) {
     context,
     knobs,
     writes,
-    created: (agent: Agent, source = "resume") =>
-      (listeners.get("agent/created") as Created)({ agent, source }),
-    request: (agent: Agent, next: () => Promise<unknown>) =>
-      (listeners.get("agent/request") as Requested)({ agent }, next),
+    created: (agent: Agent, source = "resume") => {
+      if (created === undefined)
+        throw new Error("Session admission did not register agent/created");
+      created({ agent, source });
+    },
+    request: (agent: Agent, next: () => Promise<unknown>) => {
+      if (requested === undefined)
+        throw new Error("Session admission did not register agent/request");
+      return requested({ agent }, next);
+    },
     guard: (agent?: Agent) => guard?.({ ...(agent === undefined ? {} : { agent }) }),
   };
 }
@@ -281,17 +278,21 @@ describe("published worker Session admission", () => {
         windowsHide: true,
       },
     );
-    const report = JSON.parse(stdout) as {
-      runtimeVersion: string;
-      checks: {
-        mode: string;
-        passed: boolean;
-        oldToolReplayed: boolean;
-        forbiddenWriteOccurred: boolean;
-        currentSystemPromptOnly: boolean;
-        currentToolGraph: boolean;
-      }[];
-    };
+    const report = z
+      .looseObject({
+        runtimeVersion: z.string(),
+        checks: z.array(
+          z.looseObject({
+            mode: z.string(),
+            passed: z.boolean(),
+            oldToolReplayed: z.boolean(),
+            forbiddenWriteOccurred: z.boolean(),
+            currentSystemPromptOnly: z.boolean(),
+            currentToolGraph: z.boolean(),
+          }),
+        ),
+      })
+      .parse(JSON.parse(stdout));
     expect(report.runtimeVersion).toBe("0.2.0-rc.2");
     expect(report.checks.map(({ mode }) => mode)).toEqual(["controlled", "native"]);
     for (const check of report.checks)
@@ -318,13 +319,15 @@ describe("published worker Session admission", () => {
         ["scripts/probe-session-production-launchers.mjs", evidence, flag],
         { cwd: process.cwd(), timeout: 130_000, maxBuffer: 1024 * 1024, windowsHide: true },
       );
-      const report = JSON.parse(await readFile(evidence, "utf8")) as {
-        runtimeVersion: string;
-        remoteModelCalls: number;
-        githubWrites: number;
-        titleDisabledByProbe: boolean;
-        checks: { mode: string; saveTitleRequests: number }[];
-      };
+      const report = z
+        .looseObject({
+          runtimeVersion: z.string(),
+          remoteModelCalls: z.number(),
+          githubWrites: z.number(),
+          titleDisabledByProbe: z.boolean(),
+          checks: z.array(z.looseObject({ mode: z.string(), saveTitleRequests: z.number() })),
+        })
+        .parse(JSON.parse(await readFile(evidence, "utf8")));
       expect(report).toMatchObject({
         runtimeVersion: "0.2.0-rc.2",
         remoteModelCalls: 0,

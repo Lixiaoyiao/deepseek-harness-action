@@ -11,7 +11,27 @@ npm ci
 npm run check
 ```
 
+Windows runs the same suite with two Vitest workers because the integration
+tests start real DSH and Git processes with fixed startup deadlines. Linux
+keeps the default parallelism. Test assertions and execution deadlines remain
+the same on both platforms.
+
 Add regression coverage for behavior changes. Keep changes focused and preserve the Controller/worker security boundary described in [SECURITY.md](SECURITY.md).
+
+Design modules around a small interface that hides real ordering and ownership
+rules. Keep changes local to their owner; share an abstraction only when two
+real paths need it. Review the complete lifecycle before adding a local branch
+or callback. The current ownership map and agreed behavior-test interfaces are
+in [ARCHITECTURE.md](ARCHITECTURE.md#module-design-and-lifecycle).
+
+Test behavior through those interfaces with real internal policy, validation
+and state transitions. Replace external GitHub, model, Docker or process
+transports; avoid mocking every internal collaborator. Type assertions are
+checked by default. Any narrow external-library exemption must explain the
+actual contract mismatch at the assertion, rather than suppressing a whole
+module. Resource budgets and their tradeoffs are in
+[docs/resource-limits.md](docs/resource-limits.md); runtime host requirements are
+in [docs/dsh-runtime.md](docs/dsh-runtime.md).
 
 Public Action input metadata is defined in `src/action-contract.ts`. After an
 input metadata change, run `npm run generate:action-contract` and review the

@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 import type { ActionInputs } from "../inputs.js";
 import { areContextActorsAllowed, normalizeActor } from "../github/actors.js";
 import type { GitHubContext } from "../github/context.js";
@@ -69,8 +70,8 @@ function payloadStringProperty(
   propertyName: "name" | "login",
 ): string | undefined {
   const value = payload[objectName];
-  if (typeof value !== "object" || value === null || !(propertyName in value)) return undefined;
-  const property = (value as Record<string, unknown>)[propertyName];
+  if (!isRecord(value) || !(propertyName in value)) return undefined;
+  const property = value[propertyName];
   return typeof property === "string" ? property : undefined;
 }
 

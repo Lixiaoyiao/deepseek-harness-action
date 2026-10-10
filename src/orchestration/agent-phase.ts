@@ -1,49 +1,19 @@
 import * as core from "@actions/core";
-
-import { AgentDeadlineError, runAgentLoop } from "../agent/loop.js";
-import { finishDiagnosis } from "../commands/diagnose.js";
-import { finishReview } from "../commands/review.js";
+import { runAgentLoop, type AgentLoopStats } from "../agent/loop.js";
+import type { DshFailureTelemetry } from "../dsh/errors.js";
 import { publishTaskAnswer } from "../commands/task.js";
 import type { ActionInputs } from "../inputs.js";
-import { throwIfCancelled } from "../lifecycle/cancellation.js";
-import { PHASE_TIMEOUTS, phaseTimeoutMs } from "../lifecycle/deadline.js";
 import { buildDshToolPolicyAudit } from "../permissions/profile.js";
 import { DshAgentEngine } from "../review/run.js";
-import { ReviewPublicationQuotaError } from "../review/publisher.js";
-import type { RunOutcome } from "../result.js";
-import { PolicyDeniedError } from "../errors.js";
-import { revalidatePullRequestHead } from "../write/pr.js";
-import {
-  enforceValidationIntegrity,
-  inspectValidationIntegrity,
-  ValidationIntegrityError,
-} from "../write/validation-integrity.js";
-import {
-  remainingValidationMs as remainingSharedValidationMs,
-  withinValidationDeadline as withinSharedValidationDeadline,
-  type ValidationDeadline,
-} from "../write/validation-deadline.js";
-import { inspectWorkspaceChanges } from "../write/workspace.js";
+import type { RunOutcome, AgentRunSummary } from "../result.js";
 import type { PreparedExecution } from "./execution.js";
 import { outcomeContext, successfulValidation, type RunState } from "./lifecycle.js";
 import type { AuthorizedRun } from "./prepare.js";
-import { executeWrite, type WriteOutcome } from "./write.js";
 import type { PreparedWorkspace } from "./workspace.js";
 import { prepareControllerSession } from "../session/controller.js";
+import { finalizeAgentOperation, type FinalizedOperation } from "./operation-finalizer.js";
 
-type FinalizedOperation =
-  | { readonly kind: "review"; readonly publication: Awaited<ReturnType<typeof finishReview>> }
-  | { readonly kind: "diagnose" }
-  | {
-      readonly kind: "answer";
-      readonly noChanges?: boolean;
-      readonly commentId?: number;
-    }
-  | { readonly kind: "blocked" }
-  | { readonly kind: "write"; readonly write: WriteOutcome };
-
-/** Run the isolated Agent, execute Controller validation, and finalize the public result. */
-export async function runAgentPhase(options: {
+export interface AgentPhaseOptions {
   readonly state: RunState;
   readonly startedAt: number;
   readonly authorized: AuthorizedRun;
@@ -52,28 +22,35 @@ export async function runAgentPhase(options: {
   readonly inputs: ActionInputs;
   readonly signal: AbortSignal;
   readonly deadlineMs: number;
-}): Promise<RunOutcome> {
+}
+
+/** Project Controller and DSH evidence without mixing their receipt planes. */
+function agentSummary(evidence: DshFailureTelemetry, stats: AgentLoopStats): AgentRunSummary {
+  return {
+    durationMs: evidence.durationMs,
+    isolation: evidence.isolationReport,
+    turns: stats.turns,
+    toolCalls: stats.toolCalls,
+    validationRetries: stats.validationRetries,
+    toolReceipts: stats.toolReceipts,
+    ...(evidence.usage === undefined ? {} : { usage: evidence.usage }),
+    ...(evidence.toolReceipts === undefined ? {} : { dshToolReceipts: evidence.toolReceipts }),
+    ...(evidence.extensionAudit === undefined ? {} : { extensionAudit: evidence.extensionAudit }),
+  };
+}
+
+export async function runAgentPhase(options: AgentPhaseOptions): Promise<RunOutcome> {
   const { state, startedAt, authorized, workspace, execution, inputs, signal, deadlineMs } =
     options;
-  const {
-    context,
-    client,
-    command,
-    currentRunUrl,
-    snapshot,
-    policy,
-    issueNumber,
-    deferWriteProgress,
-  } = authorized;
-  const { agentWorkspace, snapshot: workspaceCopy, boundWriteSha } = workspace;
+  const { context, client, command, currentRunUrl, policy, issueNumber, deferWriteProgress } =
+    authorized;
+  const { agentWorkspace } = workspace;
   const {
     contextPacket,
     tools,
     toolProvider,
     extensions,
-    operationIdentity,
     githubAuthority,
-    githubValidation,
     hasGitHubMutationTools,
     selectedComposition,
     redact,
@@ -126,8 +103,6 @@ export async function runAgentPhase(options: {
                 };
               state.phase = "publication";
               await session.save(runtime);
-              delete state.partialWrite;
-              delete state.partialPublication;
             },
           }),
       onTurn: async (turn, maxTurns) => {
@@ -147,41 +122,21 @@ export async function runAgentPhase(options: {
         if (agentResult.observedTools !== undefined) {
           state.toolPolicy = buildDshToolPolicyAudit(agentResult.observedTools);
         }
-        state.agent = {
-          durationMs: agentResult.durationMs,
-          isolation: agentResult.isolationReport,
-          turns: stats.turns,
-          toolCalls: stats.toolCalls,
-          validationRetries: stats.validationRetries,
-          toolReceipts: stats.toolReceipts,
-          ...(agentResult.toolReceipts === undefined
-            ? {}
-            : { dshToolReceipts: agentResult.toolReceipts }),
-          ...(agentResult.extensionAudit === undefined
-            ? {}
-            : { extensionAudit: agentResult.extensionAudit }),
-        };
+        state.agent = agentSummary(agentResult, stats);
       },
       onEngineFailure: (failure, stats) => {
         if (state.session !== undefined) state.session = { ...state.session, status: "failed" };
         if (failure.observedTools !== undefined) {
           state.toolPolicy = buildDshToolPolicyAudit(failure.observedTools);
         }
-        state.agent = {
-          durationMs: failure.durationMs,
-          isolation: failure.isolationReport,
-          turns: stats.turns,
-          toolCalls: stats.toolCalls,
-          validationRetries: stats.validationRetries,
-          toolReceipts: stats.toolReceipts,
-          ...(failure.toolReceipts === undefined ? {} : { dshToolReceipts: failure.toolReceipts }),
-          ...(failure.extensionAudit === undefined
-            ? selectedComposition.actionManagedExtensionProfile ||
-              extensions.audit.entries.length > 0
-              ? { extensionAudit: extensions.audit }
-              : {}
-            : { extensionAudit: failure.extensionAudit }),
-        };
+        state.agent = agentSummary(
+          failure.extensionAudit === undefined &&
+            (selectedComposition.actionManagedExtensionProfile ||
+              extensions.audit.entries.length > 0)
+            ? { ...failure, extensionAudit: extensions.audit }
+            : failure,
+          stats,
+        );
       },
       onCleanupError: (component, error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -196,6 +151,7 @@ export async function runAgentPhase(options: {
           state.progress === undefined &&
           !deferWriteProgress
         ) {
+          await authorized.revalidateAuthority();
           await publishTaskAnswer(
             client,
             { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
@@ -206,207 +162,8 @@ export async function runAgentPhase(options: {
         }
         return { kind: "blocked" };
       },
-      finalize: async (agentResult, remainingMs): Promise<FinalizedOperation> => {
-        let validationBudget: ValidationDeadline | undefined;
-        const remainingControllerMs = (): number => {
-          throwIfCancelled(signal);
-          const remaining = Math.min(remainingMs, deadlineMs - Date.now());
-          if (remaining <= 0) throw new AgentDeadlineError();
-          return remaining;
-        };
-        const controllerValidationBudget = (): ValidationDeadline => {
-          throwIfCancelled(signal);
-          if (validationBudget === undefined) {
-            const phaseMs = Math.min(
-              remainingControllerMs(),
-              phaseTimeoutMs(deadlineMs, PHASE_TIMEOUTS.validationMs, Date.now),
-            );
-            validationBudget = { deadlineMs: Date.now() + phaseMs, signal };
-          }
-          return validationBudget;
-        };
-        const remainingValidationMs = (): number => {
-          remainingControllerMs();
-          return remainingSharedValidationMs(controllerValidationBudget());
-        };
-        const withinValidationDeadline = async <T>(start: () => Promise<T>): Promise<T> => {
-          remainingControllerMs();
-          return await withinSharedValidationDeadline(start, controllerValidationBudget());
-        };
-
-        if (command.operation === "review" && snapshot?.kind === "pull_request") {
-          state.phase = "publication";
-          await state.progress?.update(
-            "finalizing",
-            "Structured output passed validation. Mapping findings to the current diff and publishing.",
-          );
-          await revalidatePullRequestHead(
-            client,
-            context.repository.owner,
-            context.repository.repo,
-            snapshot.number,
-            snapshot.headSha,
-          );
-          let publication: Awaited<ReturnType<typeof finishReview>>;
-          try {
-            publication = await finishReview(
-              client,
-              {
-                owner: context.repository.owner,
-                repo: context.repository.repo,
-                pullNumber: snapshot.number,
-                expectedAuthorId: inputs.botUserId,
-                runUrl: currentRunUrl,
-              },
-              snapshot,
-              agentResult,
-              inputs.maxFindings,
-            );
-          } catch (error) {
-            if (error instanceof ReviewPublicationQuotaError) {
-              state.partialPublication = error.publication;
-            }
-            throw error;
-          }
-          return { kind: "review", publication };
-        }
-        if (command.operation === "diagnose") {
-          state.phase = "publication";
-          await state.progress?.update(
-            "finalizing",
-            "Structured output passed validation. Publishing the bounded CI diagnosis.",
-          );
-          if (issueNumber !== undefined) {
-            await finishDiagnosis(
-              client,
-              { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
-              inputs.botUserId,
-              agentResult,
-              currentRunUrl,
-            );
-          }
-          return { kind: "diagnose" };
-        }
-
-        const changes =
-          workspaceCopy === undefined ? undefined : await inspectWorkspaceChanges(workspaceCopy);
-        if (
-          changes !== undefined &&
-          workspaceCopy !== undefined &&
-          command.requestedAccess === "write"
-        ) {
-          state.phase = "validation";
-          remainingControllerMs();
-          const validationWorkspace = workspaceCopy;
-          const integrity = await withinValidationDeadline(async () =>
-            inspectValidationIntegrity({
-              snapshot: validationWorkspace,
-              changes,
-              commands: inputs.testCommands,
-              mode: inputs.validationIntegrity,
-            }),
-          );
-          state.validationIntegrity = integrity;
-          if (integrity.status === "warned") {
-            const warningKey = JSON.stringify(
-              integrity.changes.map(({ path, risk }) => [path, risk]),
-            );
-            if (state.validationIntegrityWarning !== warningKey) {
-              state.validationIntegrityWarning = warningKey;
-              core.warning(
-                `Validation definitions changed in ${String(integrity.changeCount)} path(s); validation-integrity=warn records the changes without blocking them.`,
-              );
-            }
-          }
-        }
-
-        if (command.operation === "task") {
-          if ((changes?.all.length ?? 0) === 0) {
-            remainingControllerMs();
-            await githubAuthority?.flush(remainingControllerMs());
-            state.phase = "publication";
-            const commentId =
-              issueNumber === undefined
-                ? undefined
-                : await publishTaskAnswer(
-                    client,
-                    { owner: context.repository.owner, repo: context.repository.repo, issueNumber },
-                    inputs.botUserId,
-                    agentResult,
-                    currentRunUrl,
-                  );
-            return {
-              kind: "answer",
-              ...(command.requestedAccess === "write" ? { noChanges: true } : {}),
-              ...(commentId === undefined ? {} : { commentId }),
-            };
-          }
-          if (!policy.capabilities.modifyWorkspace) {
-            throw new PolicyDeniedError(
-              "A read-only task produced workspace changes; refusing publication",
-            );
-          }
-        }
-
-        if (workspaceCopy === undefined || boundWriteSha === undefined) {
-          throw new Error("Write operation requires a trusted checked-out workspace");
-        }
-        state.phase = "validation";
-        await state.progress?.update(
-          "finalizing",
-          "The structured change is ready. Running configured validation before any GitHub write.",
-        );
-        if (state.validationIntegrity !== undefined) {
-          const integrityAudit = state.validationIntegrity;
-          const validationWorkspace = workspaceCopy;
-          try {
-            state.validationIntegrity = await withinValidationDeadline(async () =>
-              enforceValidationIntegrity({
-                snapshot: validationWorkspace,
-                commands: inputs.testCommands,
-                audit: integrityAudit,
-                baselineReplay: {
-                  containerImage: inputs.containerImage,
-                  timeoutMs: remainingValidationMs(),
-                  signal,
-                },
-              }),
-            );
-          } catch (error: unknown) {
-            if (error instanceof ValidationIntegrityError) state.validationIntegrity = error.audit;
-            throw error;
-          }
-        }
-        const write = await executeWrite(
-          client,
-          context,
-          command,
-          inputs,
-          policy,
-          snapshot,
-          workspaceCopy,
-          boundWriteSha,
-          agentResult,
-          controllerValidationBudget().deadlineMs,
-          operationIdentity,
-          (phase) => {
-            state.phase = phase;
-          },
-          signal,
-        );
-        state.partialWrite = { ...write, writeStatus: "partial-success" };
-        if (
-          snapshot?.kind === "pull_request" &&
-          write.commitSha !== undefined &&
-          githubAuthority !== undefined
-        ) {
-          githubAuthority.advanceValidatedPullHead(write.commitSha, snapshot.headRef);
-        }
-        await githubValidation?.acceptValidatedWorkspaceRevision();
-        await githubAuthority?.flush(remainingControllerMs());
-        delete state.partialWrite;
-        return { kind: "write", write };
-      },
+      finalize: (agentResult, remainingMs) =>
+        finalizeAgentOperation(options, agentResult, remainingMs),
     },
     {
       createEngine: (runtime) =>
@@ -419,21 +176,11 @@ export async function runAgentPhase(options: {
     command.operation === "task" && agentResult.output.taskOutput !== undefined
       ? { taskOutput: agentResult.output.taskOutput }
       : {};
-  state.agent = {
-    durationMs: agentResult.durationMs,
-    isolation: agentResult.isolationReport,
-    turns: loop.stats.turns,
-    toolCalls: loop.stats.toolCalls,
-    validationRetries: loop.stats.validationRetries,
+  state.agent = agentSummary(agentResult, {
+    ...loop.stats,
     toolReceipts:
       githubAuthority?.reconcileAgentReceipts(loop.stats.toolReceipts) ?? loop.stats.toolReceipts,
-    ...(agentResult.toolReceipts === undefined
-      ? {}
-      : { dshToolReceipts: agentResult.toolReceipts }),
-    ...(agentResult.extensionAudit === undefined
-      ? {}
-      : { extensionAudit: agentResult.extensionAudit }),
-  };
+  });
   const finalized = loop.finalization;
   if (finalized.kind === "blocked") {
     await state.progress?.blocked(agentResult.output.summary);

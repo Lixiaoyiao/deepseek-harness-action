@@ -307,7 +307,7 @@ function canonicalJson(value: unknown): string {
     if (Array.isArray(candidate)) return candidate.map((item) => normalize(item));
     if (typeof candidate === "object") {
       return Object.fromEntries(
-        Object.entries(candidate as Record<string, unknown>)
+        Object.entries(candidate)
           .filter(([, item]) => item !== undefined)
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([key, item]) => [key, normalize(item)]),

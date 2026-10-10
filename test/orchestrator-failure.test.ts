@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   readEventPayload: vi.fn(),
   createGitHubClient: vi.fn(),
   checkActorPermissions: vi.fn(),
-  runAgentLoop: vi.fn(),
+  runAgentLoop: vi.fn<typeof AgentLoopModule.runAgentLoop<unknown>>(),
   setSecret: vi.fn(),
 }));
 
@@ -212,8 +212,7 @@ describe("orchestrator DSH failure reporting", () => {
       toolReceipts: [failureReceipt],
     };
     const failure = new DshProcessError(9, null, "worker crashed").attachTelemetry(telemetry);
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       const stats: AgentLoopModule.AgentLoopStats = {
         turns: 1,
         toolCalls: 0,

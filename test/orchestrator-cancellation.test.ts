@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   createGitHubClient: vi.fn(),
   checkActorPermissions: vi.fn(),
   fetchEntitySnapshot: vi.fn(),
-  runAgentLoop: vi.fn(),
+  runAgentLoop: vi.fn<typeof AgentLoopModule.runAgentLoop<unknown>>(),
   progressUpdate: vi.fn(),
   progressFail: vi.fn(),
   makeTemporaryWorkspace: vi.fn(),
@@ -238,8 +238,7 @@ describe("orchestrator cancellation finalization", () => {
 
   it("turns a run signal into a terminal sticky failure", async () => {
     const controller = new AbortController();
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       expect(hooks.signal).not.toBe(controller.signal);
       await hooks.onTurn?.(1, 3);
       const cancellation = new DshAbortedError();
@@ -290,8 +289,7 @@ describe("orchestrator cancellation finalization", () => {
   it("preserves cancellation when terminal comment publication fails", async () => {
     const controller = new AbortController();
     mocks.progressFail.mockRejectedValueOnce(new Error("GitHub unavailable"));
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       await hooks.onTurn?.(1, 3);
       const cancellation = new DshAbortedError();
       controller.abort(cancellation);
@@ -315,8 +313,7 @@ describe("orchestrator cancellation finalization", () => {
     const cleanup = new Promise<void>((resolve) => {
       releaseCleanup = resolve;
     });
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       await hooks.onTurn?.(1, 3);
       const cancellation = new DshAbortedError();
       controller.abort(cancellation);
@@ -385,8 +382,7 @@ describe("orchestrator cancellation finalization", () => {
       changes: [],
       truncated: false,
     });
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       await hooks.onTurn?.(1, 3);
       controller.abort(new DshAbortedError());
       throw integrity;
@@ -415,8 +411,7 @@ describe("orchestrator cancellation finalization", () => {
   it("promotes a credential failure over a provisional concurrent cancellation", async () => {
     const controller = new AbortController();
     const credential = new DshCredentialLeakError("stdout");
-    mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<unknown>;
+    mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
       await hooks.onTurn?.(1, 3);
       controller.abort(new DshAbortedError());
       throw credential;

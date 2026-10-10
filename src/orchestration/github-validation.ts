@@ -1,4 +1,4 @@
-import { AgentDeadlineError } from "../agent/loop.js";
+import { AgentDeadlineError } from "../agent/loop-errors.js";
 import type { ActionInputs } from "../inputs.js";
 import { PHASE_TIMEOUTS, phaseTimeoutMs } from "../lifecycle/deadline.js";
 import { PolicyDeniedError } from "../errors.js";
@@ -50,6 +50,7 @@ export class ControllerGitHubMutationValidation {
     const before = await fingerprintWorkspace(workspace.workerRoot);
     if (before === this.fingerprint) return;
     state.phase = "validation";
+    state.validationPassed = false;
     if (this.budget === undefined) {
       const phaseMs = phaseTimeoutMs(deadlineMs, PHASE_TIMEOUTS.validationMs, Date.now);
       if (phaseMs <= 0) throw new AgentDeadlineError();
@@ -98,13 +99,13 @@ export class ControllerGitHubMutationValidation {
       budget,
     );
     assertValidationSucceeded(validationResults);
-    state.validationPassed = true;
     const after = await fingerprintWorkspace(workspace.workerRoot);
     if (after !== before) {
       throw new PolicyDeniedError(
         "Workspace changed while validating deferred GitHub mutations; refusing mutation",
       );
     }
+    state.validationPassed = true;
     this.fingerprint = after;
   }
 

@@ -51,17 +51,8 @@ interface DeepSeekMessage {
 }
 
 interface DeepSeekRequest {
-  readonly messages?: readonly DeepSeekMessage[];
-  readonly tools?: readonly DeepSeekTool[];
-}
-
-interface ToolReceipt {
-  readonly phase: "started" | "completed";
-  readonly id: string;
-  readonly runtimeName: string;
-  readonly provider: string;
-  readonly ok: boolean;
-  readonly counted: boolean;
+  readonly messages?: readonly DeepSeekMessage[] | undefined;
+  readonly tools?: readonly DeepSeekTool[] | undefined;
 }
 
 afterEach(async () => {
@@ -124,9 +115,9 @@ describe("fresh official DSH workers share Controller MCP limits", () => {
         allowPluginInstall: false,
         policy: trustedRead,
       });
-      const manifestBase = JSON.parse(
-        await readFile(join(process.cwd(), "package.json"), "utf8"),
-      ) as Record<string, unknown>;
+      const manifestBase = z
+        .record(z.string(), z.unknown())
+        .parse(JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")));
       const profile = await prepareControlledProfile({
         dshHome,
         plan,
@@ -185,11 +176,13 @@ describe("fresh official DSH workers share Controller MCP limits", () => {
         deniedRuntimeName,
       );
 
-      const counts = JSON.parse(await readFile(profile.statePath, "utf8")) as {
-        readonly schemaVersion: number;
-        readonly tools: Readonly<Record<string, number>>;
-        readonly groups: Readonly<Record<string, number>>;
-      };
+      const counts = z
+        .looseObject({
+          schemaVersion: z.number(),
+          tools: z.record(z.string(), z.number()),
+          groups: z.record(z.string(), z.number()),
+        })
+        .parse(JSON.parse(await readFile(profile.statePath, "utf8")));
       expect(counts).toEqual({
         schemaVersion: 1,
         tools: { "mcp.fixture.ping": 2 },
@@ -199,7 +192,18 @@ describe("fresh official DSH workers share Controller MCP limits", () => {
       const events = (await readFile(profile.auditPath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as ToolReceipt);
+        .map((line) =>
+          z
+            .looseObject({
+              phase: z.union([z.literal("started"), z.literal("completed")]),
+              id: z.string(),
+              runtimeName: z.string(),
+              provider: z.string(),
+              ok: z.boolean(),
+              counted: z.boolean(),
+            })
+            .parse(JSON.parse(line)),
+        );
       expect(events.filter(({ phase }) => phase === "started")).toHaveLength(2);
       const receipts = events.filter(({ phase }) => phase === "completed");
       expect(receipts).toHaveLength(3);
@@ -236,7 +240,14 @@ async function readJsonRequest(request: IncomingMessage): Promise<DeepSeekReques
     else if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
     else throw new TypeError("DeepSeek fixture received a non-byte request chunk");
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as DeepSeekRequest;
+  return z
+    .looseObject({
+      messages: z
+        .array(z.looseObject({ role: z.unknown().optional(), content: z.unknown().optional() }))
+        .optional(),
+      tools: z.array(z.looseObject({ name: z.unknown().optional() })).optional(),
+    })
+    .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
 }
 
 async function listen(server: Server): Promise<string> {
@@ -325,6 +336,7 @@ async function startMcpFixture(): Promise<{
       void mcp.close();
     });
     mcp
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK declares a string|undefined sessionId getter against its own exact-optional Transport interface.
       .connect(transport as Transport)
       .then(() => transport.handleRequest(request, response))
       .catch((error: unknown) => response.writeHead(500).end(String(error)));

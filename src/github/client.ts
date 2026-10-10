@@ -65,8 +65,8 @@ export function createGitHubClient(
           ? signal
           : AbortSignal.any([signal, suppliedSignal]);
     return await policy.run(
-      async (requestOptions) => {
-        if (effectiveSignal === undefined) return await request(requestOptions as typeof options);
+      async () => {
+        if (effectiveSignal === undefined) return await request(options);
         const requestController = new AbortController();
         const abort = (): void => requestController.abort(abortReason(effectiveSignal));
         effectiveSignal.addEventListener("abort", abort, { once: true });
@@ -75,9 +75,9 @@ export function createGitHubClient(
           return await waitForRequest(
             async () =>
               await request({
-                ...requestOptions,
+                ...options,
                 request: { ...options.request, signal: requestController.signal },
-              } as typeof options),
+              }),
             effectiveSignal,
           );
         } finally {

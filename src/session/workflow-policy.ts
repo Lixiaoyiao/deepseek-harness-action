@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 import { parseDocument } from "yaml";
 
 import { PolicyDeniedError } from "../errors.js";
@@ -12,10 +13,10 @@ import {
 const MAX_WORKFLOW_BYTES = 256 * 1024;
 
 function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new PolicyDeniedError("Session workflow must contain ordinary YAML mappings");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 export interface SessionWorkflowPolicy {
@@ -85,7 +86,7 @@ export function assertSessionWorkflowPolicy(
       const configured = object(object(dispatch.inputs)[input[1] ?? ""]);
       if (
         configured.required !== true ||
-        ![undefined, "string"].includes(configured.type as string | undefined)
+        (configured.type !== undefined && configured.type !== "string")
       )
         throw new PolicyDeniedError(
           "Automatic Session key input must be a required workflow_dispatch string",

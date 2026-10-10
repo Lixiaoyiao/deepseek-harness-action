@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
 import { DshConfigurationError, DshMalformedOutputError } from "../src/dsh/errors.js";
@@ -30,8 +31,9 @@ describe("parseDshOutput", () => {
       throw new Error("expected failure");
     } catch (error: unknown) {
       expect(error).toBeInstanceOf(DshMalformedOutputError);
-      expect((error as Error).message).not.toContain(secret);
-      expect((error as Error).message.length).toBeLessThan(300);
+      if (!(error instanceof DshMalformedOutputError)) throw error;
+      expect(error.message).not.toContain(secret);
+      expect(error.message.length).toBeLessThan(300);
     }
     const schema = parseTaskOutputSchema(
       JSON.stringify({ type: "object", properties: { [secret]: { type: "boolean" } } }),
@@ -462,10 +464,12 @@ describe("buildDshPrompt", () => {
     expect(Buffer.byteLength(first, "utf8")).toBeLessThanOrEqual(WINDOWS_MAX_PROMPT_BYTES);
     expect(first).not.toContain("\ufffd");
     const envelopeText = first.slice(first.lastIndexOf("\n") + 1);
-    const envelope = JSON.parse(envelopeText) as {
-      _dshAction: { truncated: boolean; originalByteLength: number };
-      contextJsonPrefix: string;
-    };
+    const envelope = z
+      .looseObject({
+        _dshAction: z.looseObject({ truncated: z.boolean(), originalByteLength: z.number() }),
+        contextJsonPrefix: z.string(),
+      })
+      .parse(JSON.parse(envelopeText));
     expect(envelope._dshAction.truncated).toBe(true);
     expect(envelope._dshAction.originalByteLength).toBe(Buffer.byteLength(input.prompt, "utf8"));
     expect(input.prompt.startsWith(envelope.contextJsonPrefix)).toBe(true);

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { isRecord } from "../src/security/record.js";
 
 function stepBlock(workflow: string, name: string): string {
   const marker = `      - name: ${name}`;
@@ -12,10 +13,10 @@ function stepBlock(workflow: string, name: string): string {
 }
 
 function workflowRecord(value: unknown): Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Expected a workflow mapping");
   }
-  return value as Readonly<Record<string, unknown>>;
+  return value;
 }
 
 function candidateShellCalls(script: string): readonly { name: string; invocation: string }[] {

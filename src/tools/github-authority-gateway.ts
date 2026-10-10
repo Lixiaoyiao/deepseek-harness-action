@@ -10,6 +10,7 @@ import type {
   ToolProvider,
 } from "../agent/contracts.js";
 import type { SecurityPolicy } from "../security/policy.js";
+import { PolicyDeniedError } from "../errors.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
 import { utf8Prefix } from "../security/utf8.js";
 import type {
@@ -150,6 +151,8 @@ export interface GitHubAuthorityGatewayOptions {
   readonly expectedAuthorId: number;
   readonly backend: GitHubToolBackend;
   readonly validationGate?: GitHubMutationValidationGate;
+  /** Current actor authorization, independently repeated after Controller validation. */
+  readonly revalidateAuthority?: () => Promise<void>;
 }
 
 export class GitHubAuthorityGateway implements ToolProvider {
@@ -174,6 +177,14 @@ export class GitHubAuthorityGateway implements ToolProvider {
       options.validationGate === undefined
     ) {
       throw new Error("GitHub mutation authority requires a Controller validation gate");
+    }
+    if (
+      options.ids.some((id) => id !== "github.checks.read") &&
+      options.revalidateAuthority === undefined
+    ) {
+      throw new PolicyDeniedError(
+        "GitHub mutation authority requires a fresh Controller authority gate",
+      );
     }
     this.backend = options.backend;
     if (options.binding.repositoryId <= 0) throw new Error("Invalid trusted repository binding");
@@ -247,6 +258,18 @@ export class GitHubAuthorityGateway implements ToolProvider {
             id: mutationToolSchema.parse(call.id),
           })),
         });
+      }
+      const revalidateAuthority = this.options.revalidateAuthority;
+      if (this.pending.size > 0 && revalidateAuthority !== undefined) {
+        try {
+          await callGitHubApi(
+            { deadlineMs, ...(context.signal === undefined ? {} : { signal: context.signal }) },
+            async () => revalidateAuthority(),
+          );
+        } catch (error: unknown) {
+          this.pending.clear();
+          throw error;
+        }
       }
       for (const [callId, call] of this.pending) {
         const startedAt = Date.now();

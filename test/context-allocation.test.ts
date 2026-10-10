@@ -1,10 +1,11 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
+import { z } from "zod";
 
 import { buildDshPrompt } from "../src/dsh/prompt.js";
-import type { GitHubClient } from "../src/github/client.js";
 import type { PullRequestFileContext, PullRequestSnapshot } from "../src/github/fetch.js";
 import { buildContextPacket } from "../src/orchestration/context.js";
 import { inputs, pullRequestContext } from "./helpers.js";
@@ -47,23 +48,31 @@ function snapshot(changedFiles: readonly PullRequestFileContext[]): PullRequestS
   };
 }
 
-interface Projection {
-  readonly changedFiles: readonly PullRequestFileContext[];
-  readonly contextTruncated: boolean;
-  readonly diffTruncated: boolean;
-  readonly contextCoverage: {
-    readonly changedFileCount: number;
-    readonly includedFileCount: number;
-    readonly omittedFileCount: number;
-    readonly patchBytes: number;
-    readonly sourceBytes: number;
-    readonly patchesMissing: number;
-  };
-}
+const projectionSchema = z.looseObject({
+  changedFiles: z.array(
+    z.looseObject({
+      path: z.string(),
+      patch: z.string().optional(),
+      source: z.string().optional(),
+      patchTruncated: z.boolean(),
+      sourceTruncated: z.boolean(),
+    }),
+  ),
+  contextTruncated: z.boolean(),
+  diffTruncated: z.boolean(),
+  contextCoverage: z.object({
+    changedFileCount: z.number(),
+    includedFileCount: z.number(),
+    omittedFileCount: z.number(),
+    patchBytes: z.number(),
+    sourceBytes: z.number(),
+    patchesMissing: z.number(),
+  }),
+});
 
 async function packet(value: PullRequestSnapshot) {
-  return (await buildContextPacket(
-    {} as GitHubClient,
+  const result = await buildContextPacket(
+    githubClientFixture({}),
     pullRequestContext(),
     {
       operation: "review",
@@ -73,7 +82,8 @@ async function packet(value: PullRequestSnapshot) {
     },
     value,
     inputs(),
-  )) as { readonly entity: Projection };
+  );
+  return { ...result, entity: projectionSchema.parse(result.entity) };
 }
 
 function encodedBytes(value: string | undefined): number {
@@ -197,17 +207,26 @@ describe("fair model context allocation", () => {
   });
 
   it("keeps the trusted review workflow read-only and makes its coverage instructions explicit", async () => {
-    const workflow = YAML.parse(
-      await readFile(new URL("../.github/workflows/review.yml", import.meta.url), "utf8"),
-    ) as {
-      jobs: {
-        review: {
-          "timeout-minutes": number;
-          steps: { uses: string; with: Record<string, string | boolean> }[];
-        };
-      };
-      permissions: Record<string, string>;
-    };
+    const workflow = z
+      .object({
+        jobs: z.object({
+          review: z.object({
+            "timeout-minutes": z.number(),
+            steps: z.array(
+              z.object({
+                uses: z.string(),
+                with: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])),
+              }),
+            ),
+          }),
+        }),
+        permissions: z.record(z.string(), z.string()),
+      })
+      .parse(
+        YAML.parse(
+          await readFile(new URL("../.github/workflows/review.yml", import.meta.url), "utf8"),
+        ),
+      );
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write" });
     expect(workflow.jobs.review["timeout-minutes"]).toBe(30);
     expect(workflow.jobs.review.steps[0]?.with).toMatchObject({

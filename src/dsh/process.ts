@@ -53,7 +53,9 @@ function killPosixTree(child: ChildProcessWithoutNullStreams, graceMs: number): 
     child.kill("SIGTERM");
   }
   const forceTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    // The leader may exit on SIGTERM while a descendant retains the pipe
+    // descriptors. Only `close`, not the leader's exit status, proves that
+    // this invocation no longer owns an open process-group output channel.
     try {
       if (pid === undefined) child.kill("SIGKILL");
       else process.kill(-pid, "SIGKILL");
@@ -61,6 +63,7 @@ function killPosixTree(child: ChildProcessWithoutNullStreams, graceMs: number): 
       child.kill("SIGKILL");
     }
   }, graceMs);
+  child.once("close", () => clearTimeout(forceTimer));
   forceTimer.unref();
 }
 

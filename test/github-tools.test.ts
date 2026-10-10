@@ -1,9 +1,10 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { createHash } from "node:crypto";
+import { record } from "../src/security/record.js";
 
 import { describe, expect, it, vi } from "vitest";
 
 import type { SecurityPolicy } from "../src/security/policy.js";
-import type { GitHubClient } from "../src/github/client.js";
 import { issueContentFingerprint } from "../src/github/issue-identity.js";
 import { createOctokitGitHubToolBackend } from "../src/github/octokit-tool-backend.js";
 import {
@@ -31,6 +32,11 @@ import {
 import { resolveEffectiveTools } from "../src/tools/registry.js";
 
 const HEAD = "a".repeat(40);
+function requireFlushError(error: unknown): GitHubToolFlushError {
+  if (!(error instanceof GitHubToolFlushError))
+    throw new Error("Expected a typed GitHub flush failure");
+  return error;
+}
 const ISSUE_TITLE = "bound issue title";
 const ISSUE_BODY = "bound issue body";
 const ISSUE_AUTHOR_ID = 101;
@@ -178,6 +184,7 @@ function provider(options: {
     expectedAuthorId: options.expectedAuthorId ?? 41898282,
     backend: options.backend ?? fakeBackend(),
     validationGate: options.validationGate ?? (() => Promise.resolve()),
+    revalidateAuthority: () => Promise.resolve(),
   });
 }
 
@@ -674,7 +681,7 @@ describe("Controller-owned typed GitHub tools", () => {
     );
     const failure = await tools.flush(invocation).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(GitHubToolFlushError);
-    expect((failure as GitHubToolFlushError).receipts[0]).toMatchObject({
+    expect(requireFlushError(failure).receipts[0]).toMatchObject({
       result: {
         callId: "call-wrong-bot",
         ok: false,
@@ -686,7 +693,7 @@ describe("Controller-owned typed GitHub tools", () => {
         },
       },
     });
-    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+    expect(requireFlushError(failure).hasExternalEffect).toBe(true);
     expect(createComment).toHaveBeenCalledTimes(1);
   });
 
@@ -711,12 +718,12 @@ describe("Controller-owned typed GitHub tools", () => {
 
     expect(failure).toBeInstanceOf(GitHubToolFlushError);
     expect(createComment).toHaveBeenCalledOnce();
-    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+    expect(requireFlushError(failure).receipts[0]?.result.output).toMatchObject({
       attempts: 1,
       reconciled: false,
       externalEffect: "possible",
     });
-    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+    expect(requireFlushError(failure).hasExternalEffect).toBe(true);
   });
 
   it("bounds the complete marked comment to 32 KiB for ASCII and multibyte bodies", async () => {
@@ -781,11 +788,11 @@ describe("Controller-owned typed GitHub tools", () => {
     const failure = await tools.flush(invocation).catch((error: unknown) => error);
 
     expect(setLabels).toHaveBeenCalledOnce();
-    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+    expect(requireFlushError(failure).receipts[0]?.result.output).toMatchObject({
       attempts: 1,
       externalEffect: "confirmed",
     });
-    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
+    expect(requireFlushError(failure).hasExternalEffect).toBe(true);
   });
 
   it("retains successful receipts when a later queued mutation fails without an effect", async () => {
@@ -821,15 +828,15 @@ describe("Controller-owned typed GitHub tools", () => {
     const failure = await tools.flush(invocation).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(GitHubToolFlushError);
-    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(true);
-    expect((failure as GitHubToolFlushError).receipts).toHaveLength(2);
-    expect((failure as GitHubToolFlushError).receipts[0]?.result.output).toMatchObject({
+    expect(requireFlushError(failure).hasExternalEffect).toBe(true);
+    expect(requireFlushError(failure).receipts).toHaveLength(2);
+    expect(requireFlushError(failure).receipts[0]?.result.output).toMatchObject({
       effect: "updated",
     });
-    expect((failure as GitHubToolFlushError).receipts[1]?.result.output).toMatchObject({
+    expect(requireFlushError(failure).receipts[1]?.result.output).toMatchObject({
       effect: "scheduled",
     });
-    expect((failure as GitHubToolFlushError).receipts[1]?.result.output).not.toHaveProperty(
+    expect(requireFlushError(failure).receipts[1]?.result.output).not.toHaveProperty(
       "externalEffect",
     );
     expect(setLabels).toHaveBeenCalledOnce();
@@ -898,7 +905,7 @@ describe("Controller-owned typed GitHub tools", () => {
 
       expect(failure).toBeInstanceOf(GitHubToolFlushError);
       expect(setLabels).not.toHaveBeenCalled();
-      expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
+      expect(requireFlushError(failure).hasExternalEffect).toBe(false);
     },
   );
 
@@ -941,12 +948,12 @@ describe("Controller-owned typed GitHub tools", () => {
       "issue:3",
     ]);
     expect(setLabels).not.toHaveBeenCalled();
-    expect((failure as GitHubToolFlushError).receipts[0]?.result).toMatchObject({
+    expect(requireFlushError(failure).receipts[0]?.result).toMatchObject({
       callId: "call-attempt-drift",
       ok: false,
       output: { effect: "scheduled", attempts: 1, reconciled: false },
     });
-    expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
+    expect(requireFlushError(failure).hasExternalEffect).toBe(false);
   });
 
   it("the Octokit backend returns drifted PR state without making the trust decision", async () => {
@@ -963,7 +970,7 @@ describe("Controller-owned typed GitHub tools", () => {
         },
       }),
     );
-    const client = { rest: { pulls: { get: getPull } } } as unknown as GitHubClient;
+    const client = githubClientFixture({ rest: { pulls: { get: getPull } } });
     const control = { timeoutMs: 1_000, signal: new AbortController().signal };
 
     await expect(
@@ -1007,7 +1014,7 @@ describe("Controller-owned typed GitHub tools", () => {
 
       expect(failure).toBeInstanceOf(GitHubToolFlushError);
       expect(updatePull).not.toHaveBeenCalled();
-      expect((failure as GitHubToolFlushError).hasExternalEffect).toBe(false);
+      expect(requireFlushError(failure).hasExternalEffect).toBe(false);
     },
   );
 
@@ -1027,9 +1034,9 @@ describe("Controller-owned typed GitHub tools", () => {
         },
       }),
     );
-    const client = {
+    const client = githubClientFixture({
       rest: { repos: { get: getRepository }, issues: { get: getIssue } },
-    } as unknown as GitHubClient;
+    });
     const backend = createOctokitGitHubToolBackend(client);
     const control = { timeoutMs: 1_000, signal: new AbortController().signal };
 
@@ -1207,11 +1214,10 @@ describe("Controller-owned typed GitHub tools", () => {
       headSha: HEAD,
       truncated: true,
     });
-    const output = result.output as {
-      readonly combinedState: string;
-      readonly checkRuns: readonly { readonly name: string; readonly status: string }[];
-    };
+    const output = record(result.output);
     expect(output.combinedState).toBe("😀".repeat(8));
+    if (!Array.isArray(output.checkRuns))
+      throw new Error("Expected a checks array in the tool result");
     expect(output.checkRuns[0]).toEqual({
       name: "x".repeat(255),
       status: "😀".repeat(8),

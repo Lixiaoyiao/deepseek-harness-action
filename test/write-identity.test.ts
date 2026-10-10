@@ -8,22 +8,19 @@ import {
   MAX_BRANCH_NAME_BYTES,
   validateBranchNameTemplate,
 } from "../src/write/branch.js";
-import {
-  buildImplementationOperation,
-  findReconciledImplementationCommit,
-} from "../src/write/implementation.js";
+import { buildImplementationOperation } from "../src/write/implementation.js";
 import { revalidateIssueIdentity } from "../src/write/issue.js";
 import {
   createPullRequest,
   findPullRequestByOperation,
   revalidatePullRequestIdentity,
 } from "../src/write/pr.js";
+import { buildAutomationTaskOperation } from "../src/write/task.js";
 import {
-  assertEquivalentTaskCommit,
-  assertTaskCommitOwned,
-  buildAutomationTaskOperation,
-  findReconciledTaskCommit,
-} from "../src/write/task.js";
+  assertEquivalentOperationCommit,
+  assertOwnedOperationCommit,
+  findOwnedBranchCommit,
+} from "../src/write/operation-commit.js";
 
 function implementation() {
   const contentFingerprint = issueContentFingerprint({
@@ -126,6 +123,7 @@ describe("write identity and reconciliation", () => {
         updated_at: "2026-08-14T00:10:00Z",
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { issues: { get } } } as unknown as GitHubClient;
     const identity = {
       state: "open",
@@ -198,16 +196,17 @@ describe("write identity and reconciliation", () => {
         parents: [{ sha: "a".repeat(40) }],
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { git: { getRef, getCommit } } } as unknown as GitHubClient;
     await expect(
-      findReconciledImplementationCommit(client, "o", "r", operation, "a".repeat(40)),
+      findOwnedBranchCommit("implement", client, "o", "r", operation, "a".repeat(40)),
     ).resolves.toBe(head);
 
     getCommit.mockResolvedValueOnce({
       data: { sha: head, message: "attacker commit", parents: [{ sha: "a".repeat(40) }] },
     });
     await expect(
-      findReconciledImplementationCommit(client, "o", "r", operation, "a".repeat(40)),
+      findOwnedBranchCommit("implement", client, "o", "r", operation, "a".repeat(40)),
     ).rejects.toThrow("does not belong");
   });
 
@@ -257,21 +256,22 @@ describe("write identity and reconciliation", () => {
         parents: [{ sha: "a".repeat(40) }],
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { git: { getRef, getCommit } } } as unknown as GitHubClient;
     await expect(
-      findReconciledTaskCommit(client, "o", "r", operation, "a".repeat(40)),
+      findOwnedBranchCommit("task", client, "o", "r", operation, "a".repeat(40)),
     ).resolves.toBe(head);
 
     getCommit.mockResolvedValueOnce({
       data: { sha: head, message: operation.commitMessage, parents: [{ sha: "c".repeat(40) }] },
     });
     await expect(
-      findReconciledTaskCommit(client, "o", "r", operation, "a".repeat(40)),
+      findOwnedBranchCommit("task", client, "o", "r", operation, "a".repeat(40)),
     ).rejects.toThrow("does not belong");
 
     getRef.mockRejectedValueOnce({ status: 404 });
     await expect(
-      findReconciledTaskCommit(client, "o", "r", operation, "a".repeat(40)),
+      findOwnedBranchCommit("task", client, "o", "r", operation, "a".repeat(40)),
     ).resolves.toBeNull();
   });
 
@@ -298,9 +298,11 @@ describe("write identity and reconciliation", () => {
       .mockResolvedValueOnce(commit(existing))
       .mockResolvedValueOnce(commit(existing))
       .mockResolvedValueOnce(commit(candidate));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { git: { getCommit } } } as unknown as GitHubClient;
     await expect(
-      assertTaskCommitOwned(
+      assertOwnedOperationCommit(
+        "task",
         client,
         "o",
         "r",
@@ -310,18 +312,44 @@ describe("write identity and reconciliation", () => {
       ),
     ).resolves.toBeUndefined();
     await expect(
-      assertEquivalentTaskCommit(client, "o", "r", existing, candidate, operation, "a".repeat(40)),
+      assertEquivalentOperationCommit(
+        "task",
+        client,
+        "o",
+        "r",
+        existing,
+        candidate,
+        operation,
+        "a".repeat(40),
+      ),
     ).resolves.toBeUndefined();
 
     await expect(
-      assertTaskCommitOwned(client, "o", "r", existing, "not-a-key", operation.snapshotFingerprint),
+      assertOwnedOperationCommit(
+        "task",
+        client,
+        "o",
+        "r",
+        existing,
+        "not-a-key",
+        operation.snapshotFingerprint,
+      ),
     ).rejects.toThrow("Invalid task operation identity");
 
     getCommit
       .mockResolvedValueOnce(commit(existing, "tree-1"))
       .mockResolvedValueOnce(commit(candidate, "tree-2"));
     await expect(
-      assertEquivalentTaskCommit(client, "o", "r", existing, candidate, operation, "a".repeat(40)),
+      assertEquivalentOperationCommit(
+        "task",
+        client,
+        "o",
+        "r",
+        existing,
+        candidate,
+        operation,
+        "a".repeat(40),
+      ),
     ).rejects.toThrow("differs");
   });
 
@@ -331,12 +359,13 @@ describe("write identity and reconciliation", () => {
       number: 9,
       html_url: "https://github.com/octo/repo/pull/9",
       head: { ref: operation.branch, repo: { full_name: "octo/repo" } },
-      base: { ref: "main" },
+      base: { ref: "main", repo: { full_name: "octo/repo" } },
       body: operation.pullRequestMarker,
     };
     Object.assign(candidate.head, { sha: "b".repeat(40) });
     const list = vi.fn().mockResolvedValue({ data: [candidate] });
     const create = vi.fn();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { pulls: { list, create } } } as unknown as GitHubClient;
 
     await expect(
@@ -401,6 +430,7 @@ describe("write identity and reconciliation", () => {
         base: { repo: { id: 1 } },
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This Octokit boundary adapter implements only the GitHub routes exercised by the public write Interface.
     const client = { rest: { pulls: { get } } } as unknown as GitHubClient;
     await expect(
       revalidatePullRequestIdentity(client, "o", "r", 7, identity),

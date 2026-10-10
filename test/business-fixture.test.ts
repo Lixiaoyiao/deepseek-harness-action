@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -34,21 +35,29 @@ function invoke(route: string, index: number, body: unknown, configuration = set
     { input: JSON.stringify([route, index, body, configuration]), encoding: "utf8" },
   );
   expect(result.status).toBe(0);
-  return JSON.parse(result.stdout) as {
-    error?: string;
-    value?: {
-      phase: string;
-      message: {
-        role: string;
-        content?: string;
-        tool_calls?: {
-          id: string;
-          type: string;
-          function: { name: string; arguments: string };
-        }[];
-      };
-    };
-  };
+  return z
+    .looseObject({
+      error: z.string().optional(),
+      value: z
+        .looseObject({
+          phase: z.string(),
+          message: z.looseObject({
+            role: z.string(),
+            content: z.string().optional(),
+            tool_calls: z
+              .array(
+                z.looseObject({
+                  id: z.string(),
+                  type: z.string(),
+                  function: z.looseObject({ name: z.string(), arguments: z.string() }),
+                }),
+              )
+              .optional(),
+          }),
+        })
+        .optional(),
+    })
+    .parse(JSON.parse(result.stdout));
 }
 
 describe("trusted business fixture requires actual tool feedback", () => {
@@ -98,9 +107,9 @@ describe("trusted business fixture requires actual tool feedback", () => {
         expect(first?.message.tool_calls).toHaveLength(1);
         const call = first?.message.tool_calls?.[0];
         expect(call?.function.name).toBe("bash");
-        const argumentsValue = JSON.parse(call?.function.arguments ?? "null") as {
-          command: string;
-        };
+        const argumentsValue = z
+          .looseObject({ command: z.string() })
+          .parse(JSON.parse(call?.function.arguments ?? "null"));
         expect(argumentsValue.command).toContain(
           route === "fix" ? settings.fixturePath : settings.implementationPath,
         );
@@ -208,11 +217,15 @@ describe("trusted business fixture requires actual tool feedback", () => {
         expect(templates).toHaveLength(2);
         const template = templates[route === "fix" ? 0 : 1]?.[0];
         if (template === undefined) throw new Error("Missing business validation argv");
-        const commands = JSON.parse(
-          template
-            .replace("$path", JSON.stringify(path))
-            .replace("$content", JSON.stringify(content)),
-        ) as string[][];
+        const commands = z
+          .array(z.array(z.string()))
+          .parse(
+            JSON.parse(
+              template
+                .replace("$path", JSON.stringify(path))
+                .replace("$content", JSON.stringify(content)),
+            ),
+          );
         const argv = commands[0];
         if (argv === undefined) throw new Error("Missing business validation command");
         expect(argv.slice(0, 2)).toEqual(["node", validatorPath]);

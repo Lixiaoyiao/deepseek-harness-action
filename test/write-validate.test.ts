@@ -151,7 +151,8 @@ describe("trusted-write validation container", () => {
       timedOut: false,
       outputTruncated: true,
     });
-    expect((thrown as Error).message).toContain('"npm test" exited with code 1');
+    if (!(thrown instanceof ValidationFailureError)) throw thrown;
+    expect(thrown.message).toContain('"npm test" exited with code 1');
   });
 
   it("reports validation timeouts separately", () => {

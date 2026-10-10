@@ -1,3 +1,4 @@
+import { isRecord, record as objectRecord } from "../security/record.js";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, opendir, realpath } from "node:fs/promises";
@@ -315,10 +316,7 @@ type RestoredArtifact = ReturnType<ReturnType<typeof sessionFormatCatalog.create
 
 /** Published image/file blocks reference worker-local attachment bytes outside the raw log. */
 function assertPortableTextHistory(artifact: RestoredArtifact): void {
-  const record = (value: unknown): Record<string, unknown> =>
-    value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
+  const record = (value: unknown): Record<string, unknown> => (isRecord(value) ? value : {});
   const content = (value: unknown): void => {
     if (!Array.isArray(value)) return;
     for (const block of value) {
@@ -388,6 +386,12 @@ function assertSettled(artifact: RestoredArtifact): void {
       denied("has invalid pending-operation metadata");
     return value;
   };
+  const sequence = (data: Record<string, unknown>, key: string): string => {
+    const value = data[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      denied("has invalid operation sequence metadata");
+    return String(value);
+  };
   const bracket = (key: string, opening: boolean): void => {
     if (opening ? pending.has(key) : !pending.has(key))
       denied("has invalid operation settlement metadata");
@@ -395,10 +399,7 @@ function assertSettled(artifact: RestoredArtifact): void {
     else pending.delete(key);
   };
   for (const event of artifact.events) {
-    const data =
-      event.data !== null && typeof event.data === "object" && !Array.isArray(event.data)
-        ? (event.data as Record<string, unknown>)
-        : {};
+    const data = isRecord(event.data) ? event.data : {};
     switch (event.type) {
       case "turn/start":
         openTurn = true;
@@ -413,8 +414,10 @@ function assertSettled(artifact: RestoredArtifact): void {
         openStep = false;
         break;
       case "assistant/message": {
-        const message = data.message as Record<string, unknown>;
-        const content = message.content as Record<string, unknown>[];
+        const message = objectRecord(data.message);
+        if (!Array.isArray(message.content) || !message.content.every(isRecord))
+          denied("has invalid assistant message content");
+        const content = message.content;
         for (const block of content) {
           if (block.type === "tool-call") tools.add(identity(block, "id"));
         }
@@ -424,7 +427,7 @@ function assertSettled(artifact: RestoredArtifact): void {
         tools.add(identity(data, "callId"));
         break;
       case "tool/result": {
-        const message = data.message as Record<string, unknown>;
+        const message = objectRecord(data.message);
         tools.delete(identity(message, "toolCallId"));
         break;
       }
@@ -443,7 +446,7 @@ function assertSettled(artifact: RestoredArtifact): void {
       case "hook/invoked":
       case "hook/result":
         bracket(
-          `hook:${String(data.turn)}:${identity(data, "handlerId")}`,
+          `hook:${sequence(data, "turn")}:${identity(data, "handlerId")}`,
           event.type.endsWith("/invoked"),
         );
         break;
@@ -458,7 +461,7 @@ function assertSettled(artifact: RestoredArtifact): void {
       case "tool-workflow/agent-start":
       case "tool-workflow/agent-end":
         bracket(
-          `workflow-agent:${identity(data, "runId")}:${String(data.seq)}`,
+          `workflow-agent:${identity(data, "runId")}:${sequence(data, "seq")}`,
           event.type.endsWith("-start"),
         );
         break;
@@ -483,9 +486,8 @@ function assertSettled(artifact: RestoredArtifact): void {
         if (start > queue.length || start + removed > queue.length)
           denied("has invalid persisted inbox bounds");
         const ids = inserted.map((message: unknown) => {
-          if (message === null || typeof message !== "object" || Array.isArray(message))
-            denied("has invalid inbox input");
-          return identity(message as Record<string, unknown>, "id");
+          if (!isRecord(message)) denied("has invalid inbox input");
+          return identity(message, "id");
         });
         inbox[target] = queue.toSpliced(start, removed, ...ids);
         const all = [...inbox["next-turn"], ...inbox["next-step"]];
@@ -551,9 +553,8 @@ export function validateSessionPayload(options: PayloadOptions): SessionPayloadI
   let expandedReferences = 0;
   for (const [index, row] of rows.entries()) {
     if (index === 0) continue;
-    if (row === null || typeof row !== "object" || Array.isArray(row))
-      denied("contains an invalid event row");
-    const record = row as Record<string, unknown>;
+    if (!isRecord(row)) denied("contains an invalid event row");
+    const record = row;
     if (record.seq !== index - 1) denied("contains noncontiguous event sequence numbers");
     const references = record.sourceEventSeqs;
     if (references !== undefined) {

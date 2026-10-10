@@ -1,9 +1,17 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GitHubClient } from "../src/github/client.js";
 import { StickyProgressReporter, renderProgressComment } from "../src/github/progress.js";
 import type { ActionFailure } from "../src/result.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
+import { record } from "../src/security/record.js";
+
+function requestSignal(value: unknown): AbortSignal {
+  const signal = record(value).signal;
+  if (!(signal instanceof AbortSignal))
+    throw new Error("Expected an external request cancellation signal");
+  return signal;
+}
 
 const mocks = vi.hoisted(() => ({ upsert: vi.fn() }));
 
@@ -87,7 +95,7 @@ describe("controller-owned sticky progress", () => {
 
   it("updates one sticky comment only when the lifecycle body changes", async () => {
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "review",
@@ -118,12 +126,8 @@ describe("controller-owned sticky progress", () => {
       expect.stringContaining("✅ Completed"),
       expect.anything(),
     );
-    expect((mocks.upsert.mock.calls[0]?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
-      AbortSignal,
-    );
-    expect((mocks.upsert.mock.calls.at(-1)?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
-      AbortSignal,
-    );
+    expect(requestSignal(mocks.upsert.mock.calls[0]?.[5])).toBeInstanceOf(AbortSignal);
+    expect(requestSignal(mocks.upsert.mock.calls.at(-1)?.[5])).toBeInstanceOf(AbortSignal);
     expect(reporter.commentId).toBe(42);
   });
 
@@ -152,7 +156,7 @@ describe("controller-owned sticky progress", () => {
 
   it("publishes a classified terminal failure through the same reporter", async () => {
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "review",
@@ -172,9 +176,7 @@ describe("controller-owned sticky progress", () => {
       expect.stringContaining("**Failure code:** `DSH_TIMEOUT`"),
       expect.anything(),
     );
-    expect((mocks.upsert.mock.calls.at(-1)?.[5] as { signal?: unknown }).signal).toBeInstanceOf(
-      AbortSignal,
-    );
+    expect(requestSignal(mocks.upsert.mock.calls.at(-1)?.[5])).toBeInstanceOf(AbortSignal);
     expect(reporter.commentId).toBe(42);
   });
 
@@ -185,15 +187,15 @@ describe("controller-owned sticky progress", () => {
       let terminalSignal: AbortSignal | undefined;
       mocks.upsert
         .mockImplementationOnce((...args: unknown[]) => {
-          nonTerminalSignal = (args[5] as { signal: AbortSignal }).signal;
+          nonTerminalSignal = requestSignal(args[5]);
           return new Promise<number>(() => undefined);
         })
         .mockImplementationOnce((...args: unknown[]) => {
-          terminalSignal = (args[5] as { signal: AbortSignal }).signal;
+          terminalSignal = requestSignal(args[5]);
           return Promise.resolve(42);
         });
       const reporter = new StickyProgressReporter({
-        client: {} as GitHubClient,
+        client: githubClientFixture({}),
         target: { owner: "octo", repo: "repo", issueNumber: 7 },
         expectedAuthorId: 41898282,
         operation: "task",
@@ -222,15 +224,15 @@ describe("controller-owned sticky progress", () => {
     let correctionSignal: AbortSignal | undefined;
     mocks.upsert
       .mockImplementationOnce((...args: unknown[]) => {
-        provisionalSignal = (args[5] as { signal: AbortSignal }).signal;
+        provisionalSignal = requestSignal(args[5]);
         return new Promise<number>(() => undefined);
       })
       .mockImplementationOnce((...args: unknown[]) => {
-        correctionSignal = (args[5] as { signal: AbortSignal }).signal;
+        correctionSignal = requestSignal(args[5]);
         return Promise.resolve(42);
       });
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "task",
@@ -253,7 +255,7 @@ describe("controller-owned sticky progress", () => {
 
   it("never downgrades an authoritative failure to a later cancellation", async () => {
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "task",
@@ -274,7 +276,7 @@ describe("controller-owned sticky progress", () => {
     "does not replace a %s terminal state with a later failure",
     async (terminal) => {
       const reporter = new StickyProgressReporter({
-        client: {} as GitHubClient,
+        client: githubClientFixture({}),
         target: { owner: "octo", repo: "repo", issueNumber: 7 },
         expectedAuthorId: 41898282,
         operation: "task",
@@ -295,7 +297,7 @@ describe("controller-owned sticky progress", () => {
 
   it("renders blocked as neutral rather than a successful completion", async () => {
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "task",
@@ -313,7 +315,7 @@ describe("controller-owned sticky progress", () => {
   it("treats comment API failures as secondary and retries a later stage", async () => {
     const warning = vi.fn();
     const reporter = new StickyProgressReporter({
-      client: {} as GitHubClient,
+      client: githubClientFixture({}),
       target: { owner: "octo", repo: "repo", issueNumber: 7 },
       expectedAuthorId: 41898282,
       operation: "diagnose",

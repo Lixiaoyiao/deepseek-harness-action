@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 import { ClassifiedActionError } from "../errors.js";
 
 export interface GitHubRequestAudit {
@@ -26,13 +27,20 @@ export class GitHubQuotaError extends ClassifiedActionError<"GITHUB_QUOTA_EXHAUS
 }
 
 type Options = Record<string, unknown>;
-type Request = (options: Options) => Promise<unknown>;
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 128;
 const MAX_WAIT_MS = 15_000;
 
 function record(value: unknown): Options {
-  return typeof value === "object" && value !== null ? (value as Options) : {};
+  return isRecord(value) ? value : {};
+}
+
+function requestSignal(options: Options): AbortSignal | undefined {
+  const signal = record(options.request).signal;
+  if (signal === undefined) return undefined;
+  if (!(signal instanceof AbortSignal))
+    throw new Error("GitHub request signal must be an AbortSignal");
+  return signal;
 }
 
 function integer(value: unknown): number | undefined {
@@ -107,8 +115,11 @@ export function createRequestPolicy(
     ...(audit.resource === undefined ? {} : { resource: audit.resource }),
   });
 
-  const perform = async (request: Request, requestOptions: Options): Promise<unknown> => {
-    const signal = record(requestOptions.request).signal as AbortSignal | undefined;
+  const perform = async <T>(
+    request: (options: Options) => Promise<T>,
+    requestOptions: Options,
+  ): Promise<T> => {
+    const signal = requestSignal(requestOptions);
     for (let attempt = 0; ; attempt += 1) {
       if (signal?.aborted === true) throw signal.reason;
       audit.requests += 1;
@@ -164,18 +175,22 @@ export function createRequestPolicy(
     request: (options: Options) => Promise<T>,
     requestOptions: Options,
   ): Promise<T> => {
-    const signal = record(requestOptions.request).signal as AbortSignal | undefined;
+    const signal = requestSignal(requestOptions);
     if (signal?.aborted === true) throw signal.reason;
     const key = immutableKey(requestOptions);
-    if (key === undefined) return (await perform(request, requestOptions)) as T;
+    if (key === undefined) return await perform(request, requestOptions);
     const cached = cache.get(key);
     if (cached !== undefined) {
       audit.cacheHits += 1;
+      // The immutable Octokit route key preserves its response type across this heterogeneous cache.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return structuredClone(cached.value) as T;
     }
     const existing = pending.get(key);
     if (existing !== undefined) {
       audit.coalesced += 1;
+      // Coalesced requests use the same immutable route and response contract as this caller.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return structuredClone(await existing) as T;
     }
     const promise = perform(request, requestOptions);
@@ -191,7 +206,7 @@ export function createRequestPolicy(
         cache.set(key, { value: structuredClone(value), bytes });
         cacheBytes += bytes;
       }
-      return value as T;
+      return value;
     } finally {
       pending.delete(key);
     }

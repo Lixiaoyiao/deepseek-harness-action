@@ -44,9 +44,12 @@ describe("workspace source limits", () => {
   it("rejects an unknown source kind without consulting Git or the filesystem walker", async () => {
     const { source, worker } = await temporaryWorker();
 
-    await expect(
-      createWorkspaceSnapshot({ kind: "filesystem", root: source } as never, worker),
-    ).rejects.toThrow("Unsupported workspace source kind: filesystem");
+    const malformedSource = Object.assign({ kind: "materialized-tree", root: source } as const, {
+      kind: "filesystem",
+    });
+    await expect(createWorkspaceSnapshot(malformedSource, worker)).rejects.toThrow(
+      "Unsupported workspace source kind: filesystem",
+    );
     expect(mocks.requireGitSuccess).not.toHaveBeenCalled();
     expect(mocks.readdir).not.toHaveBeenCalled();
   });

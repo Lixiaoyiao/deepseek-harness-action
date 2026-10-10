@@ -11,6 +11,7 @@ import type { SessionId } from "@deepseek-ai/dsh-session";
 import SystemPrompt, { renderPrompt } from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime, { type ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { afterEach, describe, expect, it } from "vitest";
+import * as policy from "../assets/dsh/action-policy.mjs";
 
 const temporary: string[] = [];
 
@@ -44,13 +45,6 @@ interface SetupOptions {
   readonly knownRuntimeTools?: readonly string[];
 }
 
-async function loadPolicy() {
-  const policyPath = new URL("../assets/dsh/action-policy.mjs", import.meta.url);
-  return (await import(policyPath.href)) as {
-    readonly apply: (ctx: Context, config: unknown) => void;
-  };
-}
-
 async function setup(options: SetupOptions) {
   const root = await mkdtemp(join(tmpdir(), "dsh-action-policy-"));
   temporary.push(root);
@@ -62,7 +56,6 @@ async function setup(options: SetupOptions) {
     context.tools.register(options.tool ?? textTool("allowed", () => Promise.resolve("ok")));
   }
   context.tools.register(textTool("unauthorized", () => Promise.resolve("not allowed")));
-  const policy = await loadPolicy();
   const statePath = join(root, "counts.json");
   const auditPath = join(root, "receipts.jsonl");
   if (options.persistedState !== undefined) {
@@ -118,10 +111,13 @@ async function createScopedAgent(
     parent = injected;
   });
   if (parent === undefined) throw new Error("tools injection did not activate");
-  const identity: Record<string, unknown> = {};
-  const scope = createScope(parent, identity);
   const id = brandString<SessionId>(`policy-agent-${String(Math.random()).slice(2)}`);
-  const agent = identity as unknown as Agent;
+  const identity = { id };
+  const scope = createScope(parent, identity);
+  // The SDK needs identity before the cyclic ctx exists. This transport fixture
+  // supplies its registration/tool lifecycle below and never starts an Agent loop.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Incomplete external DSH Agent fixture at its registration boundary.
+  const agent = identity as Agent;
   const agentContext = scope.ctx.extend({ agent });
   Object.assign(identity, {
     id,
@@ -293,7 +289,6 @@ describe("Action-owned DSH ToolRuntime policy", () => {
     await context.plugin(ToolRuntime);
     context.tools.register(textTool("first", () => Promise.resolve("first")));
     context.tools.register(textTool("second", () => Promise.resolve("second")));
-    const policy = await loadPolicy();
     const base = {
       expectedOperation: "task",
       allowedRuntimeTools: ["first", "second"],
@@ -392,7 +387,6 @@ describe("Action-owned DSH ToolRuntime policy", () => {
           }),
       ),
     );
-    const policy = await loadPolicy();
     policy.apply(context, {
       expectedOperation: "task",
       allowedRuntimeTools: ["slow"],

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, expectTypeOf, it } from "vitest";
@@ -59,9 +60,9 @@ describe("typed Action public contract", () => {
       readFile(new URL("../package.json", import.meta.url), "utf8"),
       readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
     ]);
-    const manifest = JSON.parse(manifestText) as {
-      readonly scripts: Readonly<Record<string, string>>;
-    };
+    const manifest = z
+      .looseObject({ scripts: z.record(z.string(), z.string()) })
+      .parse(JSON.parse(manifestText));
 
     expect(manifest.scripts["test:generated"]).toBe("node scripts/generate-action-contract.mjs");
     expect(manifest.scripts.check).toContain("npm run test:generated");

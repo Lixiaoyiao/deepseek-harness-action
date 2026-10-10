@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 import type {
   AgentToolCall,
   AgentToolManifest,
@@ -193,7 +194,9 @@ export class CommandToolProvider implements ToolProvider {
     ) {
       throw new Error(`Command tool ${call.id} accepts no model-provided arguments`);
     }
-    const definition = this.definitions.get(call.id as CommandToolId);
+    const definition = [...this.definitions.values()].find(
+      ({ name }) => commandToolId(name) === call.id,
+    );
     if (definition === undefined) throw new Error(`Unknown or unauthorized tool: ${call.id}`);
     const id = commandToolId(definition.name);
     const next = (this.calls.get(id) ?? 0) + 1;
@@ -210,10 +213,10 @@ export class CommandToolProvider implements ToolProvider {
       timeoutMs: context.timeoutMs,
       ...(context.signal === undefined ? {} : { signal: context.signal }),
     });
-    if (typeof result.output !== "object" || result.output === null) {
+    if (!isRecord(result.output)) {
       throw new Error(`Command tool ${id} returned an invalid result envelope`);
     }
-    const output = result.output as Record<string, unknown>;
+    const output = result.output;
     if (typeof output.stdout !== "string" || typeof output.stderr !== "string") {
       throw new Error(`Command tool ${id} returned non-string process output`);
     }

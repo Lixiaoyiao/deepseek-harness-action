@@ -1,3 +1,4 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 /* Derived in part from anthropics/claude-code-action tests, MIT licensed. */
 import { describe, expect, it, vi } from "vitest";
 
@@ -11,7 +12,7 @@ function clientWith(
   permissionFor: (actor: string) => string | Error,
   typeFor: (actor: string) => string | Error = () => "User",
 ): GitHubClient {
-  return {
+  return githubClientFixture({
     rest: {
       users: {
         getByUsername: vi.fn(({ username }: { username: string }) => {
@@ -30,7 +31,7 @@ function clientWith(
         }),
       },
     },
-  } as unknown as GitHubClient;
+  });
 }
 
 describe("checkActorPermissions", () => {

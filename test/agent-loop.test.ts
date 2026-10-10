@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentEngine, AgentTurnRequest, ToolProvider } from "../src/agent/contracts.js";
+import { access, mkdir, writeFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach } from "vitest";
 import {
   AgentDeadlineError,
   AgentLoopLimitError,
@@ -10,16 +13,22 @@ import {
 import { buildDshPrompt, WINDOWS_MAX_PROMPT_BYTES } from "../src/dsh/prompt.js";
 import {
   DshCredentialLeakError,
+  DshAbortedError,
   DshMalformedOutputError,
   DshProcessError,
 } from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
 import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
-import type { DshRuntime } from "../src/dsh/runner.js";
+import { createDshRuntime, disposeDshRuntime, type DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
+import { DshAgentEngine } from "../src/review/run.js";
+import { createDshFixtureManager } from "./helpers/dsh-runner-fixtures.js";
 import { ValidationIntegrityError } from "../src/write/validation-integrity.js";
 import { ValidationFailureError } from "../src/write/validate.js";
 import { inputs } from "./helpers.js";
+
+const lifecycleFixtures = createDshFixtureManager();
+afterEach(lifecycleFixtures.dispose);
 
 const isolation: DshTurnMetadata["isolationReport"] = {
   backend: "docker",
@@ -147,6 +156,315 @@ function repairTurnFailureEngine(
 }
 
 describe("Controller Session lifecycle hooks", () => {
+  it.each(["success", "rejection"])(
+    "retains Session storage until cancelled restoration's late %s and filesystem writes settle",
+    async (acknowledgement) => {
+      const fixture = await lifecycleFixtures.fixtures();
+      const restoredRuntime = await createDshRuntime(fixture.root);
+      const controller = new AbortController();
+      let finishRestoration: (() => void) | undefined;
+      let restorationSettled: Promise<void> | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      const createEngine = vi.fn(() => engine([output("final")], []));
+      try {
+        const running = runAgentLoop(
+          task(),
+          inputs(),
+          {
+            deadlineMs: Date.now() + 60_000,
+            signal: controller.signal,
+            blocked: () => Promise.resolve("blocked"),
+            finalize: () => Promise.resolve("done"),
+            onRuntimeReady: (borrowedRuntime) => {
+              const pending = new Promise<void>((resolveRestore, rejectRestore) => {
+                finishRestoration = () => {
+                  finishRestoration = undefined;
+                  void mkdir(join(borrowedRuntime.dshHome, "sessions"), { recursive: true })
+                    .then(async () => {
+                      await writeFile(
+                        join(borrowedRuntime.dshHome, "sessions", "late-restoration.jsonl"),
+                        "restored Session state",
+                      );
+                      if (acknowledgement === "rejection")
+                        rejectRestore(new Error("Restoration failed after writing files"));
+                      else resolveRestore();
+                    })
+                    .catch(rejectRestore);
+                };
+              });
+              restorationSettled = pending.then(
+                () => undefined,
+                () => undefined,
+              );
+              markStarted?.();
+              return pending;
+            },
+          },
+          {
+            createRuntime: () => Promise.resolve(restoredRuntime),
+            createEngine,
+          },
+        );
+        const outcome = running.then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+        await started;
+        controller.abort(new DshAbortedError());
+        expect(await outcome).toBeInstanceOf(DshAbortedError);
+        expect(createEngine).not.toHaveBeenCalled();
+        expect(
+          await access(restoredRuntime.root).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(true);
+        finishRestoration?.();
+        await restorationSettled;
+        await expect
+          .poll(async () =>
+            access(restoredRuntime.root).then(
+              () => true,
+              () => false,
+            ),
+          )
+          .toBe(false);
+      } finally {
+        finishRestoration?.();
+        await restorationSettled;
+        await disposeDshRuntime(restoredRuntime);
+      }
+    },
+  );
+  it("keeps usage partial when an unreported turn precedes a measured turn", async () => {
+    let turn = 0;
+    const result = await runAgentLoop(
+      task(),
+      inputs({ maxTurns: 2 }),
+      {
+        deadlineMs: Date.now() + 60_000,
+        toolProvider: {
+          id: "fixture",
+          manifest: () => [],
+          invoke: (call) => Promise.resolve({ ...call, ok: true, output: {} }),
+        },
+        blocked: () => Promise.resolve("blocked"),
+        finalize: () => Promise.resolve("done"),
+      },
+      {
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => ({
+          id: "unknown-then-measured",
+          version: "1",
+          runTurn: () => {
+            turn += 1;
+            return Promise.resolve({
+              durationMs: 10,
+              output:
+                turn === 1
+                  ? output("needs_tool", { toolRequest: { id: "command.test", input: {} } })
+                  : output("final"),
+              metadata: {
+                isolationReport: isolation,
+                ...(turn === 1
+                  ? {}
+                  : {
+                      usage: {
+                        source: "headless-worker" as const,
+                        completeness: "complete" as const,
+                        reportedSteps: 1,
+                        observedSteps: 1,
+                        tokens: { inputTokens: 100, outputTokens: 20 },
+                      },
+                    }),
+              },
+            });
+          },
+        }),
+      },
+    );
+    expect(result.agent.usage).toEqual({
+      source: "headless-worker",
+      completeness: "partial",
+      reportedSteps: 1,
+      observedSteps: 1,
+      tokens: { inputTokens: 100, outputTokens: 20 },
+    });
+  });
+  it("sums worker-reported usage across turns without inventing missing cache buckets", async () => {
+    let turn = 0;
+    const result = await runAgentLoop(
+      task(),
+      inputs({ maxTurns: 2 }),
+      {
+        deadlineMs: Date.now() + 60_000,
+        toolProvider: {
+          id: "fixture",
+          manifest: () => [],
+          invoke: (call) => Promise.resolve({ ...call, ok: true, output: {} }),
+        },
+        blocked: () => Promise.resolve("blocked"),
+        finalize: () => Promise.resolve("done"),
+      },
+      {
+        createRuntime: () => Promise.resolve(runtime),
+        disposeRuntime: () => Promise.resolve(),
+        createEngine: () => ({
+          id: "fixture",
+          version: "1",
+          runTurn: () => {
+            turn += 1;
+            return Promise.resolve({
+              durationMs: 10,
+              output:
+                turn === 1
+                  ? output("needs_tool", { toolRequest: { id: "command.test", input: {} } })
+                  : output("final"),
+              metadata: {
+                isolationReport: isolation,
+                usage: {
+                  source: "headless-worker" as const,
+                  completeness: "complete" as const,
+                  reportedSteps: 1,
+                  observedSteps: 1,
+                  tokens:
+                    turn === 1
+                      ? { inputTokens: 100, outputTokens: 20, cacheReadTokens: 300 }
+                      : { inputTokens: 50, outputTokens: 5 },
+                },
+              },
+            });
+          },
+        }),
+      },
+    );
+    expect(result.agent.usage).toEqual({
+      source: "headless-worker",
+      completeness: "complete",
+      reportedSteps: 2,
+      observedSteps: 2,
+      tokens: { inputTokens: 150, outputTokens: 25 },
+    });
+  });
+  it("allows cold setup before the worker cap while enforcing the immutable run deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const requests: AgentTurnRequest[] = [];
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 20 * 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: () => Promise.resolve(),
+          createEngine: () => ({
+            id: "cold-start",
+            version: "1",
+            runTurn: async (request) => {
+              requests.push(request);
+              await new Promise<void>((resolve) => setTimeout(resolve, 4 * 60_000));
+              await new Promise<void>((resolve) => setTimeout(resolve, 9 * 60_000));
+              return {
+                output: output("final"),
+                durationMs: 13 * 60_000,
+                metadata: { isolationReport: isolation },
+              };
+            },
+          }),
+        },
+      );
+      const outcome = running.then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(13 * 60_000);
+      expect(await outcome).toMatchObject({ finalization: "done" });
+      expect(requests[0]?.timeoutMs).toBe(10 * 60_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a hanging engine turn at the overall deadline and disposes engine and runtime", async () => {
+    vi.useFakeTimers();
+    try {
+      let turnSignal: AbortSignal | undefined;
+      const dispose = vi.fn(() => Promise.resolve());
+      const disposeRuntime = vi.fn(() => Promise.resolve());
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: 20 * 60_000,
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime,
+          createEngine: () => ({
+            id: "stalled",
+            version: "1",
+            dispose,
+            runTurn: (request) => {
+              turnSignal = request.signal;
+              return new Promise(() => undefined);
+            },
+          }),
+        },
+      );
+      const outcome = expect(running).rejects.toBeInstanceOf(AgentDeadlineError);
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await outcome;
+      expect(turnSignal?.aborted).toBe(true);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(disposeRuntime).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("bounds Session restoration and disposes the acquired runtime before any worker starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const disposeRuntime = vi.fn(() => Promise.resolve());
+      const createEngine = vi.fn(() => engine([output("final")], []));
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: 20 * 60_000,
+          onRuntimeReady: () => new Promise<void>(() => undefined),
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("done"),
+        },
+        {
+          now: () => 0,
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime,
+          createEngine,
+        },
+      );
+      const outcome = expect(running).rejects.toThrow(/Session restoration.*timeout/u);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await outcome;
+      expect(createEngine).not.toHaveBeenCalled();
+      expect(disposeRuntime).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("restores before creating a worker and saves after finalization before disposal", async () => {
     const order: string[] = [];
     const value = { ...runtime };
@@ -353,7 +671,9 @@ describe("controller-owned agent loop", () => {
     expect(result.finalization).toBe("done");
     expect(requests[0]?.deadlineMs).toBe(2_000_000);
     expect(requests[0]?.timeoutMs).toBe(10 * 60_000);
-    expect(requests[0]?.signal).toBe(controller.signal);
+    expect(requests[0]?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(requests[0]?.signal?.aborted).toBe(true);
   });
 
   it("stops before invoking the Agent when the run was cancelled", async () => {
@@ -964,6 +1284,153 @@ describe("controller-owned agent loop", () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("defers runtime disposal until the engine actually settles when provider cleanup consumed the grace", async () => {
+    vi.useFakeTimers();
+    try {
+      let finishEngineDisposal: (() => void) | undefined;
+      const quiescence = new Promise<void>((resolve) => {
+        finishEngineDisposal = resolve;
+      });
+      const engineDispose = vi.fn(() => quiescence);
+      const runtimeDispose = vi.fn(() => Promise.resolve());
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: {
+            id: "fixture",
+            manifest: () => [],
+            invoke: () => Promise.reject(new Error("unused")),
+            dispose: () => new Promise<void>(() => undefined),
+          },
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("published"),
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: runtimeDispose,
+          createEngine: () => ({ ...engine([output("final")], []), dispose: engineDispose }),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(running).resolves.toMatchObject({ finalization: "published" });
+      expect(engineDispose).toHaveBeenCalledOnce();
+      expect(runtimeDispose).not.toHaveBeenCalled();
+      finishEngineDisposal?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtimeDispose).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a hung cleanup reporter without postponing later disposers or replacing success", async () => {
+    vi.useFakeTimers();
+    try {
+      const completed = vi.fn();
+      const engineDispose = vi.fn(() => Promise.resolve());
+      const runtimeDispose = vi.fn(() => Promise.resolve());
+      const report = vi.fn(() => new Promise<void>(() => undefined));
+      const running = runAgentLoop(
+        task(),
+        inputs(),
+        {
+          deadlineMs: Date.now() + 60_000,
+          toolProvider: {
+            id: "fixture",
+            manifest: () => [],
+            invoke: () => Promise.reject(new Error("unused")),
+            dispose: () => Promise.reject(new Error("provider shutdown failed")),
+          },
+          blocked: () => Promise.resolve("blocked"),
+          finalize: () => Promise.resolve("published"),
+          onCleanupError: report,
+        },
+        {
+          createRuntime: () => Promise.resolve(runtime),
+          disposeRuntime: runtimeDispose,
+          createEngine: () => ({ ...engine([output("final")], []), dispose: engineDispose }),
+        },
+      ).then((result) => {
+        completed();
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(completed).toHaveBeenCalledOnce();
+      await expect(running).resolves.toMatchObject({ finalization: "published" });
+      expect(report).toHaveBeenCalled();
+      expect(engineDispose).toHaveBeenCalledOnce();
+      expect(runtimeDispose).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("DSH engine disposal cancels and waits for a real active worker before returning", async () => {
+    const fixture = await lifecycleFixtures.fixtures();
+    const executable = join(fixture.root, "active-worker.mjs");
+    const readyPath = join(fixture.workspace, "worker-ready");
+    await writeFile(
+      executable,
+      'import { writeFileSync } from "node:fs"; process.on("SIGTERM", () => setTimeout(() => process.exit(0), 25)); writeFileSync("worker-ready", String(process.pid)); function alive(){ setTimeout(alive, 1000); } alive();',
+    );
+    const policy = { ...task().policy, trust: "trusted-read" as const };
+    const realEngine: AgentEngine<DshOutput, DshTurnMetadata> = new DshAgentEngine(
+      inputs({
+        isolation: "none",
+        dshExecutable: executable,
+        deepseekApiKey: "controller-deepseek-test-key",
+        githubToken: "controller-github-test-key",
+      }),
+      policy,
+    );
+    const controller = new AbortController();
+    let workerPid: number | undefined;
+    const turnRequest: AgentTurnRequest = {
+      schemaVersion: 1,
+      operation: "task",
+      requestedAccess: "read",
+      instructions: "test",
+      context: {},
+      tools: [],
+      workspacePath: fixture.workspace,
+      deadlineMs: Date.now() + 60_000,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    };
+    const execution = realEngine.runTurn(turnRequest).then(
+      (value) => value,
+      (error: unknown) => error,
+    );
+    try {
+      await expect
+        .poll(
+          async () => {
+            const pid = Number(await readFile(readyPath, "utf8").catch(() => "pending"));
+            if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+            workerPid = pid;
+            return true;
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+      await expect(realEngine.runTurn(turnRequest)).rejects.toThrow(/overlapping turns/u);
+      await Promise.all([realEngine.dispose?.(), realEngine.dispose?.()]);
+      expect(controller.signal.aborted).toBe(false);
+      if (workerPid === undefined) throw new Error("Worker did not publish its PID");
+      const stoppedPid = workerPid;
+      expect(() => process.kill(stoppedPid, 0)).toThrow();
+      expect(await execution).toBeInstanceOf(DshAbortedError);
+      await expect(realEngine.runTurn(turnRequest)).rejects.toThrow(/disposed DSH engine/u);
+    } finally {
+      controller.abort();
+      await execution;
     }
   });
 

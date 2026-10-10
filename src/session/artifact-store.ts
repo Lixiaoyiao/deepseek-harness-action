@@ -1,3 +1,4 @@
+import { record } from "../security/record.js";
 import { DefaultArtifactClient } from "@actions/artifact";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -516,7 +517,8 @@ async function downloadCheckpoint(
       !("response" in error)
     )
       throw error;
-    location = (error.response as { headers?: { location?: string } }).headers?.location;
+    const redirect = record(record(error.response).headers).location;
+    location = typeof redirect === "string" ? redirect : undefined;
   }
   if (location === undefined) denied("GitHub did not provide an artifact archive redirect");
   const url = new URL(location);

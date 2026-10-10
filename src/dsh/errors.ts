@@ -1,3 +1,4 @@
+import type { ModelUsage } from "./usage.js";
 import { ClassifiedActionError, type ActionErrorIdentity } from "../errors.js";
 
 export type DshErrorCode =
@@ -14,6 +15,8 @@ export type DshErrorCode =
   | "DSH_TIMEOUT";
 
 export interface DshFailureTelemetry {
+  /** Informational worker report; never an authority or billing input. */
+  readonly usage?: ModelUsage;
   readonly durationMs: number;
   readonly isolationReport: DshIsolationReport;
   readonly extensionAudit?: AnyExtensionAudit;

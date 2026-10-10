@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 import {
   nativeRuntimeToolNames,
@@ -30,18 +30,9 @@ import type {
   RunDshCompositionPreparation,
 } from "./composition.js";
 import type { DshRuntime } from "./runtime.js";
+import { assertDshFile, prepareCompositionLauncher } from "./composition-files.js";
 
 const CONTROLLED_PROFILE_SCHEMA_VERSION = 1;
-
-async function assertFile(path: string, description: string): Promise<void> {
-  let details;
-  try {
-    details = await stat(path);
-  } catch (error: unknown) {
-    throw new DshConfigurationError(`${description} does not exist`, { cause: error });
-  }
-  if (!details.isFile()) throw new DshConfigurationError(`${description} is not a file`);
-}
 
 async function writeToolPolicy(
   runtime: DshRuntime,
@@ -151,7 +142,7 @@ export class ControlledComposition implements DshComposition {
           ? "trusted-read.patch.yml"
           : "strict-untrusted.patch.yml";
     const patchPath = join(options.assetsDirectory, patchName);
-    await assertFile(patchPath, "DSH patch profile");
+    await assertDshFile(patchPath, "DSH patch profile");
     return patchPath;
   }
 
@@ -160,9 +151,9 @@ export class ControlledComposition implements DshComposition {
   }): Promise<void> {
     const assets = controlledAssets(options.assetsDirectory);
     await Promise.all([
-      assertFile(assets.policyPluginPath, "DSH Action policy plugin"),
-      assertFile(assets.workspacePluginPath, "DSH Action workspace plugin"),
-      assertFile(assets.launcherPath, "DSH Action launcher"),
+      assertDshFile(assets.policyPluginPath, "DSH Action policy plugin"),
+      assertDshFile(assets.workspacePluginPath, "DSH Action workspace plugin"),
+      assertDshFile(assets.launcherPath, "DSH Action launcher"),
     ]);
     this.validatedAssetsDirectory = options.assetsDirectory;
   }
@@ -253,35 +244,21 @@ export class ControlledComposition implements DshComposition {
     }
     const needsPostInstallPreparation =
       options.plan.plugins.length > 0 && pluginModuleSpecifiers === undefined;
-    const launcherDestinationPath = join(profile.profileDir, basename(CONTAINER_LAUNCHER));
-    await copyFile(assets.launcherPath, launcherDestinationPath);
-    if (options.runtime.session !== undefined) {
-      await copyFile(
-        join(options.assetsDirectory, "action-session.mjs"),
-        join(profile.profileDir, "action-session.mjs"),
-      );
-    }
+    const launcher = await prepareCompositionLauncher({
+      runtime: options.runtime,
+      assetsDirectory: options.assetsDirectory,
+      launcherPath: assets.launcherPath,
+      containerLauncher: CONTAINER_LAUNCHER,
+      task: options.task,
+    });
     const prepared: PreparedDockerDshComposition = {
       isolation: "docker",
       launchPlan: {
         command: "node",
-        args: [
-          "--expose-internals",
-          CONTAINER_LAUNCHER,
-          options.task,
-          ...(options.runtime.session === undefined ? [] : ["--action-session"]),
-        ],
+        args: launcher.args,
         workdir: "/tmp",
         mounts: [
-          ...(options.runtime.session === undefined
-            ? []
-            : [
-                {
-                  sourcePath: join(options.runtime.dshHome, "action-state", "session-plan.json"),
-                  destinationPath: "/dsh-home/action-state/session-plan.json",
-                  readOnly: true,
-                },
-              ]),
+          ...launcher.mounts,
           {
             sourcePath: options.runtime.packageRoot,
             destinationPath: CONTAINER_PROFILE_ROOT,

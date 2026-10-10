@@ -34,9 +34,10 @@ export function dockerNetworkInspectSpec(
 
 export function parseInternalNetworkGateway(stdout: string): string {
   const gateway = stdout.trim();
-  if (isIP(gateway) !== 4) {
+  const firstOctet = Number(gateway.split(".")[0]);
+  if (isIP(gateway) !== 4 || firstOctet === 0 || firstOctet === 127 || firstOctet >= 224) {
     throw new DshIsolationUnavailableError(
-      "Docker did not report a valid IPv4 gateway for the internal worker network",
+      "Docker did not report a valid IPv4 gateway for the worker network; wildcard, loopback and multicast addresses are forbidden",
     );
   }
   return gateway;

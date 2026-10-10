@@ -6,6 +6,7 @@ import { PolicyDeniedError } from "../errors.js";
 import { assertPathWithin } from "../security/paths.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
 import { inspectWorkspaceChanges, type WorkspaceSnapshot } from "./workspace.js";
+import { EntityBindingChangedError } from "./errors.js";
 
 export interface GitHubCommitTarget {
   readonly owner: string;
@@ -24,6 +25,7 @@ const PROTECTED_PREFIXES = [".github/workflows/", ".github/actions/", ".dsh/", "
 const PROTECTED_BASENAMES = new Set([
   ".gitmodules",
   "action.yml",
+  "action.yaml",
   "codeowners",
   "dependabot.yml",
   "dependabot.yaml",
@@ -169,7 +171,8 @@ export async function assertRemoteBranchHead(
 ): Promise<void> {
   const actual = await getBranchHead(client, owner, repo, branch);
   const expected = validateCommitSha(expectedSha);
-  if (actual !== expected) throw new Error("Remote branch advanced during DSH execution");
+  if (actual !== expected)
+    throw new EntityBindingChangedError("Remote branch advanced during DSH execution");
 }
 
 export async function createRemoteBranch(
@@ -199,9 +202,10 @@ export async function createRemoteBranch(
     }
     if (actual === expected) return;
     if (actual !== null) {
-      throw new Error("Remote branch exists at a different commit; refusing to overwrite it", {
-        cause: error,
-      });
+      throw new EntityBindingChangedError(
+        "Remote branch exists at a different commit; refusing to overwrite it",
+        { cause: error },
+      );
     }
     throw error;
   }

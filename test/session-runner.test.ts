@@ -177,7 +177,8 @@ describe("post-worker Session failures retain existing telemetry", () => {
         failure = error;
       }
       expect(failure).toBeInstanceOf(DshConfigurationError);
-      expect((failure as Error).cause).toBeInstanceOf(PolicyDeniedError);
+      if (!(failure instanceof DshConfigurationError)) throw failure;
+      expect(failure.cause).toBeInstanceOf(PolicyDeniedError);
       expect(failure).toMatchObject({
         telemetry: {
           extensionAudit: { profile: "github-action" },
@@ -194,7 +195,7 @@ describe("post-worker Session failures retain existing telemetry", () => {
           ],
         },
       });
-      expect((failure as Error).message).not.toContain("ephemeral-worker-token");
+      expect(failure.message).not.toContain("ephemeral-worker-token");
       expect(close).toHaveBeenCalledOnce();
     },
   );

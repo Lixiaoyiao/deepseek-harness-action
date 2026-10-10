@@ -354,10 +354,12 @@ function parseJson(value: string | undefined): unknown {
   }
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function jsonObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isJsonObject(value) ? value : undefined;
 }
 
 function nested(object: Record<string, unknown> | undefined, ...path: readonly string[]): unknown {

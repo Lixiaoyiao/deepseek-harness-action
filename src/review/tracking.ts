@@ -40,7 +40,15 @@ export function createTrackingMarker(marker: TrackingMarker): string {
 export function parseTrackingMarkers(body: string): TrackingMarker[] {
   const markers: TrackingMarker[] = [];
   for (const match of body.matchAll(MARKER_PATTERN)) {
-    const kind = match[1] as TrackingKind;
+    const kind = match[1];
+    if (
+      kind !== "summary" &&
+      kind !== "diagnosis" &&
+      kind !== "task" &&
+      kind !== "write" &&
+      kind !== "finding"
+    )
+      continue;
     const fingerprint = match[2];
     if (kind === "finding") {
       if (fingerprint !== undefined) markers.push({ kind, fingerprint });

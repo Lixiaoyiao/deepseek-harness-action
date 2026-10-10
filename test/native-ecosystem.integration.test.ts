@@ -39,8 +39,8 @@ interface DeepSeekTool {
 }
 
 interface DeepSeekRequest {
-  readonly messages?: readonly DeepSeekMessage[];
-  readonly tools?: readonly DeepSeekTool[];
+  readonly messages?: readonly DeepSeekMessage[] | undefined;
+  readonly tools?: readonly DeepSeekTool[] | undefined;
 }
 
 afterEach(async () => {
@@ -212,7 +212,11 @@ describe("locked rc.2 native ecosystem boot", () => {
             result.stdout
               .trim()
               .split("\n")
-              .map((line) => JSON.parse(line) as { type: string; text?: string })
+              .map((line) =>
+                z
+                  .looseObject({ type: z.string(), text: z.string().optional() })
+                  .parse(JSON.parse(line)),
+              )
               .find(({ type }) => type === "final")?.text ?? "",
           ),
         ).toMatchObject({
@@ -264,9 +268,13 @@ describe("locked rc.2 native ecosystem boot", () => {
         expect(transcript).toContain("NATIVE_WORKFLOW_MARKER");
         expect(new Set(httpMcp.authorization)).toEqual(new Set(["Bearer native-http-owned-token"]));
 
-        const observation = JSON.parse(
-          (await readFile(join(actionState, "native-observed-tools.jsonl"), "utf8")).trim(),
-        ) as { readonly observedTools: readonly string[] };
+        const observation = z
+          .looseObject({ observedTools: z.array(z.string()) })
+          .parse(
+            JSON.parse(
+              (await readFile(join(actionState, "native-observed-tools.jsonl"), "utf8")).trim(),
+            ),
+          );
         for (const name of [
           "skill",
           "subagent",
@@ -326,10 +334,9 @@ describe("locked rc.2 native ecosystem boot", () => {
         // failing loadProfile. An admitted extension must never disappear while
         // the remaining Agent silently runs the task without it.
         const bundleManifestPath = join(installedBundle, "package.json");
-        const bundleManifest = JSON.parse(await readFile(bundleManifestPath, "utf8")) as Record<
-          string,
-          unknown
-        >;
+        const bundleManifest = z
+          .record(z.string(), z.unknown())
+          .parse(JSON.parse(await readFile(bundleManifestPath, "utf8")));
         await writeFile(
           bundleManifestPath,
           JSON.stringify({
@@ -461,7 +468,14 @@ async function readJsonRequest(request: IncomingMessage): Promise<DeepSeekReques
     else if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
     else throw new TypeError("DeepSeek fixture received a non-byte request chunk");
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as DeepSeekRequest;
+  return z
+    .looseObject({
+      messages: z
+        .array(z.looseObject({ role: z.unknown().optional(), content: z.unknown().optional() }))
+        .optional(),
+      tools: z.array(z.looseObject({ name: z.unknown().optional() })).optional(),
+    })
+    .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
 }
 
 function sendToolCall(
@@ -601,6 +615,7 @@ async function startNativeHttpMcpFixture(): Promise<{
       void mcp.close();
     });
     mcp
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK declares a string|undefined sessionId getter against its own exact-optional Transport interface.
       .connect(transport as Transport)
       .then(async () => await transport.handleRequest(request, response))
       .catch((error: unknown) => response.writeHead(500).end(String(error)));

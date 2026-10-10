@@ -83,6 +83,7 @@ export interface AgentEngine<TOutput = unknown, TMetadata = unknown> {
   readonly id: string;
   readonly version: string;
   runTurn(request: AgentTurnRequest): Promise<AgentTurnResponse<TOutput, TMetadata>>;
+  /** Shut down active turns, including on failure; borrowed resource owners may retain late activity leases. */
   dispose?(): Promise<void>;
 }
 

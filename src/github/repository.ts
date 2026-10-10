@@ -90,7 +90,7 @@ function validateBlobs(
       path,
       sha: validateCommitSha(entry.sha),
       size,
-      mode: entry.mode as "100644" | "100755",
+      mode: entry.mode === "100755" ? "100755" : "100644",
     });
   }
   if (blobs.length > MAX_FILES) throw new Error("Repository exceeds materialization file limit");

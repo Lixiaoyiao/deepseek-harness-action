@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 const MAX_REASON_COUNT = 4;
 const DEPENDENCY_SECTIONS = [
   "dependencies",
@@ -77,9 +78,7 @@ function parseJson(value: string): unknown {
 }
 
 function jsonObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function nested(object: Record<string, unknown>, ...path: readonly string[]): unknown {

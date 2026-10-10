@@ -28,9 +28,15 @@ function hasWritePermission(permission: RepositoryPermission): boolean {
 }
 
 function normalizePermission(permission: string): RepositoryPermission {
-  const supported: readonly string[] = ["none", "read", "triage", "write", "maintain", "admin"];
-  if (!supported.includes(permission)) return "none";
-  return permission as RepositoryPermission;
+  const supported: readonly RepositoryPermission[] = [
+    "none",
+    "read",
+    "triage",
+    "write",
+    "maintain",
+    "admin",
+  ];
+  return supported.find((candidate) => candidate === permission) ?? "none";
 }
 
 async function getActorAccess(

@@ -178,11 +178,11 @@ describe("run-scoped DSH runtime", () => {
   });
 
   it("rejects malformed first-use bindings before fixing the runtime", () => {
-    const malformed: readonly Partial<DshRuntimeBinding>[] = [
+    const malformed: readonly Record<string, unknown>[] = [
       { compositionId: "" },
       { dshVersion: "" },
       { containerImage: " " },
-      { isolation: "invalid" as DshRuntimeBinding["isolation"] },
+      { isolation: "invalid" },
       { workspacePath: "relative/workspace" },
       { chatBaseUrl: "http://remote.example.test" },
       { chatBaseUrl: "https://user:password@api.example.test" },
@@ -191,25 +191,27 @@ describe("run-scoped DSH runtime", () => {
       { isolation: "none" },
       { dshExecutableIdentity: join(tmpdir(), "docker-cannot-use-host-bin.js") },
       { extensionConfigurationDigest: "not-a-digest" },
-      { nativeRuntimeTools: "read" as unknown as readonly string[] },
+      { nativeRuntimeTools: "read" },
       { nativeRuntimeTools: ["not/a/tool"] },
-      { workspaceWrite: "yes" as unknown as boolean },
-      { network: 1 as unknown as boolean },
+      { workspaceWrite: "yes" },
+      { network: 1 },
       { profileSchemaVersion: 0 },
     ];
 
     for (const invalid of malformed) {
       const runtime = runtimeStub();
-      expect(() => bindDshRuntime(runtime, binding(invalid))).toThrow(/DSH runtime binding/u);
+      // Mutate a valid typed value at the untrusted JavaScript boundary to
+      // exercise the production runtime validator with malformed fields.
+      expect(() => bindDshRuntime(runtime, Object.assign(binding(), invalid))).toThrow(
+        /DSH runtime binding/u,
+      );
       expect(runtime).not.toHaveProperty("binding");
     }
   });
 
   it("rejects a forged existing fingerprint and an unbindable runtime", () => {
     const requested = binding();
-    const forged = runtimeStub() as DshRuntime & {
-      binding: NonNullable<DshRuntime["binding"]>;
-    };
+    const forged = runtimeStub();
     Object.defineProperty(forged, "binding", {
       value: Object.freeze({ fingerprint: "0".repeat(64), binding: requested }),
       enumerable: true,

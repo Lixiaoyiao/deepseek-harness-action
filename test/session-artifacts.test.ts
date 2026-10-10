@@ -1,3 +1,4 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -6,7 +7,6 @@ import { zipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 import { PolicyDeniedError } from "../src/errors.js";
-import type { GitHubClient } from "../src/github/client.js";
 import { GitHubQuotaError } from "../src/github/request-policy.js";
 import {
   decodeSessionArchive,
@@ -304,7 +304,7 @@ function fixture() {
     receipts.push(receipt);
   });
   const options: PrepareSessionArtifactsOptions = {
-    client: { rest: api } as unknown as GitHubClient,
+    client: githubClientFixture({ rest: api }),
     binding: { ...binding, workflow: { ...binding.workflow, jobName: "session" } },
     mode: "save",
     currentRun: { runId: 200, runAttempt: 1, workflowSha: sha, actorLogin: "maintainer" },

@@ -58,6 +58,41 @@ export interface DshRuntime {
   verifiedPluginModuleSpecifiers?: Readonly<Record<string, string>>;
 }
 
+interface RuntimeActivity {
+  readonly active: Set<Promise<unknown>>;
+  closing: boolean;
+  disposal?: Promise<void>;
+}
+
+const runtimeActivity = new WeakMap<DshRuntime, RuntimeActivity>();
+
+function activityFor(runtime: DshRuntime): RuntimeActivity {
+  let activity = runtimeActivity.get(runtime);
+  if (activity === undefined) {
+    activity = { active: new Set(), closing: false };
+    runtimeActivity.set(runtime, activity);
+  }
+  return activity;
+}
+
+/** Register actual work before it starts; budget races do not end its storage lease. */
+export function withDshRuntimeActivity<T>(
+  runtime: DshRuntime,
+  start: () => Promise<T>,
+): Promise<T> {
+  const activity = activityFor(runtime);
+  if (activity.closing)
+    throw new DshConfigurationError("A closing DSH runtime cannot start another activity");
+  const pending = Promise.resolve().then(start);
+  activity.active.add(pending);
+  const release = (): void => {
+    activity.active.delete(pending);
+  };
+  // Both branches are observed without rethrowing into an orphaned finally Promise.
+  void pending.then(release, release);
+  return pending;
+}
+
 type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 interface JsonObject {
   readonly [key: string]: JsonValue;
@@ -316,6 +351,11 @@ export async function createDshRuntime(temporaryDirectory = tmpdir()): Promise<D
   return { root, dshHome, packageRoot, npmCache };
 }
 
-export async function disposeDshRuntime(runtime: DshRuntime): Promise<void> {
-  await rm(runtime.root, { force: true, recursive: true });
+export function disposeDshRuntime(runtime: DshRuntime): Promise<void> {
+  const activity = activityFor(runtime);
+  activity.closing = true;
+  activity.disposal ??= Promise.allSettled([...activity.active]).then(async () => {
+    await rm(runtime.root, { force: true, recursive: true });
+  });
+  return activity.disposal;
 }

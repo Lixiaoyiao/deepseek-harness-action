@@ -14,7 +14,7 @@ import {
 } from "../extensions/plan.js";
 import { assertNoSecretOutput, collectControllerSecrets } from "../security/env.js";
 import type { NativeToolId } from "../tools/schema.js";
-import type { DshIsolationReport, DshRunRequest } from "./runner.js";
+import type { DshIsolationReport, DshRunRequest } from "./runner-types.js";
 
 const EMPTY_EXTENSION_AUDIT_DIGEST = createHash("sha256")
   .update(

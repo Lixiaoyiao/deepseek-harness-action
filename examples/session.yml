@@ -25,6 +25,7 @@ on:
 concurrency:
   group: dsh-session-${{ inputs.session_key }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -36,9 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # Pin the complete commit published in the v0.10.0 Release for production.
+      # Pin the complete commit published in the v0.10.1 Release for production.
       # Commit this file to the default branch and dispatch from that branch.
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           command: task

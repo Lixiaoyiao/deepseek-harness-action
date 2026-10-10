@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,15 +13,6 @@ import { parseTaskOutputSchema, validateTaskOutput } from "../src/dsh/task-outpu
 const script = fileURLToPath(new URL("../.github/e2e/web-search-evidence.mjs", import.meta.url));
 const source = { title: "Official documentation", url: "https://example.org/documentation" };
 const completedSearch = { id: "native.web-search", completed: true, ok: true };
-
-interface Evidence {
-  readonly actionOutcome: string;
-  readonly conclusion: string;
-  readonly errorCode: string;
-  readonly receiptCount: number | null;
-  readonly completedWebSearchCount: number | null;
-  readonly sourceReported: boolean;
-}
 
 async function capture(rawResult: string, outcome = "success", includeSummary = true) {
   const root = await mkdtemp(join(tmpdir(), "dsh-web-evidence-test-"));
@@ -49,7 +41,16 @@ async function capture(rawResult: string, outcome = "success", includeSummary = 
     expect(result.stderr).toBe("");
     const saved = await readFile(evidencePath, "utf8");
     const stdoutValue = JSON.parse(result.stdout) as unknown;
-    const value = JSON.parse(saved) as Evidence;
+    const value = z
+      .looseObject({
+        actionOutcome: z.string(),
+        conclusion: z.string(),
+        errorCode: z.string(),
+        receiptCount: z.union([z.number(), z.null()]),
+        completedWebSearchCount: z.union([z.number(), z.null()]),
+        sourceReported: z.boolean(),
+      })
+      .parse(JSON.parse(saved));
     expect(stdoutValue).toEqual(value);
     expect(Object.keys(value).sort()).toEqual([
       "actionOutcome",
@@ -232,22 +233,25 @@ describe("bounded Web Search evidence", () => {
 
 describe("Web Search workflow task output schema", () => {
   it("validates a real title and URI and rejects missing fields or invalid URIs", async () => {
-    interface Workflow {
-      readonly jobs: Readonly<
-        Record<
-          string,
-          {
-            readonly steps?: readonly {
-              readonly id?: string;
-              readonly with?: Readonly<Record<string, unknown>>;
-            }[];
-          }
-        >
-      >;
-    }
-    const workflow = parse(
-      await readFile(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8"),
-    ) as Workflow;
+    const workflow = z
+      .looseObject({
+        jobs: z.record(
+          z.string(),
+          z.looseObject({
+            steps: z
+              .array(
+                z.looseObject({
+                  id: z.string().optional(),
+                  with: z.record(z.string(), z.unknown()).optional(),
+                }),
+              )
+              .optional(),
+          }),
+        ),
+      })
+      .parse(
+        parse(await readFile(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8")),
+      );
     const web = Object.values(workflow.jobs)
       .flatMap((job) => job.steps ?? [])
       .find((step) => step.id === "web");

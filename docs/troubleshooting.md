@@ -10,7 +10,7 @@ Give the Action step an `id`, then inspect `result-json` even when the step
 fails:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.9.1
+- uses: Lixiaoyiao/deepseek-harness-action@v0.10.1
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

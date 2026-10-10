@@ -25,6 +25,12 @@ import {
   parsePluginConfiguration,
 } from "../src/extensions/schema.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
+import {
+  fixtureObject,
+  fixtureObjects,
+  readFixtureManifest,
+  readJsonFixture,
+} from "./helpers/json-fixture.js";
 
 const temporaryPaths: string[] = [];
 const trustedRead: SecurityPolicy = {
@@ -258,19 +264,12 @@ describe("ControlledComposition", () => {
       expect(receipts).toBeDefined();
       if (receipts === undefined) throw new Error("expected controlled receipt metadata");
 
-      const manifest = JSON.parse(
-        await readFile(join(runtime.packageRoot, "package.json"), "utf8"),
-      ) as {
-        readonly name: string;
-        readonly dsh: { readonly profile: { readonly bundles: readonly string[] } };
-      };
-      const rows = JSON.parse(
-        await readFile(join(runtime.packageRoot, "cordis.patch.yml"), "utf8"),
-      ) as {
-        readonly insert?: readonly { readonly id?: string; readonly config?: unknown }[];
-      }[];
+      const manifest = await readFixtureManifest(join(runtime.packageRoot, "package.json"));
+      const rows = fixtureObjects(
+        await readJsonFixture(join(runtime.packageRoot, "cordis.patch.yml")),
+      );
       const policy = rows
-        .flatMap(({ insert }) => insert ?? [])
+        .flatMap(({ insert }) => fixtureObjects(insert ?? []))
         .find(({ id }) => id === "dsh-action-policy");
 
       expect(receipts).toMatchObject({
@@ -437,10 +436,8 @@ describe("NativeComposition", () => {
         readFile(join(runtime.packageRoot, "native-launcher.mjs"), "utf8"),
       ).resolves.toBe(fixture.launcher);
 
-      const nativeManifest = JSON.parse(
-        await readFile(join(runtime.packageRoot, "package.json"), "utf8"),
-      ) as { readonly dsh: { readonly profile: { readonly bundles: readonly string[] } } };
-      expect(nativeManifest.dsh.profile.bundles).toEqual([
+      const nativeManifest = await readFixtureManifest(join(runtime.packageRoot, "package.json"));
+      expect(fixtureObject(fixtureObject(nativeManifest.dsh).profile).bundles).toEqual([
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-headless",
       ]);
@@ -523,13 +520,8 @@ describe("NativeComposition", () => {
       if (prepared.isolation !== "docker") throw new Error("expected Docker preparation");
       expect(prepared).not.toHaveProperty("receipts");
 
-      const manifest = JSON.parse(
-        await readFile(join(runtime.packageRoot, "package.json"), "utf8"),
-      ) as {
-        readonly dependencies: Readonly<Record<string, string>>;
-        readonly dsh: { readonly profile: { readonly bundles: readonly string[] } };
-      };
-      expect(manifest.dsh.profile.bundles).toEqual([
+      const manifest = await readFixtureManifest(join(runtime.packageRoot, "package.json"));
+      expect(fixtureObject(fixtureObject(manifest.dsh).profile).bundles).toEqual([
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-headless",
         bundlePackage,

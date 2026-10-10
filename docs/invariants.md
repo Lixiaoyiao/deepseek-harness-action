@@ -37,8 +37,12 @@ An Action-owned GitHub mutation is deferred until the applicable Controller
 validation and final revalidation succeed. Cancellation or validation failure
 must leave the mutation queue unflushed.
 
+Result projection preserves completed validation evidence. An integrity audit
+on a no-change task does not start command validation; a later publication
+failure cannot turn unexecuted configured commands into failed validation.
+
 Evidence: `test/github-tools.test.ts`, `test/orchestrator-no-change.test.ts`,
-`test/fix.test.ts`, `test/implement.test.ts`, and `test/task.test.ts`.
+`test/write-finalizers.integration.test.ts` and `test/write-transactions.integration.test.ts`.
 
 ## INV-005 NativeInventoryIsObservedNotGranted
 

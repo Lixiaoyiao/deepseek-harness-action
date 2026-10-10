@@ -1,3 +1,4 @@
+import { createAuthorityRevalidator } from "../src/orchestration/authority.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDshRuntime, disposeDshRuntime, type DshRuntime } from "../src/dsh/runtime.js";
@@ -127,6 +128,19 @@ function options(overrides: Partial<ControlledActionInputs> = {}) {
     currentRunUrl: "https://github.com/octo/repo/actions/runs/10",
     policy,
     deferWriteProgress: false,
+    revalidateAuthority: createAuthorityRevalidator({
+      client: createGitHubClient("controller-github-secret"),
+      context,
+      command: {
+        operation: "task",
+        source: "explicit-input",
+        requestedAccess: "read",
+        instructions: "current follow-up",
+      },
+      inputs: configured,
+      policy,
+      signal: new AbortController().signal,
+    }),
     initializeProgress: () => undefined,
   };
   const state: RunState = { phase: "context" };

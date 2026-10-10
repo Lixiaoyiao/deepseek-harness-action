@@ -68,6 +68,7 @@ export class GitHubAuthoritySession {
     readonly allowWrite: boolean;
     readonly expectedAuthorId: number;
     readonly backend: GitHubToolBackend;
+    readonly revalidateAuthority: () => Promise<void>;
     readonly validationGate?: GitHubMutationValidationGate;
     readonly state: RunState;
     readonly workspacePath: string;
@@ -83,6 +84,7 @@ export class GitHubAuthoritySession {
       allowWrite: options.allowWrite,
       expectedAuthorId: options.expectedAuthorId,
       backend: options.backend,
+      revalidateAuthority: options.revalidateAuthority,
       ...(validationGate === undefined
         ? {}
         : {

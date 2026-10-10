@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   execFile,
   spawn,
@@ -83,15 +84,23 @@ describe("controlled official DSH Profile", () => {
       workerAuditPath: "/dsh-home/action-state/tool-receipts.jsonl",
       manifestBase: { name: "fixture", version: "1.0.0" },
     });
-    const rows = JSON.parse(rendered.patch) as {
-      readonly id?: string;
-      readonly disabled?: boolean;
-      readonly config?: Record<string, unknown>;
-      readonly insert?: readonly {
-        readonly id?: string;
-        readonly config?: Record<string, unknown>;
-      }[];
-    }[];
+    const rows = z
+      .array(
+        z.looseObject({
+          id: z.string().optional(),
+          disabled: z.boolean().optional(),
+          config: z.record(z.string(), z.unknown()).optional(),
+          insert: z
+            .array(
+              z.looseObject({
+                id: z.string().optional(),
+                config: z.record(z.string(), z.unknown()).optional(),
+              }),
+            )
+            .optional(),
+        }),
+      )
+      .parse(JSON.parse(rendered.patch));
     const row = (id: string) => rows.find((candidate) => candidate.id === id);
 
     expect(row("tool-bash")?.config).toEqual({ enableRunInBackground: false });
@@ -188,9 +197,9 @@ describe("controlled official DSH Profile", () => {
       allowPluginInstall: false,
       policy: trustedRead,
     });
-    const manifestBase = JSON.parse(
-      await readFile(join(process.cwd(), "package.json"), "utf8"),
-    ) as Record<string, unknown>;
+    const manifestBase = z
+      .record(z.string(), z.unknown())
+      .parse(JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")));
     const profile = await prepareControlledProfile({
       dshHome,
       plan,
@@ -208,10 +217,9 @@ describe("controlled official DSH Profile", () => {
       workerAuditPath: join(dshHome, "action-state", "receipts.jsonl"),
       manifestBase,
     });
-    const patch = JSON.parse(await readFile(profile.patchPath, "utf8")) as Record<
-      string,
-      unknown
-    >[];
+    const patch = z
+      .array(z.record(z.string(), z.unknown()))
+      .parse(JSON.parse(await readFile(profile.patchPath, "utf8")));
     expect(patch.some((row) => row.id === "headless-runner")).toBe(true);
     expect(patch.some((row) => row.id === "sandbox-policy")).toBe(true);
     expect(patch.some((row) => Array.isArray(row.insert))).toBe(true);
@@ -274,9 +282,9 @@ describe("controlled official DSH Profile", () => {
       allowPluginInstall: false,
       policy: trustedRead,
     });
-    const manifestBase = JSON.parse(
-      await readFile(join(process.cwd(), "package.json"), "utf8"),
-    ) as Record<string, unknown>;
+    const manifestBase = z
+      .record(z.string(), z.unknown())
+      .parse(JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")));
     const profile = await prepareControlledProfile({
       dshHome,
       plan,
@@ -361,7 +369,9 @@ async function readFixtureBaseUrl(server: ChildProcessWithoutNullStreams): Promi
       const newline = output.indexOf("\n");
       if (newline < 0) return;
       clearTimeout(timeout);
-      const value = JSON.parse(output.slice(0, newline)) as { readonly baseUrl?: unknown };
+      const value = z
+        .looseObject({ baseUrl: z.unknown().optional() })
+        .parse(JSON.parse(output.slice(0, newline)));
       if (typeof value.baseUrl !== "string") {
         rejectPromise(new Error("LLM fixture emitted an invalid endpoint"));
         return;

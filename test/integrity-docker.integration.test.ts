@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -72,7 +73,9 @@ async function startFixture(auditPath: string): Promise<Fixture> {
         const newline = stdout.indexOf("\n");
         if (newline < 0) return;
         try {
-          const value = JSON.parse(stdout.slice(0, newline)) as { readonly baseUrl?: unknown };
+          const value = z
+            .looseObject({ baseUrl: z.unknown().optional() })
+            .parse(JSON.parse(stdout.slice(0, newline)));
           if (
             typeof value.baseUrl !== "string" ||
             !/^http:\/\/127\.0\.0\.1:[1-9][0-9]*$/u.test(value.baseUrl)

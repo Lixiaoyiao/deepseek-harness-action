@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DshRunResult } from "../src/dsh/runner.js";
-import type { GitHubClient } from "../src/github/client.js";
-import type { PullRequestSnapshot } from "../src/github/fetch.js";
+import type * as DshRunnerModule from "../src/dsh/runner.js";
+import { githubClientFixture } from "./helpers/github-client.js";
+import { pullRequestSnapshot } from "./helpers/entity-snapshot.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import { formatCiEvidence } from "../src/ci/diagnose.js";
 
 const mocks = vi.hoisted(() => ({
   publishReview: vi.fn(),
-  runDsh: vi.fn(),
+  runDsh: vi.fn<typeof DshRunnerModule.runDsh>(),
   upsert: vi.fn(),
 }));
 
@@ -58,7 +59,7 @@ describe("operation finalizers", () => {
   it("renders bounded, marker-owned diagnosis comments", async () => {
     mocks.upsert.mockResolvedValue(1);
     await finishDiagnosis(
-      {} as GitHubClient,
+      githubClientFixture({}),
       { owner: "o", repo: "r", issueNumber: 7 },
       1,
       result,
@@ -92,9 +93,9 @@ describe("operation finalizers", () => {
       },
     };
     const returned = await finishReview(
-      {} as GitHubClient,
+      githubClientFixture({}),
       { owner: "o", repo: "r", pullNumber: 7, expectedAuthorId: 1, runUrl: "run" },
-      {} as PullRequestSnapshot,
+      pullRequestSnapshot(),
       reviewResult,
       10,
     );
@@ -172,18 +173,9 @@ describe("operation finalizers", () => {
       }),
       expect.anything(),
     );
-    const lastRunDshCall = (
-      mocks.runDsh.mock.calls as unknown as readonly (readonly unknown[])[]
-    ).at(-1);
-    const dshRequest = lastRunDshCall?.[0] as { readonly deadlineMs?: number } | undefined;
-    const dshDependencies = lastRunDshCall?.[1] as
-      | {
-          readonly composition?: {
-            readonly id?: string;
-            readonly toolPolicyOwner?: string;
-          };
-        }
-      | undefined;
+    const lastRunDshCall = mocks.runDsh.mock.calls.at(-1);
+    const dshRequest = lastRunDshCall?.[0];
+    const dshDependencies = lastRunDshCall?.[1];
     expect(dshDependencies?.composition).toMatchObject({
       id: "github-action-controlled",
       toolPolicyOwner: "controller",
@@ -195,7 +187,7 @@ describe("operation finalizers", () => {
   it("sanitizes status comments and removes model-owned markers", async () => {
     mocks.upsert.mockResolvedValue(1);
     await publishStatusComment(
-      {} as GitHubClient,
+      githubClientFixture({}),
       { owner: "o", repo: "r", issueNumber: 7 },
       1,
       "Fix prepared",

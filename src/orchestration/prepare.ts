@@ -1,3 +1,4 @@
+import { createAuthorityRevalidator } from "./authority.js";
 import * as core from "@actions/core";
 
 import { finalizeWorkflowRunRoute, routeCommand, type RoutedCommand } from "../commands/router.js";
@@ -34,6 +35,8 @@ export interface AuthorizedRun {
   readonly policy: SecurityPolicy;
   readonly issueNumber?: number;
   readonly deferWriteProgress: boolean;
+  /** Recompute current actor authority without expanding the admitted capability set. */
+  readonly revalidateAuthority: () => Promise<void>;
   initializeProgress(): StickyProgressReporter | undefined;
 }
 
@@ -148,6 +151,16 @@ export async function prepareAuthorizedRun(options: {
   state.policy = policy;
   if (!policy.allowed) throw new PolicyDeniedError(policy.reason);
 
+  const revalidateAuthority = createAuthorityRevalidator({
+    client,
+    context,
+    command,
+    inputs,
+    policy,
+    signal,
+    ...(pullRequest === undefined ? {} : { pullRequest }),
+  });
+
   state.phase = "context";
   command = await resolveTrustedPrompt({ client, repository: context.repository, command, inputs });
   throwIfCancelled(signal);
@@ -191,6 +204,7 @@ export async function prepareAuthorizedRun(options: {
       policy,
       ...(issueNumber === undefined ? {} : { issueNumber }),
       deferWriteProgress,
+      revalidateAuthority,
       initializeProgress,
     },
   };

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -19,19 +20,21 @@ interface Input {
 }
 
 interface Reply {
-  readonly status?: number;
+  readonly status?: number | undefined;
   readonly value?: unknown;
-  readonly error?: string;
-  readonly advanceMs?: number;
+  readonly error?: string | undefined;
+  readonly advanceMs?: number | undefined;
 }
 
 interface Replay {
-  readonly result?: {
-    readonly operation: "create" | "delete";
-    readonly writes: number;
-    readonly reads: number;
-  };
-  readonly error?: string;
+  readonly result?:
+    | {
+        readonly operation: "create" | "delete";
+        readonly writes: number;
+        readonly reads: number;
+      }
+    | undefined;
+  readonly error?: string | undefined;
   readonly requests: readonly {
     readonly method: string;
     readonly path: string;
@@ -107,7 +110,29 @@ function replay(input: Input, replies: readonly Reply[]): Replay {
   expect(child.status, child.stderr).toBe(0);
   expect(child.signal).toBeNull();
   expect(child.stderr).toBe("");
-  const result = JSON.parse(child.stdout) as Replay;
+  const result = z
+    .looseObject({
+      result: z
+        .looseObject({
+          operation: z.union([z.literal("create"), z.literal("delete")]),
+          writes: z.number(),
+          reads: z.number(),
+        })
+        .optional(),
+      error: z.string().optional(),
+      requests: z.array(
+        z.looseObject({
+          method: z.string(),
+          path: z.string(),
+          body: z.unknown().optional(),
+          hasSignal: z.boolean(),
+        }),
+      ),
+      reports: z.array(z.record(z.string(), z.unknown())),
+      waits: z.array(z.number()),
+      remaining: z.number(),
+    })
+    .parse(JSON.parse(child.stdout));
   for (const event of result.reports) {
     expect(Object.keys(event).sort()).toEqual(["attempt", "operation", "stage", "status"]);
     expect(event.operation).toBe(input.operation);

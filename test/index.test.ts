@@ -4,13 +4,13 @@ import type { RunOutcome } from "../src/result.js";
 
 const mocks = vi.hoisted(() => ({
   runAction: vi.fn<(options: { readonly signal: AbortSignal }) => Promise<RunOutcome>>(),
-  setOutput: vi.fn(),
+  setOutput: vi.fn<(name: string, value: unknown) => void>(),
   setFailed: vi.fn(),
   warning: vi.fn(),
   exit: vi.fn(),
   addHeading: vi.fn(),
   addRaw: vi.fn(),
-  summaryWrite: vi.fn(),
+  summaryWrite: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }));
 
 vi.mock("../src/orchestrator.js", () => ({ runAction: mocks.runAction }));
@@ -25,7 +25,7 @@ vi.mock("@actions/core", () => {
       return summary;
     },
     write(...args: unknown[]) {
-      return mocks.summaryWrite(...args) as Promise<unknown>;
+      return mocks.summaryWrite(...args);
     },
   };
   return {
@@ -36,13 +36,15 @@ vi.mock("@actions/core", () => {
   };
 });
 
+const exitBoundary = new Error("The Action process completed");
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   process.exitCode = undefined;
   vi.spyOn(process, "exit").mockImplementation((code) => {
     mocks.exit(code);
-    return undefined as never;
+    throw exitBoundary;
   });
   mocks.summaryWrite.mockResolvedValue(undefined);
 });
@@ -73,13 +75,12 @@ describe("action entrypoint finalization", () => {
     };
     mocks.runAction.mockResolvedValue(failure);
 
-    await import("../src/index.js");
+    await expect(import("../src/index.js")).rejects.toBe(exitBoundary);
     expect(mocks.exit).toHaveBeenCalledWith(0);
     expect(mocks.runAction.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
     expect(mocks.setFailed).toHaveBeenCalledOnce();
 
-    const outputCalls = mocks.setOutput.mock.calls as [string, string | number][];
-    const outputs = Object.fromEntries(outputCalls) as Record<string, unknown>;
+    const outputs = Object.fromEntries(mocks.setOutput.mock.calls);
     expect(outputs).toMatchObject({
       conclusion: "failure",
       operation: "review",
@@ -110,7 +111,7 @@ describe("action entrypoint finalization", () => {
     } satisfies RunOutcome);
     mocks.summaryWrite.mockRejectedValue(new Error("summary unavailable"));
 
-    await import("../src/index.js");
+    await expect(import("../src/index.js")).rejects.toBe(exitBoundary);
     expect(mocks.warning).toHaveBeenCalledOnce();
 
     expect(mocks.setOutput).toHaveBeenCalledWith("conclusion", "success");
@@ -121,11 +122,10 @@ describe("action entrypoint finalization", () => {
     const token = `ghp_${"a".repeat(36)}`;
     mocks.runAction.mockRejectedValue(new Error(`unexpected ${token}`));
 
-    await import("../src/index.js");
+    await expect(import("../src/index.js")).rejects.toBe(exitBoundary);
     expect(mocks.setFailed).toHaveBeenCalledOnce();
 
-    const outputCalls = mocks.setOutput.mock.calls as [string, string | number][];
-    const outputs = Object.fromEntries(outputCalls) as Record<string, unknown>;
+    const outputs = Object.fromEntries(mocks.setOutput.mock.calls);
     expect(outputs).toMatchObject({
       conclusion: "failure",
       operation: "none",
