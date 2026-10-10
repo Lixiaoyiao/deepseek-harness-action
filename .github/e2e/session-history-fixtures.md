@@ -6,12 +6,33 @@ The workflow still has exactly one Session-producing Action step. Its job token
 keeps `actions: read`; uploads and the one permitted replacement use the official
 artifact SDK's current-job runtime scope, without `findBy` or another credential.
 
+The private local JavaScript Action runs the existing fixture entrypoint with
+`node24`. The runner supplies its artifact runtime context directly to this
+process; shell `run: node` steps do not receive that context. No runtime token
+is exported through `GITHUB_ENV` or persisted. A presence-only check fails with
+`SESSION_FIXTURE_RUNTIME_CONTEXT` before any model proof or artifact is read.
+CI first runs the same local Action in its private model-free smoke operation:
+it uploads one small non-Session file under a unique run/attempt-bound name,
+requires the upload digest, checks the current-job artifact ID/name/size, and
+compares the optional queried digest when the SDK provides it. Its safe receipt
+states whether that metadata digest was observed and compared. It deletes only
+that confirmed current-job artifact. The private temporary directory is always removed.
+This smoke has no model, Session or checkpoint and never counts as release
+Session qualification. Transport uncertainty fails CI without application retry;
+unconfirmed ownership never permits deletion by a broader prefix.
+
 Only a first `save` task with a fresh logical key, successful Action output and
 an independently decoded checkpoint can seed a fixture. The successful proof is
 uploaded before the diagnostic. The helper binds the local proof, Action result,
 actor, repository, workflow SHA, branch, run attempt and exact SDK artifact ID/name.
 It stores files outside both checkouts and emits only IDs, hashes and binding
 metadata. Hidden memory and raw model payloads never appear in fixture logs.
+The automatic and explicit preparation entrypoints register their generated or
+verified imported memory and challenge with the runner's `add-mask` command
+before later steps display their inputs or result environment. Same-job step
+outputs and the private oracle files retain their original values; masking does
+not change the task schema or independent proof checks. This relies on the
+runner's log masker and requires a real CI run to verify the platform behavior.
 
 ## Corrupt checkpoint
 
@@ -79,7 +100,8 @@ key cannot qualify a second consumer.
 
 The historical producer's Action SHA may differ from the consumer's. Its harness
 SHA may also differ, but actual Git commit/tree metadata must prove the source
-workflow and all three executing helper blobs are byte-identical to the current
+workflow, all three executing helper blobs and the local JavaScript Action
+metadata are byte-identical to the current
 trusted checkout. The independent Git blob hashes use a fixed path whitelist;
 metadata cannot supply a local path or executable command. A changed, missing,
 symlink or truncated historical helper tree invalidates the fixture and requires

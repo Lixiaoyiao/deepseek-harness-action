@@ -36,3 +36,26 @@ export function seedSessionHistoryFixture(options: {
     "getArtifact" | "deleteArtifact" | "uploadArtifact"
   >;
 }): Promise<HistoryFixtureReceipt>;
+
+export interface ArtifactTransportSmokeReceipt {
+  readonly schemaVersion: 1;
+  readonly operation: "artifact-sdk-smoke";
+  readonly sessionQualification: false;
+  readonly runId: number;
+  readonly runAttempt: number;
+  readonly artifactId: number;
+  readonly artifactName: string;
+  readonly archiveSha256: string;
+  readonly uploadedBytes: number;
+  readonly metadataDigestObserved: boolean;
+  readonly metadataDigestCompared: boolean;
+  readonly deleted: true;
+}
+
+export function smokeSessionArtifactTransport(options: {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly artifactClient: Pick<
+    ArtifactClient,
+    "getArtifact" | "deleteArtifact" | "uploadArtifact"
+  >;
+}): Promise<ArtifactTransportSmokeReceipt>;

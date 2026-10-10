@@ -31,6 +31,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Current-job artifact SDK transport smoke without a model
+        uses: ./.github/e2e/session-history-fixture-action
+        env:
+          SESSION_FIXTURE_OPERATION: smoke
       - run: npm run check
       - name: Linux Docker frozen-SHA Validation Integrity regression
         id: integrity

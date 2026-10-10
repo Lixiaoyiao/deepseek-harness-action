@@ -550,6 +550,8 @@ async function prepare(env, directory) {
   }
   const memory = parent?.memory ?? randomBytes(24).toString("hex");
   const challenge = randomBytes(12).toString("hex");
+  // These validated hex oracle values stay intact in same-job outputs, but are masked in logs.
+  process.stdout.write(`::add-mask::${memory}\n::add-mask::${challenge}\n`);
   const expected = {
     ...current,
     phase,

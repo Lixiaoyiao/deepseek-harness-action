@@ -12,6 +12,7 @@ export const historicalHarnessPaths = Object.freeze([
   ".github/e2e/session-auto-e2e-proof.mjs",
   ".github/e2e/session-history-fixture.mjs",
   ".github/e2e/session-history-fixture-proof.mjs",
+  ".github/e2e/session-history-fixture-action/action.yml",
 ]);
 function assertHistoricalHarness(sourceHarness, sourceSha) {
   const commit = sourceHarness?.commit;
