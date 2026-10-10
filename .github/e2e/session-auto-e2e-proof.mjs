@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import { unzipSync } from "fflate";
+import { assertOrphanFixtureProvenance } from "./session-history-fixture-proof.mjs";
 
 const MAX_ARCHIVE = 4 * 1024 * 1024 + 64 * 1024;
 const MAX_PAYLOAD = 4 * 1024 * 1024;
@@ -240,7 +241,10 @@ export function failureChecks(result, expected, actionOutcome) {
   const diagnostic = result?.error?.message ?? "";
   const patterns = {
     failed: /Automatic Session history.*failed/iu,
-    unknown: /Automatic Session history.*unknown/iu,
+    unknown:
+      expected.orphanProvenanceVerified === true
+        ? /^Automatic Session run-name does not match its verified logical key$/u
+        : /Automatic Session history.*unknown/iu,
     expired: /Automatic Session history.*expired/iu,
     missing: /Automatic Session history.*missing/iu,
     incompatible: /Automatic Session history.*incompatible/iu,
@@ -288,6 +292,8 @@ function identity(env) {
     dshMode: env.DSH_MODE,
     keyHash: digest((env.SESSION_KEY ?? "").toLowerCase()),
     runTitle: `dsh-session-${env.SESSION_KEY ?? ""}`,
+    fixtureKind: env.FIXTURE_KIND ?? "none",
+    fixtureSourceRunId: Number(env.FIXTURE_SOURCE_RUN_ID || 0),
   };
   requireCheck(
     ["auto", "save", "resume"].includes(value.requestedPhase) &&
@@ -302,6 +308,23 @@ function identity(env) {
       ["controlled", "native"].includes(value.dshMode) &&
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(env.SESSION_KEY ?? ""),
     "IDENTITY",
+  );
+  requireCheck(
+    ["none", "corrupt", "orphan"].includes(value.fixtureKind) &&
+      (value.fixtureSourceRunId === 0 ||
+        (positive(value.fixtureSourceRunId) &&
+          value.fixtureSourceRunId < value.runId &&
+          value.expectedFailure === "unknown" &&
+          value.fixtureKind === "none")) &&
+      (value.fixtureKind === "none" ||
+        (value.expectedFailure === "none" &&
+          env.FORCE_FAILURE !== "true" &&
+          ["auto", "save"].includes(value.requestedPhase))) &&
+      (value.fixtureKind === "orphan"
+        ? /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(env.FIXTURE_TARGET_KEY ?? "") &&
+          (env.FIXTURE_TARGET_KEY ?? "").toLowerCase() !== (env.SESSION_KEY ?? "").toLowerCase()
+        : (env.FIXTURE_TARGET_KEY ?? "") === ""),
+    "FIXTURE_SELECTION",
   );
   return value;
 }
@@ -349,9 +372,90 @@ async function prepare(env, directory) {
   const history = selectSessionHistory(runs, current);
   const phase = history.status === "first" ? "save" : "resume";
   requireCheck(current.requestedPhase === "auto" || current.requestedPhase === phase, "PHASE");
+  requireCheck(
+    current.fixtureKind === "none" || history.status === "first",
+    "FRESH_FIXTURE_PRODUCER",
+  );
+  let orphanProof;
+  if (current.fixtureSourceRunId > 0) {
+    const source = reader.json(
+      `repos/${current.repository}/actions/runs/${current.fixtureSourceRunId}`,
+    );
+    const listed = reader.json(
+      `repos/${current.repository}/actions/runs/${current.fixtureSourceRunId}/artifacts?per_page=100`,
+    );
+    requireCheck(
+      listed.total_count <= 100 && Array.isArray(listed.artifacts),
+      "ORPHAN_ARTIFACT_BOUND",
+    );
+    const readProof = (name, file) => {
+      const candidates = listed.artifacts.filter(
+        (artifact) => artifact.name === name && !artifact.expired,
+      );
+      requireCheck(
+        candidates.length === 1 &&
+          candidates[0].size_in_bytes <= 16 * 1024 &&
+          candidates[0].workflow_run?.id === current.fixtureSourceRunId &&
+          candidates[0].workflow_run?.head_sha === current.harnessSha,
+        "ORPHAN_PROOF_ARTIFACT",
+      );
+      const zip = reader.archive(
+        `repos/${current.repository}/actions/artifacts/${candidates[0].id}/zip`,
+      );
+      requireCheck(candidates[0].digest === `sha256:${digest(zip)}`, "ORPHAN_PROOF_DIGEST");
+      const names = [];
+      const entries = unzipSync(zip, {
+        filter: (entry) => {
+          names.push(entry.name);
+          return entry.name === file && entry.originalSize <= 8 * 1024;
+        },
+      });
+      requireCheck(
+        names.length === 1 && names[0] === file && entries[file]?.length > 0,
+        "ORPHAN_PROOF_FILE",
+      );
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(entries[file]));
+    };
+    const receipt = readProof(
+      `session-e2e-fixture-${source.id}-${source.run_attempt}`,
+      "receipt.json",
+    );
+    const sourceProof = assertSourceProof(
+      readProof(`session-e2e-proof-${source.id}-${source.run_attempt}`, "proof.json"),
+      {
+        ...current,
+        runId: source.id,
+        runAttempt: source.run_attempt,
+        keyHash: receipt.sourceKeyHash,
+      },
+    );
+    const artifacts = listed.artifacts.filter(
+      (artifact) => artifact.id === receipt.artifactId && artifact.name === receipt.artifactName,
+    );
+    requireCheck(artifacts.length === 1, "ORPHAN_CHECKPOINT_ARTIFACT");
+    orphanProof = assertOrphanFixtureProvenance({
+      receipt,
+      sourceProof,
+      sourceRun: source,
+      artifact: artifacts[0],
+      history,
+      current: {
+        ...current,
+        runId: source.id,
+        runAttempt: source.run_attempt,
+        targetKey: env.SESSION_KEY,
+        targetKeyHash: current.keyHash,
+        currentRunId: current.runId,
+        defaultBranch: env.DEFAULT_BRANCH,
+      },
+    });
+  }
   if (current.expectedFailure !== "none") {
-    requireCheck(history.source !== undefined, "FAILURE_REQUIRES_HISTORY");
-    if (["failed", "unknown"].includes(current.expectedFailure))
+    requireCheck(
+      history.source !== undefined || orphanProof !== undefined,
+      "FAILURE_REQUIRES_HISTORY",
+    );
+    if (["failed", "unknown"].includes(current.expectedFailure) && orphanProof === undefined)
       requireCheck(history.status === current.expectedFailure, "FAILURE_HISTORY");
   } else requireCheck(["first", "success"].includes(history.status), "HISTORY_NOT_SUCCESSFUL");
   let parent;
@@ -411,6 +515,13 @@ async function prepare(env, directory) {
     ...current,
     phase,
     ...(history.source === undefined ? {} : { sourceRunId: history.source.id }),
+    ...(orphanProof === undefined
+      ? {}
+      : {
+          orphanProvenanceVerified: true,
+          orphanArtifactId: orphanProof.artifactId,
+          orphanSourceRunId: orphanProof.runId,
+        }),
     generation: (parent?.generation ?? 0) + 1,
     memory,
     challenge,
@@ -436,6 +547,13 @@ async function prepare(env, directory) {
       historyStatus: history.status,
       expectedFailure: current.expectedFailure,
       fixtureRequests: reader.audit,
+      ...(orphanProof === undefined
+        ? {}
+        : {
+            fixtureBoundary: "orphan-provenance-denial",
+            orphanArtifactId: orphanProof.artifactId,
+            orphanSourceRunId: orphanProof.runId,
+          }),
     }) + "\n",
   );
 }
@@ -455,6 +573,8 @@ async function verify(env, directory) {
     "dshMode",
     "keyHash",
     "runTitle",
+    "fixtureKind",
+    "fixtureSourceRunId",
   ])
     requireCheck(expected[key] === current[key], "CURRENT_BINDING");
   let result;
@@ -505,6 +625,7 @@ async function verify(env, directory) {
         );
       }
       checks.rawCheckpoint = true;
+      await writeFile(join(directory, "current-checkpoint.zip"), archive, { mode: 0o600 });
     } catch (error) {
       checks.rawCheckpoint = false;
       archiveError =
@@ -531,6 +652,7 @@ async function verify(env, directory) {
       : {
           sessionId: result.session.sessionId,
           artifactId: result.session.artifactId,
+          artifactName: result.session.artifactName,
           payloadSha256: checkpoint.payloadSha256,
           archiveSha256: checkpoint.archiveSha256,
           eventCount: checkpoint.eventCount,
