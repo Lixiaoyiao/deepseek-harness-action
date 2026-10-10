@@ -117,7 +117,7 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
     }
   }
 
-  /** Cancellation initiates shutdown; settlement proves the runtime is no longer borrowed. */
+  /** Cancel active turns and await their cleanup; the runtime owner separately drains late activity leases. */
   public dispose(): Promise<void> {
     this.closing = true;
     this.activeRun?.controller.abort(new DshAbortedError());

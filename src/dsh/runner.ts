@@ -65,6 +65,7 @@ export async function runDsh(
       disposeDshRuntime,
     ));
   if (ownsRuntime) scope.own("runtime", async () => disposeDshRuntime(runtime));
+  scope.borrowRuntime(runtime);
   try {
     return await new DshWorker(context, runtime, scope, dependencies).run();
   } catch (error: unknown) {

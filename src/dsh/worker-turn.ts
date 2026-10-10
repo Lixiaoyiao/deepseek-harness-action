@@ -33,7 +33,7 @@ import {
 } from "./runner-policy.js";
 import type { DshRunDependencies, DshRunResult } from "./runner-types.js";
 import type { DshRunScope } from "./run-scope.js";
-import type { DshRuntime } from "./runtime.js";
+import { withDshRuntimeActivity, type DshRuntime } from "./runtime.js";
 import {
   prepareWorkerRuntime,
   type DshProcessExecutor,
@@ -244,13 +244,15 @@ export class DshWorker {
       let output: DshOutput | undefined;
       let failure: unknown;
       try {
-        processResult = await execute(spec, {
-          timeoutMs: remainingMs,
-          maxStdoutBytes: request.maxOutputBytes,
-          maxStderrBytes: Math.min(request.maxOutputBytes, 2 * 1024 * 1024),
-          maxCombinedBytes: request.maxOutputBytes,
-          ...(scope.signal === undefined ? {} : { signal: scope.signal }),
-        });
+        processResult = await withDshRuntimeActivity(runtime, async () =>
+          execute(spec, {
+            timeoutMs: remainingMs,
+            maxStdoutBytes: request.maxOutputBytes,
+            maxStderrBytes: Math.min(request.maxOutputBytes, 2 * 1024 * 1024),
+            maxCombinedBytes: request.maxOutputBytes,
+            ...(scope.signal === undefined ? {} : { signal: scope.signal }),
+          }),
+        );
         output = await this.validateResult(processResult, proxy, secrets);
       } catch (error: unknown) {
         failure =

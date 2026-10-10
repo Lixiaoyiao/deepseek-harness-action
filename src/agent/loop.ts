@@ -2,6 +2,7 @@ import { LoopTelemetry } from "./loop-telemetry.js";
 import { invokeControllerTool } from "./tool-invocation.js";
 import { AGENT_PROTOCOL_VERSION, type AgentEngine } from "./contracts.js";
 import { createDshRuntime, disposeDshRuntime, type DshRunResult } from "../dsh/runner.js";
+import { withDshRuntimeActivity } from "../dsh/runtime.js";
 import { DshError, DshMalformedOutputError } from "../dsh/errors.js";
 import { parseDshOutput, type DshOutput } from "../dsh/schema.js";
 import type { ActionInputs } from "../inputs.js";
@@ -77,7 +78,7 @@ export async function runAgentLoop<TFinal>(
     if (restore !== undefined)
       await runLifecycleHookWithinDeadline(
         "Session restoration",
-        () => restore(runtime),
+        () => withDshRuntimeActivity(runtime, () => restore(runtime)),
         hooks,
         now,
       );

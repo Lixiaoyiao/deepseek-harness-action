@@ -1,6 +1,7 @@
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
 import { settleWithin } from "../lifecycle/deadline.js";
 import { DshTimeoutError } from "./errors.js";
+import { withDshRuntimeActivity, type DshRuntime } from "./runtime.js";
 import {
   PHASE_TIMEOUTS,
   phaseTimeoutMs,
@@ -12,6 +13,7 @@ import {
 export class DshRunScope {
   private setupBudgetMs: number = PHASE_TIMEOUTS.setupMs;
   private readonly cleanups: BestEffortCleanupTask[] = [];
+  private runtime: DshRuntime | undefined;
   public readonly startedAt: number;
   public readonly deadlineMs: number;
   private readonly timeoutMs: number;
@@ -35,6 +37,16 @@ export class DshRunScope {
     this.warning = warning;
   }
 
+  public borrowRuntime(runtime: DshRuntime): void {
+    this.runtime = runtime;
+  }
+
+  private startActivity<T>(start: () => Promise<T>): Promise<T> {
+    return this.runtime === undefined
+      ? Promise.resolve().then(start)
+      : withDshRuntimeActivity(this.runtime, start);
+  }
+
   public remaining(capMs: number): number {
     throwIfCancelled(this.signal);
     if (capMs <= 0) throw new DshTimeoutError(this.timeoutMs);
@@ -49,7 +61,7 @@ export class DshRunScope {
     disposeLateValue?: (value: T) => Promise<void>,
   ): Promise<T> {
     const timeoutMs = this.remaining(capMs);
-    const pending = Promise.resolve().then(run);
+    const pending = this.startActivity(run);
     const disposeLate = (): void => {
       if (disposeLateValue === undefined) return;
       // Late acquisitions get the same bounded cleanup treatment as values
@@ -96,7 +108,7 @@ export class DshRunScope {
     this.remaining(capMs);
     this.own(cleanup.label, cleanup.run);
     let awaitingReceipt = true;
-    const pending = Promise.resolve().then(run);
+    const pending = this.startActivity(run);
     const reconcileLate = async (): Promise<void> => {
       if (!awaitingReceipt) {
         await runBestEffortDshCleanup([cleanup], PHASE_TIMEOUTS.cleanupMs, this.warning);

@@ -41,6 +41,22 @@ package tree read-only.
 
 ## Cancellation and late cleanup
 
+Every actual setup operation, Session restoration and worker process borrows the runtime through a
+private activity ledger. Cancelling a phase ends its budget wait, while the
+underlying process or filesystem operation can still be finishing. Runtime
+disposal closes admission synchronously, waits for every registered operation to
+settle on either success or failure, then removes the files. Repeated disposal
+requests share the same operation. This prevents a late installer or Profile
+write from recreating an already-deleted runtime.
+
+The scope and outer Agent loop keep their existing bounded cleanup grace. If an
+operation has not finished within that grace, the caller returns its primary
+outcome and storage disposal remains scheduled until the activity releases its
+lease. The Engine cancels active turns and waits for their run cleanup; it does
+not inspect the runtime ledger or add a second deadline. An operation that never
+settles leaves its storage retained for runner-level recovery instead of deleting
+files still in use.
+
 The scope registers network removal before attempting network creation. A
 cancelled or timed-out Docker command can still create the named network after
 the first cleanup attempt. The scope observes the underlying command's eventual

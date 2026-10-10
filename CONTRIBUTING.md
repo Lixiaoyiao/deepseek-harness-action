@@ -11,6 +11,11 @@ npm ci
 npm run check
 ```
 
+Windows runs the same suite with two Vitest workers because the integration
+tests start real DSH and Git processes with fixed startup deadlines. Linux
+keeps the default parallelism. Test assertions and execution deadlines remain
+the same on both platforms.
+
 Add regression coverage for behavior changes. Keep changes focused and preserve the Controller/worker security boundary described in [SECURITY.md](SECURITY.md).
 
 Design modules around a small interface that hides real ordering and ownership

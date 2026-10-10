@@ -1,7 +1,12 @@
-import { mkdir, realpath, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
+import { ControlledComposition } from "../src/dsh/controlled-composition.js";
+import type {
+  PrepareDshCompositionOptions,
+  PreparedDshComposition,
+} from "../src/dsh/composition.js";
+import { join, resolve } from "node:path";
 import { describe, afterEach, expect, it, vi } from "vitest";
-import { DshAbortedError, DshTimeoutError } from "../src/dsh/errors.js";
+import { DshAbortedError, DshConfigurationError, DshTimeoutError } from "../src/dsh/errors.js";
 import type { DeepSeekProxyHandle } from "../src/dsh/proxy.js";
 import { createDshRuntime, disposeDshRuntime, runDsh } from "../src/dsh/runner.js";
 import type { DshProcessLimits, DshProcessResult, DshProcessSpec } from "../src/dsh/runner.js";
@@ -18,7 +23,221 @@ const fixtureManager = createDshFixtureManager();
 const { fixtures } = fixtureManager;
 afterEach(fixtureManager.dispose);
 
+async function expectOwnedRuntimesRemoved(parent: string): Promise<void> {
+  await expect
+    .poll(async () => (await readdir(parent)).filter((name) => name.startsWith("dsh-action-")))
+    .toEqual([]);
+}
+
 describe("runDsh lifecycle", () => {
+  it.each(["success", "rejection"])(
+    "keeps a borrowed runtime through late Controller Profile filesystem work ending in %s",
+    async (acknowledgement) => {
+      const fixture = await fixtures();
+      const runtime = await createDshRuntime(fixture.root);
+      const controller = new AbortController();
+      let finishPreparation: (() => void) | undefined;
+      const waitForRelease = new Promise<void>((resolveRelease) => {
+        finishPreparation = resolveRelease;
+      });
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      let preparationSettled: Promise<void> | undefined;
+      class DelayedProfile extends ControlledComposition {
+        public override prepare(
+          options: PrepareDshCompositionOptions,
+        ): Promise<PreparedDshComposition> {
+          const pending = waitForRelease.then(async () => {
+            await mkdir(options.runtime.packageRoot, { recursive: true });
+            const prepared = await super.prepare(options);
+            await writeFile(
+              join(options.runtime.packageRoot, "late-profile.txt"),
+              "Controller filesystem phase completed",
+            );
+            if (acknowledgement === "rejection")
+              throw new Error("Profile failed after writing its files");
+            return prepared;
+          });
+          preparationSettled = pending.then(
+            () => undefined,
+            () => undefined,
+          );
+          markStarted?.();
+          return pending;
+        }
+      }
+      try {
+        const execution = runDsh(
+          request({
+            workspacePath: fixture.workspace,
+            dshExecutable: fixture.executable,
+            signal: controller.signal,
+          }),
+          {
+            runtime,
+            assetsDirectory: fixture.assets,
+            composition: new DelayedProfile(),
+          },
+        );
+        const outcome = execution.then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+        await started;
+        controller.abort(new DshAbortedError());
+        expect(await outcome).toBeInstanceOf(DshAbortedError);
+        const disposal = disposeDshRuntime(runtime);
+        expect(
+          await access(runtime.root).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(true);
+        finishPreparation?.();
+        await disposal;
+        expect(
+          await access(runtime.root).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(false);
+      } finally {
+        finishPreparation?.();
+        await preparationSettled;
+        await disposeDshRuntime(runtime);
+      }
+    },
+  );
+  it.each([
+    { ownership: "owned", acknowledgement: "success" },
+    { ownership: "owned", acknowledgement: "rejection" },
+    { ownership: "borrowed", acknowledgement: "success" },
+    { ownership: "borrowed", acknowledgement: "rejection" },
+  ])(
+    "keeps $ownership runtime files until a cancelled install's late $acknowledgement and filesystem writes settle",
+    async ({ ownership, acknowledgement }) => {
+      const fixture = await fixtures();
+      const borrowed = ownership === "borrowed" ? await createDshRuntime(fixture.root) : undefined;
+      const controller = new AbortController();
+      let packageRoot: string | undefined;
+      let finishInstallation: (() => void) | undefined;
+      let installationSettled: Promise<void> | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      let disposal: Promise<void> | undefined;
+      if (borrowed !== undefined) vi.useFakeTimers();
+      try {
+        const execution = runDsh(
+          request({
+            isolation: "docker",
+            workspacePath: fixture.workspace,
+            signal: controller.signal,
+            timeoutMs: 60_000,
+          }),
+          {
+            assetsDirectory: fixture.assets,
+            temporaryDirectory: fixture.root,
+            ...(borrowed === undefined ? {} : { runtime: borrowed }),
+            warning: vi.fn(),
+            executeProcess: (spec) => {
+              if (!spec.args.includes("ci"))
+                return Promise.resolve({ stdout: "", stderr: "", exitCode: 0, signal: null });
+              const suffix = ":/opt/dsh-action/package:rw";
+              const mount = spec.args.find((argument) => argument.endsWith(suffix));
+              if (mount === undefined) throw new Error("Installer package mount is missing");
+              packageRoot = mount.slice(0, -suffix.length);
+              const installedDirectory = packageRoot;
+              const pending = new Promise<DshProcessResult>(
+                (resolveInstallation, rejectInstallation) => {
+                  finishInstallation = () => {
+                    finishInstallation = undefined;
+                    void mkdir(installedDirectory, { recursive: true })
+                      .then(async () => {
+                        await writeFile(
+                          join(installedDirectory, "late-install.txt"),
+                          "physical installation completed",
+                        );
+                        if (acknowledgement === "rejection")
+                          rejectInstallation(new Error("Installation failed after writing files"));
+                        else
+                          resolveInstallation({
+                            stdout: "",
+                            stderr: "",
+                            exitCode: 0,
+                            signal: null,
+                          });
+                      })
+                      .catch(rejectInstallation);
+                  };
+                },
+              );
+              installationSettled = pending.then(
+                () => undefined,
+                () => undefined,
+              );
+              markStarted?.();
+              return pending;
+            },
+          },
+        );
+        const outcome = execution.then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+        await started;
+        controller.abort(new DshAbortedError());
+        expect(await outcome).toBeInstanceOf(DshAbortedError);
+        if (packageRoot === undefined) throw new Error("Installer did not start");
+        const runtimeRoot = resolve(packageRoot, "..", "..", "..");
+        if (borrowed !== undefined) {
+          disposal = Promise.all([disposeDshRuntime(borrowed), disposeDshRuntime(borrowed)]).then(
+            () => undefined,
+          );
+          void disposal.catch(() => undefined);
+          await vi.advanceTimersByTimeAsync(PHASE_TIMEOUTS.cleanupMs);
+          const newExecution = vi.fn(() =>
+            Promise.reject(new Error("A closing runtime started another process")),
+          );
+          await expect(
+            runDsh(request({ isolation: "docker", workspacePath: fixture.workspace }), {
+              runtime: borrowed,
+              assetsDirectory: fixture.assets,
+              executeProcess: newExecution,
+            }),
+          ).rejects.toBeInstanceOf(DshConfigurationError);
+          expect(newExecution).not.toHaveBeenCalled();
+        }
+        expect(
+          await access(runtimeRoot).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(true);
+        vi.useRealTimers();
+        finishInstallation?.();
+        await installationSettled;
+        if (disposal !== undefined) await disposal;
+        await expect
+          .poll(async () =>
+            access(runtimeRoot).then(
+              () => true,
+              () => false,
+            ),
+          )
+          .toBe(false);
+      } finally {
+        vi.useRealTimers();
+        finishInstallation?.();
+        await installationSettled;
+        await disposal?.catch(() => undefined);
+        if (borrowed !== undefined) await disposeDshRuntime(borrowed).catch(() => undefined);
+      }
+    },
+  );
   it("warns on a failed Docker network removal while preserving the validated worker result", async () => {
     const fixture = await fixtures();
     const warning = vi.fn();
@@ -101,6 +320,7 @@ describe("runDsh lifecycle", () => {
       if (completeCreate === undefined) throw new Error("Docker create did not start");
       completeCreate();
       await expect.poll(() => networkExists).toBe(false);
+      await expectOwnedRuntimesRemoved(fixture.root);
     },
   );
 
@@ -129,7 +349,7 @@ describe("runDsh lifecycle", () => {
       );
       await started;
       const failure = expect(running).rejects.toBeInstanceOf(DshTimeoutError);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(10_000 + PHASE_TIMEOUTS.cleanupMs);
       await failure;
       expect(proxy).not.toHaveBeenCalled();
     } finally {
@@ -226,12 +446,14 @@ describe("runDsh lifecycle", () => {
 
       await started;
       const outcome = expect(running).rejects.toBeInstanceOf(DshTimeoutError);
-      await vi.advanceTimersByTimeAsync(PHASE_TIMEOUTS.setupMs);
+      await vi.advanceTimersByTimeAsync(PHASE_TIMEOUTS.setupMs + PHASE_TIMEOUTS.cleanupMs);
       await outcome;
       resolveProxy?.(proxy);
       await vi.advanceTimersByTimeAsync(0);
       expect(proxy.closeMock).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+      await expectOwnedRuntimesRemoved(fixture.root);
     } finally {
       vi.useRealTimers();
     }
@@ -273,6 +495,7 @@ describe("runDsh lifecycle", () => {
     resolveProxy?.(proxy);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(proxy.closeMock).toHaveBeenCalledOnce();
+    await expectOwnedRuntimesRemoved(fixture.root);
   });
 
   it("binds normalized workspace, chat endpoint, and host executable across reused turns", async () => {

@@ -8,6 +8,10 @@ export default defineConfig({
     // default while their controller-owned process deadlines remain bounded.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Each integration worker starts real DSH/Git processes. Windows endpoint
+    // scanning makes unrestricted suite parallelism consume their startup
+    // deadlines; run the same tests with two workers and retain every timeout.
+    ...(process.platform === "win32" ? { maxWorkers: 2 } : {}),
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],

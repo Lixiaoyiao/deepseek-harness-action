@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentEngine, AgentTurnRequest, ToolProvider } from "../src/agent/contracts.js";
-import { writeFile, readFile } from "node:fs/promises";
+import { access, mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach } from "vitest";
 import {
@@ -19,7 +19,7 @@ import {
 } from "../src/dsh/errors.js";
 import type { DshOutput } from "../src/dsh/schema.js";
 import { parseTaskOutputSchema } from "../src/dsh/task-output.js";
-import type { DshRuntime } from "../src/dsh/runner.js";
+import { createDshRuntime, disposeDshRuntime, type DshRuntime } from "../src/dsh/runner.js";
 import type { DshTurnMetadata, AgentTask } from "../src/review/run.js";
 import { DshAgentEngine } from "../src/review/run.js";
 import { createDshFixtureManager } from "./helpers/dsh-runner-fixtures.js";
@@ -156,6 +156,89 @@ function repairTurnFailureEngine(
 }
 
 describe("Controller Session lifecycle hooks", () => {
+  it.each(["success", "rejection"])(
+    "retains Session storage until cancelled restoration's late %s and filesystem writes settle",
+    async (acknowledgement) => {
+      const fixture = await lifecycleFixtures.fixtures();
+      const restoredRuntime = await createDshRuntime(fixture.root);
+      const controller = new AbortController();
+      let finishRestoration: (() => void) | undefined;
+      let restorationSettled: Promise<void> | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        markStarted = resolveStarted;
+      });
+      const createEngine = vi.fn(() => engine([output("final")], []));
+      try {
+        const running = runAgentLoop(
+          task(),
+          inputs(),
+          {
+            deadlineMs: Date.now() + 60_000,
+            signal: controller.signal,
+            blocked: () => Promise.resolve("blocked"),
+            finalize: () => Promise.resolve("done"),
+            onRuntimeReady: (borrowedRuntime) => {
+              const pending = new Promise<void>((resolveRestore, rejectRestore) => {
+                finishRestoration = () => {
+                  finishRestoration = undefined;
+                  void mkdir(join(borrowedRuntime.dshHome, "sessions"), { recursive: true })
+                    .then(async () => {
+                      await writeFile(
+                        join(borrowedRuntime.dshHome, "sessions", "late-restoration.jsonl"),
+                        "restored Session state",
+                      );
+                      if (acknowledgement === "rejection")
+                        rejectRestore(new Error("Restoration failed after writing files"));
+                      else resolveRestore();
+                    })
+                    .catch(rejectRestore);
+                };
+              });
+              restorationSettled = pending.then(
+                () => undefined,
+                () => undefined,
+              );
+              markStarted?.();
+              return pending;
+            },
+          },
+          {
+            createRuntime: () => Promise.resolve(restoredRuntime),
+            createEngine,
+          },
+        );
+        const outcome = running.then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+        await started;
+        controller.abort(new DshAbortedError());
+        expect(await outcome).toBeInstanceOf(DshAbortedError);
+        expect(createEngine).not.toHaveBeenCalled();
+        expect(
+          await access(restoredRuntime.root).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(true);
+        finishRestoration?.();
+        await restorationSettled;
+        await expect
+          .poll(async () =>
+            access(restoredRuntime.root).then(
+              () => true,
+              () => false,
+            ),
+          )
+          .toBe(false);
+      } finally {
+        finishRestoration?.();
+        await restorationSettled;
+        await disposeDshRuntime(restoredRuntime);
+      }
+    },
+  );
   it("keeps usage partial when an unreported turn precedes a measured turn", async () => {
     let turn = 0;
     const result = await runAgentLoop(

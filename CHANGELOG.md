@@ -14,6 +14,8 @@ versioning for published action releases.
   Action metadata filenames, `action.yml` and `action.yaml`.
 - Preserves successful validation and confirmed PR/commit evidence when later
   Session publication fails. Keeps terminal progress publication best effort.
+- Reports optional main-agent token usage with explicit completeness and known
+  subtotals, including failed workers. It remains informational worker evidence.
 - Fixes POSIX descendant-held output pipes and late Docker network cleanup.
   The credential proxy binds the inspected local Linux bridge gateway; no
   wildcard listener fallback is used.

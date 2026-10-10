@@ -80,9 +80,9 @@ export async function disposeAgentLoop(
   let engineDisposal: Promise<void> | undefined;
   for (const { component, dispose } of disposers) {
     if (dispose === undefined) continue;
-    // Runtime files remain borrowed by an active engine even after its cleanup
-    // acknowledgement exceeds our grace. Schedule late removal after actual
-    // quiescence; a race timeout is not proof that the worker stopped.
+    // Wait for the engine's shutdown acknowledgement before asking the storage
+    // owner to dispose. DSH runtime leases independently protect setup work
+    // still settling after a cancelled phase; a budget race is not work completion.
     const disposal =
       component === "runtime" && engineDisposal !== undefined
         ? engineDisposal.catch(() => undefined).then(dispose)

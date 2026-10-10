@@ -38,7 +38,7 @@ validation and final revalidation succeed. Cancellation or validation failure
 must leave the mutation queue unflushed.
 
 Evidence: `test/github-tools.test.ts`, `test/orchestrator-no-change.test.ts`,
-`test/fix.test.ts`, `test/implement.test.ts`, and `test/task.test.ts`.
+`test/write-finalizers.integration.test.ts` and `test/write-transactions.integration.test.ts`.
 
 ## INV-005 NativeInventoryIsObservedNotGranted
 
