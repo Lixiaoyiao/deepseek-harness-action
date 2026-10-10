@@ -69,12 +69,13 @@ on:
           - none
           - corrupt
           - orphan
+          - expired
       fixture_target_key:
         description: Fresh distinct target key for the orphan diagnostic; otherwise leave empty
         default: ""
         type: string
       fixture_source_run_id:
-        description: Oracle-only source run for independently verifying an orphan provenance denial
+        description: Oracle-only source run for independently verifying orphan provenance or actual manifest expiry
         default: 0
         type: number
 
