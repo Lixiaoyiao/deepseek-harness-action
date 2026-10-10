@@ -341,10 +341,10 @@ jobs:
       - name: Create a current-run diagnostic Session history artifact
         id: fixture
         if: steps.verify.outcome == 'success' && inputs.expected_failure == 'none' && inputs.fixture_kind != 'none'
+        uses: ./.github/e2e/session-history-fixture-action
         env:
           RESULT_JSON: ${{ steps.action.outputs['result-json'] }}
           ACTION_OUTCOME: ${{ steps.action.outcome }}
-        run: node .github/e2e/session-history-fixture.mjs
 
       - name: Preserve safe diagnostic artifact provenance
         if: steps.fixture.outcome == 'success'

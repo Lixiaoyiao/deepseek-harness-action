@@ -1,7 +1,7 @@
 import { DefaultArtifactClient } from "@actions/artifact";
-import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
 import { unzipSync } from "fflate";
@@ -256,7 +256,89 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
   return receipt;
 }
 
+/** CI proves the same current-job SDK transport before any Session/model task. */
+export async function smokeSessionArtifactTransport({ env, artifactClient }) {
+  const runId = Number(env.GITHUB_RUN_ID);
+  const runAttempt = Number(env.GITHUB_RUN_ATTEMPT);
+  const temporary = resolve(env.RUNNER_TEMP ?? "");
+  const outside = relative(resolve(env.GITHUB_WORKSPACE ?? temporary), temporary);
+  check(
+    positive(runId) &&
+      positive(runAttempt) &&
+      String(runId) === env.GITHUB_RUN_ID &&
+      String(runAttempt) === env.GITHUB_RUN_ATTEMPT &&
+      /^[A-Za-z_][A-Za-z0-9_-]*$/u.test(env.GITHUB_JOB ?? "") &&
+      isAbsolute(env.RUNNER_TEMP ?? "") &&
+      isAbsolute(env.GITHUB_WORKSPACE ?? "") &&
+      (outside === ".." || outside.startsWith(`..${sep}`) || isAbsolute(outside)),
+    "SMOKE_BINDING",
+  );
+  const name = `session-fixture-smoke-${runId}-${runAttempt}-${randomBytes(12).toString("hex")}`;
+  const directory = await mkdtemp(join(temporary, "dsh-fixture-smoke-"));
+  try {
+    const file = join(directory, "probe.txt");
+    await writeFile(file, "GitHub artifact SDK transport smoke\n", { mode: 0o600 });
+    const uploaded = await artifactClient.uploadArtifact(name, [file], directory, {
+      retentionDays: 1,
+      compressionLevel: 0,
+    });
+    check(
+      positive(uploaded.id) &&
+        positive(uploaded.size) &&
+        uploaded.size <= 65_536 &&
+        sha(uploaded.digest),
+      "SMOKE_UPLOAD",
+    );
+    const own = (await artifactClient.getArtifact(name)).artifact;
+    const metadataDigestObserved = own.digest !== undefined;
+    check(
+      own.id === uploaded.id &&
+        own.name === name &&
+        own.size === uploaded.size &&
+        (!metadataDigestObserved || own.digest.replace(/^sha256:/u, "") === uploaded.digest),
+      "SMOKE_OWN_ARTIFACT",
+    );
+    const deleted = await artifactClient.deleteArtifact(name);
+    check(deleted.id === uploaded.id, "SMOKE_DELETE_CONFIRMATION");
+    return {
+      schemaVersion: 1,
+      operation: "artifact-sdk-smoke",
+      sessionQualification: false,
+      runId,
+      runAttempt,
+      artifactId: uploaded.id,
+      artifactName: name,
+      archiveSha256: uploaded.digest,
+      uploadedBytes: uploaded.size,
+      metadataDigestObserved,
+      metadataDigestCompared: metadataDigestObserved,
+      deleted: true,
+    };
+  } finally {
+    check(
+      dirname(directory) === temporary &&
+        directory.startsWith(join(temporary, "dsh-fixture-smoke-")),
+      "SMOKE_DIRECTORY",
+    );
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function main() {
+  check(
+    Boolean(process.env.ACTIONS_RUNTIME_TOKEN && process.env.ACTIONS_RESULTS_URL),
+    "RUNTIME_CONTEXT",
+  );
+  const operation = process.env.SESSION_FIXTURE_OPERATION ?? "seed";
+  check(["seed", "smoke"].includes(operation), "OPERATION");
+  if (operation === "smoke") {
+    const receipt = await smokeSessionArtifactTransport({
+      env: process.env,
+      artifactClient: new DefaultArtifactClient(),
+    });
+    process.stdout.write(JSON.stringify(receipt) + "\n");
+    return;
+  }
   const directory = resolve(process.env.RUNNER_TEMP ?? "", "session-e2e");
   const receipt = await seedSessionHistoryFixture({
     env: process.env,

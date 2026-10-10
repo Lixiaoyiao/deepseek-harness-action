@@ -307,7 +307,14 @@ function expiryProvenance(value: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("trusted current-run Session history fixture seam", () => {
-  it.each(["same-sha", "new-consumer-sha", "changed-helper", "truncated-tree", "symlink-helper"])(
+  it.each([
+    "same-sha",
+    "new-consumer-sha",
+    "changed-helper",
+    "changed-action-metadata",
+    "truncated-tree",
+    "symlink-helper",
+  ])(
     "prepares or denies the public consumer CLI from independently downloaded proofs (%s)",
     async (qualification) => {
       const value = await fixture({}, Date.now() - 86400_000 - 60_000);
@@ -354,6 +361,7 @@ describe("trusted current-run Session history fixture seam", () => {
         ".github/e2e/session-auto-e2e-proof.mjs",
         ".github/e2e/session-history-fixture.mjs",
         ".github/e2e/session-history-fixture-proof.mjs",
+        ".github/e2e/session-history-fixture-action/action.yml",
       ];
       const tree = await Promise.all(
         historicalPaths.map(async (path) => {
@@ -383,6 +391,13 @@ describe("trusted current-run Session history fixture seam", () => {
           mode: "120000",
           sha: tree[0]?.sha ?? "",
         };
+      if (qualification === "changed-action-metadata") {
+        const entry = tree.find(
+          (value) => value.path === ".github/e2e/session-history-fixture-action/action.yml",
+        );
+        if (entry === undefined) throw new Error("Missing independent Action metadata fixture");
+        entry.sha = "0".repeat(40);
+      }
       responses[`${prefix.replace("/actions", "")}/git/commits/${provenance.sourceRun.head_sha}`] =
         {
           sha: provenance.sourceRun.head_sha,
@@ -442,7 +457,11 @@ syncBuiltinESMExports();
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
-      if (["changed-helper", "truncated-tree", "symlink-helper"].includes(qualification)) {
+      if (
+        ["changed-helper", "changed-action-metadata", "truncated-tree", "symlink-helper"].includes(
+          qualification,
+        )
+      ) {
         expect(prepareConsumer).toThrow("Command failed");
         await expect(readFile(join(value.directory, "expected.json"))).rejects.toMatchObject({
           code: "ENOENT",

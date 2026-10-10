@@ -1,0 +1,5 @@
+name: Session history fixture SDK transport
+description: Private trusted-harness diagnostic using only this job's artifact SDK scope
+runs:
+  using: node24
+  main: ../session-history-fixture.mjs
