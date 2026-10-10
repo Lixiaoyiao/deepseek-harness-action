@@ -50,6 +50,61 @@ orphan provenance denial. It does not claim that the later checkpoint-without-
 history branch executed. Ordinary `unknown` cases retain their original matcher,
 and every no-execution/no-effect denial check remains mandatory.
 
+## Actual manifest expiry
+
+Seed with a fresh `session_key`, `phase=save`, `expected_failure=none` and
+`fixture_kind=expired`. After the actual first task qualifies, the helper changes
+only the manifest's `expiresAt` to its original `createdAt + 24 hours`. It keeps
+the original `createdAt`, payload and every provenance/runtime/task field. Before
+any replacement effect it independently verifies the original manifest hash,
+the complete legal retention window and that the new expiry is still in the
+future. It deletes only the current job's exact verified checkpoint and uploads
+the replacement under the same full binding name with three days of service
+retention. The SDK receipt records the actual uploaded archive digest; the
+original successful proof and its canonical manifest hash remain separate.
+
+Wait until actual wall-clock time is strictly later than the receipt's
+`expiry.expiresAt`. This takes at least a real day from the original checkpoint
+creation; the harness has no adjustable short TTL, clock override or fake server
+metadata. Do not dispatch the consumer early: an intervening failed same-key run
+would become the latest history and invalidate this source selection.
+
+Dispatch the same key and runtime mode with `phase=resume` (or `auto`),
+`expected_failure=expired`, `fixture_kind=none` and `fixture_source_run_id` set to
+the actual seed run ID. Each consumer runs its own exact approved candidate and
+trusted harness SHA. The source ID stays oracle-only and is never an Action input.
+Use two different fresh producer keys for candidate and post-merge main proof:
+the first consumer's expected failure becomes failed same-key history, so that
+key cannot qualify a second consumer.
+
+The historical producer's Action SHA may differ from the consumer's. Its harness
+SHA may also differ, but actual Git commit/tree metadata must prove the source
+workflow and all three executing helper blobs are byte-identical to the current
+trusted checkout. The independent Git blob hashes use a fixed path whitelist;
+metadata cannot supply a local path or executable command. A changed, missing,
+symlink or truncated historical helper tree invalidates the fixture and requires
+a new producer. The source proof, receipt and actual source run must agree on
+the historical producer identity. The oracle retains its 18-request limit and
+performs no read retries; this source check adds only two GET requests. Orphan
+fixtures keep their existing exact current-SHA restriction.
+
+The independent consumer must prove that this successful source is the latest
+same-key history; source/run/repository/actor bindings match; original Action
+proof and fixture receipt match; the real downloaded archive matches the SDK
+digest and server metadata; and its payload is unchanged. Restoring only the
+original `expiresAt` in the downloaded manifest must recover the original
+independently computed manifest hash. The original window must have been legal
+and unexpired when prepared, the new window must be exactly 24 hours, and actual
+time must now exceed its expiry while the service artifact is still unexpired
+and within its verified three-day retention window.
+
+Only this independently verified context permits the exact candidate diagnostic
+`Session checkpoint is expired or has an invalid retention window`. The evidence
+labels this `manifest-expiry-denial`; it proves the manifest expiry check and
+does not claim the `artifact.expired` branch executed. The default server-history
+expiry matcher and every `SESSION_CHECKPOINT`, failure, no-worker, no-task,
+no-tools, no-checkpoint and no-writes check remain mandatory and unchanged.
+
 ## Limits and qualification
 
 Fixture creation cannot be combined with `force_failure` or an expected failure,
@@ -58,8 +113,10 @@ transport uncertainty fails the producer; the helper performs no application
 retry and publishes no successful fixture receipt after an uncertain effect.
 Use a new source/target key for another attempt and preserve the failed evidence.
 
-Expired history requires genuinely expired server metadata. These fixtures do
-not alter time, metadata, transport responses or product code. Unit tests verify
+Server-history expiry requires genuinely expired server metadata; a service
+404 proves only missing. Manifest expiry requires the separately proven real
+24-hour transition above. These fixtures do not alter clocks, server metadata,
+transport responses or product code. Unit tests verify
 the current-run SDK interface and independent oracle boundaries; they do not
 qualify a release. New harness changes must pass CI and reach the trusted default
 branch before real producer/consumer runs qualify the unchanged exact candidate.
