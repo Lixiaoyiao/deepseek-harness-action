@@ -386,6 +386,7 @@ describe("independent Actions Session qualification fixture", () => {
     expect(parsed.concurrency).toEqual({
       group: "dsh-session-${{ inputs.session_key }}",
       "cancel-in-progress": false,
+      queue: "max",
     });
     const jobs = object(parsed.jobs);
     const producers = Object.entries(jobs).flatMap(([jobId, rawJob]) => {

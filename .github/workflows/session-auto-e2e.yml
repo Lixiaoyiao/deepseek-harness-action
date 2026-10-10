@@ -68,6 +68,7 @@ permissions: {}
 concurrency:
   group: dsh-session-${{ inputs.session_key }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   gate:

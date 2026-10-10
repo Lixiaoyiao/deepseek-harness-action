@@ -50,6 +50,7 @@ permissions: {}
 concurrency:
   group: dsh-session
   cancel-in-progress: false
+  queue: max
 
 jobs:
   gate:

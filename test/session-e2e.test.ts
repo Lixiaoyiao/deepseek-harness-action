@@ -366,7 +366,11 @@ describe("independent Actions Session qualification fixture", () => {
     );
     const parsed = object(parse(workflow));
     expect(parsed.permissions).toEqual({});
-    expect(parsed.concurrency).toEqual({ group: "dsh-session", "cancel-in-progress": false });
+    expect(parsed.concurrency).toEqual({
+      group: "dsh-session",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
     const jobs = object(parsed.jobs);
     const producers = Object.entries(jobs).flatMap(([jobId, rawJob]) => {
       const steps = object(rawJob).steps;
