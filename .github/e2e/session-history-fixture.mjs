@@ -72,7 +72,7 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
   check(
     env.ACTION_OUTCOME === "success" &&
       env.EXPECTED_FAILURE === "none" &&
-      ["corrupt", "orphan"].includes(env.FIXTURE_KIND),
+      ["corrupt", "orphan", "expired"].includes(env.FIXTURE_KIND),
     "SUCCESSFUL_ACTION_REQUIRED",
   );
   const proof = assertSourceProof(
@@ -139,6 +139,30 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
         }
       : sourceBinding;
   const artifactName = fixtureCheckpointName(binding, current.runAttempt, proof.generation);
+  let expiry;
+  if (env.FIXTURE_KIND === "expired") {
+    const created = Date.parse(manifest.createdAt);
+    const originalExpiry = Date.parse(manifest.expiresAt);
+    const prepared = Date.now();
+    const expires = created + 86400_000;
+    check(
+      Number.isFinite(created) &&
+        Number.isFinite(originalExpiry) &&
+        created <= prepared + 60_000 &&
+        originalExpiry > prepared &&
+        originalExpiry - created >= 86400_000 &&
+        originalExpiry - created <= 7 * 86400_000 &&
+        expires > prepared &&
+        proof.manifestSha256 === digest(JSON.stringify(manifest)),
+      "EXPIRY_VALID_WINDOW",
+    );
+    expiry = {
+      createdAt: manifest.createdAt,
+      sourceExpiresAt: manifest.expiresAt,
+      expiresAt: new Date(expires).toISOString(),
+      preparedAt: new Date(prepared).toISOString(),
+    };
+  }
   const own = (await artifactClient.getArtifact(proof.artifactName)).artifact;
   check(
     own.id === proof.artifactId &&
@@ -161,8 +185,9 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
           "manifest.json": Buffer.from(
             JSON.stringify({
               ...manifest,
-              task: binding.task,
-              session: { ...manifest.session, keyHash: binding.keyHash },
+              ...(expiry === undefined
+                ? { task: binding.task, session: { ...manifest.session, keyHash: binding.keyHash } }
+                : { expiresAt: expiry.expiresAt }),
             }) + "\n",
           ),
           "session.jsonl": inspected.payload,
@@ -173,7 +198,9 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
     await writeFile(path, bytes, { mode: 0o600, flag: "wx" });
     paths.push(path);
   }
-  if (env.FIXTURE_KIND === "corrupt") {
+  if (["corrupt", "expired"].includes(env.FIXTURE_KIND)) {
+    if (expiry !== undefined)
+      check(Date.now() < Date.parse(expiry.expiresAt), "EXPIRY_VALID_WINDOW");
     const deleted = await artifactClient.deleteArtifact(proof.artifactName);
     check(deleted.id === proof.artifactId, "DELETED_ID");
   }
@@ -198,6 +225,7 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
     "UPLOAD_METADATA",
   );
   const { keyHash: sourceKeyHash, ...runIdentity } = current;
+  if (expiry !== undefined) check(Date.now() < Date.parse(expiry.expiresAt), "EXPIRY_VALID_WINDOW");
   const receipt = {
     schemaVersion: 1,
     seeded: true,
@@ -213,6 +241,7 @@ export async function seedSessionHistoryFixture({ env, directory, artifactClient
     archiveSha256: uploaded.digest,
     generation: proof.generation,
     binding,
+    ...(expiry === undefined ? {} : { expiry }),
   };
   await writeFile(
     join(directory, "fixture", "receipt.json"),

@@ -101,6 +101,7 @@ function checkpoint(
   });
   return {
     archive,
+    manifest,
     payload,
     expected: identity({
       generation,
@@ -256,6 +257,7 @@ describe("independent Actions Session qualification fixture", () => {
         payload: value.payload,
         payloadSha256: hash(value.payload),
         archiveSha256: hash(value.archive),
+        manifestSha256: hash(Buffer.from(JSON.stringify(value.manifest))),
         generation: 1,
         eventCount: 6,
       });
@@ -544,5 +546,55 @@ describe("independent Actions Session qualification fixture", () => {
       ).exactBoundary,
     ).toBe(false);
     expect(fixture.failureChecks(result, expected, "success").actionDenied).toBe(false);
+  });
+  it("accepts the exact manifest-expiry denial only with independent evidence and keeps every no-effect check", () => {
+    const result = {
+      conclusion: "failure",
+      error: {
+        code: "SESSION_CHECKPOINT",
+        message: "Session checkpoint is expired or has an invalid retention window",
+      },
+      session: { mode: "auto", status: "failed" },
+      loop: { turns: 0, toolCalls: 0 },
+    };
+    expect(
+      fixture.failureChecks(result, { expectedFailure: "expired" }, "failure").exactBoundary,
+    ).toBe(false);
+    const expected = { expectedFailure: "expired", manifestExpiryVerified: true };
+    expect(Object.values(fixture.failureChecks(result, expected, "failure")).every(Boolean)).toBe(
+      true,
+    );
+    expect(fixture.failureChecks(result, expected, "success").actionDenied).toBe(false);
+    expect(
+      fixture.failureChecks({ ...result, isolation: {} }, expected, "failure").noWorkerStart,
+    ).toBe(false);
+    expect(
+      fixture.failureChecks({ ...result, loop: { turns: 1 } }, expected, "failure").noTaskExecution,
+    ).toBe(false);
+    expect(
+      fixture.failureChecks({ ...result, loop: { toolCalls: 1 } }, expected, "failure")
+        .noToolExecution,
+    ).toBe(false);
+    expect(
+      fixture.failureChecks(
+        { ...result, session: { status: "failed", artifactId: 33 } },
+        expected,
+        "failure",
+      ).noCheckpoint,
+    ).toBe(false);
+    expect(
+      fixture.failureChecks(
+        { ...result, write: { commitSha: "c".repeat(40) } },
+        expected,
+        "failure",
+      ).noWrites,
+    ).toBe(false);
+    expect(
+      fixture.failureChecks(
+        { ...result, error: { ...result.error, message: "Automatic Session history is expired" } },
+        expected,
+        "failure",
+      ).exactBoundary,
+    ).toBe(false);
   });
 });
