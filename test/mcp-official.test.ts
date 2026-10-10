@@ -117,6 +117,7 @@ describe("official streamable-http transport", () => {
       void transport.close();
       void mcp.close();
     });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK declares a string|undefined sessionId getter against its own exact-optional Transport interface.
     await mcp.connect(transport as Transport);
     await transport.handleRequest(request, response);
   }

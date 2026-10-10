@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { execFile, spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,9 +68,21 @@ async function workflow(
 }
 
 function installerDshVersion(contents: string): unknown {
-  const document = parse(contents) as {
-    jobs: Record<string, { steps: { uses?: string; with?: Record<string, unknown> }[] }>;
-  };
+  const document = z
+    .looseObject({
+      jobs: z.record(
+        z.string(),
+        z.looseObject({
+          steps: z.array(
+            z.looseObject({
+              uses: z.string().optional(),
+              with: z.record(z.string(), z.unknown()).optional(),
+            }),
+          ),
+        }),
+      ),
+    })
+    .parse(parse(contents));
   const actionSteps = Object.values(document.jobs)
     .flatMap((job) => job.steps)
     .filter((step) => step.uses?.startsWith("Lixiaoyiao/deepseek-harness-action@"));
@@ -222,12 +235,16 @@ describe("create-deepseek-harness-action release build", () => {
         windowsHide: true,
       },
     );
-    const packResult = JSON.parse(stdout) as {
-      filename?: string;
-      files?: { path?: string }[];
-      name?: string;
-      version?: string;
-    }[];
+    const packResult = z
+      .array(
+        z.looseObject({
+          filename: z.string().optional(),
+          files: z.array(z.looseObject({ path: z.string().optional() })).optional(),
+          name: z.string().optional(),
+          version: z.string().optional(),
+        }),
+      )
+      .parse(JSON.parse(stdout));
 
     expect(packResult).toHaveLength(1);
     expect(packResult[0]).toMatchObject({
@@ -335,9 +352,15 @@ describe("explicit maintainer validation setup", () => {
         templateDirectory: join(builtPackage, "templates"),
       });
       const contents = await workflow(project, "dsh-commands.yml");
-      const document = parse(contents) as {
-        jobs: { command: { steps: { with?: Record<string, unknown> }[] } };
-      };
+      const document = z
+        .looseObject({
+          jobs: z.looseObject({
+            command: z.looseObject({
+              steps: z.array(z.looseObject({ with: z.record(z.string(), z.unknown()).optional() })),
+            }),
+          }),
+        })
+        .parse(parse(contents));
       const withInputs = document.jobs.command.steps.at(-1)?.with;
       expect(withInputs?.["test-commands"]).toBe(JSON.stringify(commands));
       expect(withInputs?.["container-image"]).toBe(image);
@@ -600,12 +623,25 @@ describe("safe filesystem and non-interactive behavior", () => {
       expect(() =>
         assertSessionWorkflowPolicy(contents, "session", sessionKeyHash("repository-summary")),
       ).not.toThrow();
-      const document = parse(contents) as {
-        "run-name": string;
-        on: { workflow_dispatch: { inputs: Record<string, unknown> } };
-        concurrency: { group: string; "cancel-in-progress": boolean };
-        jobs: { session: { steps: { uses?: string; with?: Record<string, unknown> }[] } };
-      };
+      const document = z
+        .looseObject({
+          "run-name": z.string(),
+          on: z.looseObject({
+            workflow_dispatch: z.looseObject({ inputs: z.record(z.string(), z.unknown()) }),
+          }),
+          concurrency: z.looseObject({ group: z.string(), "cancel-in-progress": z.boolean() }),
+          jobs: z.looseObject({
+            session: z.looseObject({
+              steps: z.array(
+                z.looseObject({
+                  uses: z.string().optional(),
+                  with: z.record(z.string(), z.unknown()).optional(),
+                }),
+              ),
+            }),
+          }),
+        })
+        .parse(parse(contents));
       expect(result.createdFiles).toEqual([".github/workflows/dsh-session.yml"]);
       expect(document["run-name"]).toBe("dsh-session-${{ inputs.session_key }}");
       expect(document.concurrency).toEqual({
@@ -771,8 +807,12 @@ describe("generated workflow contracts", () => {
       expect(() => {
         parse(commands);
       }).not.toThrow();
-      const reviewDocument = parse(review) as { permissions?: Record<string, string> };
-      const commandsDocument = parse(commands) as { permissions?: Record<string, string> };
+      const reviewDocument = z
+        .looseObject({ permissions: z.record(z.string(), z.string()).optional() })
+        .parse(parse(review));
+      const commandsDocument = z
+        .looseObject({ permissions: z.record(z.string(), z.string()).optional() })
+        .parse(parse(commands));
 
       expect(reviewDocument.permissions).toEqual({
         contents: "read",

@@ -13,8 +13,6 @@ __webpack_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js + 13 modules
 var core = __webpack_require__(77094);
-// EXTERNAL MODULE: ./src/lifecycle/cancellation.ts
-var cancellation = __webpack_require__(83257);
 // EXTERNAL MODULE: ./src/review/tracking.ts
 var tracking = __webpack_require__(94843);
 // EXTERNAL MODULE: ./src/github/comments.ts
@@ -37,74 +35,49 @@ async function publishStatusComment(client, target, authorId, title, message, ru
     await (0,comments/* upsertTrackingComment */.k)(client, target, authorId, trackingKind, body);
 }
 
-// EXTERNAL MODULE: ./src/write/pr.ts
-var pr = __webpack_require__(18385);
-// EXTERNAL MODULE: ./src/write/github.ts
-var github = __webpack_require__(80252);
-// EXTERNAL MODULE: ./src/write/validate.ts
-var validate = __webpack_require__(56713);
-// EXTERNAL MODULE: ./src/write/workspace.ts + 1 modules
-var workspace = __webpack_require__(1670);
-// EXTERNAL MODULE: ./src/write/validation-deadline.ts
-var validation_deadline = __webpack_require__(64301);
+// EXTERNAL MODULE: ./src/write/transaction.ts + 2 modules
+var transaction = __webpack_require__(88284);
 ;// CONCATENATED MODULE: ./src/commands/fix.ts
-
-
-
-
-
 
 
 
 async function finishFix(input) {
     const task = input.result.output.operation === "task";
     const label = task ? "task" : "fix";
-    const validation = {
-        deadlineMs: input.validationDeadlineMs ?? Date.now() + 10 * 60_000,
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-    };
-    input.onPhase?.("validation");
-    await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity), validation);
-    const changes = await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,workspace/* inspectWorkspaceChanges */.$Z)(input.snapshot), validation);
-    if (changes.all.length === 0) {
-        throw new Error(`DSH reported a ${label} but produced no file changes`);
-    }
-    (0,validate/* assertWriteValidationConfigured */.BM)(input.inputs.runTests, input.inputs.testCommands);
-    const tests = await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,validate/* runValidationCommandsInDocker */.KQ)(input.snapshot.workerRoot, input.inputs.testCommands, input.inputs.containerImage, (0,validation_deadline/* remainingValidationMs */.qK)(validation), undefined, input.signal), validation);
-    (0,validate/* assertValidationSucceeded */.Ph)(tests);
-    (0,cancellation/* throwIfCancelled */.d)(input.signal);
-    input.onPhase?.("write");
-    await (0,validation_deadline/* withinValidationDeadline */.No)(async () => (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity), validation);
-    (0,cancellation/* throwIfCancelled */.d)(input.signal);
-    // Crossing this boundary may create Git objects. Complete the existing
-    // reconcile/update sequence even if cancellation arrives afterwards.
-    const created = await (0,github.createGitHubCommitFromWorkspace)(input.client, {
-        owner: input.target.owner,
-        repo: input.target.repo,
-        baseSha: input.boundHeadSha,
-        message: task ? "feat: apply DeepSeek Harness task" : "fix: apply DeepSeek Harness fix",
-    }, input.snapshot);
-    await (0,pr/* revalidatePullRequestIdentity */.kf)(input.client, input.target.owner, input.target.repo, input.target.issueNumber, input.identity);
-    await (0,github.assertRemoteBranchHead)(input.client, input.target.owner, input.target.repo, input.headBranch, input.boundHeadSha);
-    await (0,github.updateRemoteBranch)(input.client, input.target.owner, input.target.repo, input.headBranch, created.sha);
+    const created = await (0,transaction/* executeValidatedRepositoryWrite */.L)({
+        client: input.client,
+        repository: { owner: input.target.owner, repo: input.target.repo },
+        workspace: input.snapshot,
+        plan: {
+            kind: "pr-head",
+            target: { number: input.target.issueNumber, identity: input.identity },
+            commitMessage: task ? "feat: apply DeepSeek Harness task" : "fix: apply DeepSeek Harness fix",
+        },
+        validation: {
+            runTests: input.inputs.runTests,
+            commands: input.inputs.testCommands,
+            containerImage: input.inputs.containerImage,
+        },
+        control: input,
+    });
     try {
-        await publishStatusComment(input.client, input.target, input.expectedAuthorId, `DeepSeek Harness ${label} prepared`, `${input.result.output.summary}\n\nConfigured validation passed.\n\nCommit: \`${created.sha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl, task ? "task" : "write");
-        return { commitSha: created.sha, paths: created.paths, status: "success" };
+        await publishStatusComment(input.client, input.target, input.expectedAuthorId, `DeepSeek Harness ${label} prepared`, `${input.result.output.summary}\n\nConfigured validation passed.\n\nCommit: \`${created.commitSha}\`\n\nChanged: ${created.paths.map((path) => `\`${path}\``).join(", ")}`, input.runUrl, task ? "task" : "write");
+        return { commitSha: created.commitSha, paths: created.paths, status: "success" };
     }
     catch {
         // The branch update is the authoritative write. A later comment failure
         // must not turn an already-pushed fix into a failed/retried mutation.
-        core/* warning */.$e(`Partial success: ${label} commit ${created.sha} was pushed, but its GitHub status comment could not be published.`);
+        core/* warning */.$e(`Partial success: ${label} commit ${created.commitSha} was pushed, but its GitHub status comment could not be published.`);
         try {
             await core/* summary */.z
                 .addHeading(`DeepSeek Harness ${label}: partial success`, 2)
-                .addRaw(`${task ? "Task" : "Fix"} commit \`${created.sha}\` was pushed, but the status comment could not be published.`)
+                .addRaw(`${task ? "Task" : "Fix"} commit \`${created.commitSha}\` was pushed, but the status comment could not be published.`)
                 .write();
         }
         catch {
             core/* warning */.$e("The partial-success step summary could not be published either.");
         }
-        return { commitSha: created.sha, paths: created.paths, status: "partial-success" };
+        return { commitSha: created.commitSha, paths: created.paths, status: "partial-success" };
     }
 }
 

@@ -28,6 +28,20 @@ import {
   type ValidationIntegritySummary,
 } from "../src/write/validation-integrity.js";
 import { ValidationFailureError } from "../src/write/validate.js";
+import { EntityBindingChangedError } from "../src/write/errors.js";
+import { GitHubEntityRevalidationError } from "../src/tools/github-gateway-revalidation.js";
+import { fixtureObject } from "./helpers/json-fixture.js";
+
+it("preserves a stale entity identity through the Gateway transport wrapper", () => {
+  const error = new GitHubEntityRevalidationError({
+    cause: new EntityBindingChangedError("PR head changed"),
+  });
+  expect(describeActionFailure(error, "write")).toMatchObject({
+    code: "ENTITY_BINDING_CHANGED",
+    category: "domain",
+    retryable: false,
+  });
+});
 
 const policy: SecurityPolicy = {
   trust: "trusted-write",
@@ -136,6 +150,43 @@ function failureOutcome(error: RunOutcome["error"]): RunOutcome {
 }
 
 describe("versioned action results", () => {
+  it("preserves partial model usage in outputs and explains the worker-reported buckets", () => {
+    const usage = {
+      source: "headless-worker" as const,
+      completeness: "partial" as const,
+      reportedSteps: 1,
+      observedSteps: 2,
+      tokens: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 300 },
+    };
+    const outcome: RunOutcome = {
+      schemaVersion: 1,
+      conclusion: "success",
+      operation: "review",
+      summary: "Review complete",
+      findingsCount: 0,
+      durationMs: 10,
+      agent: {
+        durationMs: 10,
+        usage,
+        isolation: {
+          backend: "docker",
+          credentialMediated: true,
+          repoToolsEnabled: false,
+          processIsolated: true,
+          networkIsolated: false,
+          workspaceAccess: "read-only",
+          extensionProfile: "github-action",
+          limitations: [],
+        },
+      },
+    };
+    const result = fixtureObject(JSON.parse(String(buildActionOutputs(outcome)["result-json"])));
+    expect(result.modelUsage).toEqual(usage);
+    const summary = formatStepSummary(outcome);
+    expect(summary).toContain("**Model usage (worker reported):** partial; 1/2 steps");
+    expect(summary).toContain("uncached input 100; output 20; cache read 300");
+    expect(summary).not.toContain("cache write");
+  });
   it("emits old scalar outputs and a complete success envelope from one outcome", () => {
     const outcome: RunOutcome = {
       schemaVersion: 1,
@@ -201,13 +252,7 @@ describe("versioned action results", () => {
       "workspace-write": "true",
       "trusted-extensions": JSON.stringify(permission.trustedExtensions),
     });
-    const result = JSON.parse(String(outputs["result-json"])) as {
-      readonly permissions: unknown;
-      readonly toolPolicy: unknown;
-      readonly dsh: unknown;
-      readonly authority: unknown;
-      readonly validation: { readonly integrity: unknown };
-    };
+    const result = fixtureObject(JSON.parse(String(outputs["result-json"])));
     expect(result).toMatchObject({
       schemaVersion: 1,
       status: "success",
@@ -250,7 +295,7 @@ describe("versioned action results", () => {
     expect(result.permissions).toEqual(permission);
     expect(result.toolPolicy).toEqual(toolPolicy);
     expect(result.authority).toEqual(authority);
-    expect(result.validation.integrity).toEqual(integrity);
+    expect(fixtureObject(result.validation).integrity).toEqual(integrity);
     expect(outputs).not.toHaveProperty("authority");
   });
 
@@ -444,9 +489,7 @@ describe("versioned action results", () => {
       "context",
     );
     const outputs = buildActionOutputs(failureOutcome(failure));
-    const structured = JSON.parse(String(outputs["result-json"])) as {
-      readonly error: unknown;
-    };
+    const structured = fixtureObject(JSON.parse(String(outputs["result-json"])));
 
     expect(failure).toMatchObject({
       code: "POLICY_DENIED",
@@ -592,10 +635,7 @@ describe("versioned action results", () => {
     };
     const summary = formatStepSummary(outcome);
     const outputs = buildActionOutputs(outcome);
-    const result = JSON.parse(String(outputs["result-json"])) as {
-      readonly toolPolicy: Record<string, unknown>;
-      readonly dsh: { readonly mode: string; readonly composition: string };
-    };
+    const result = fixtureObject(JSON.parse(String(outputs["result-json"])));
 
     expect(summary).toContain("**DSH mode:** native");
     expect(summary).toContain("**DSH composition:** dsh-native-headless");
@@ -671,24 +711,15 @@ describe("versioned action results", () => {
     const outputs = buildActionOutputs(outcome);
     const receiptsText = String(outputs["tool-receipts"]);
     const resultText = String(outputs["result-json"]);
-    const receipts = JSON.parse(receiptsText) as {
-      readonly dsh: readonly unknown[];
-      readonly truncated: boolean;
-      readonly droppedCount: number;
-    };
-    const result = JSON.parse(resultText) as {
-      readonly loop: {
-        readonly dshToolReceipts: readonly unknown[];
-        readonly toolReceiptsTruncated: boolean;
-        readonly toolReceiptsDroppedCount: number;
-      };
-    };
+    const receipts = fixtureObject(JSON.parse(receiptsText));
+    const result = fixtureObject(JSON.parse(resultText));
+    const loop = fixtureObject(result.loop);
 
     expect((receiptsText.length + resultText.length) * 2).toBeLessThanOrEqual(640 * 1024);
     expect(receipts.truncated).toBe(true);
     expect(receipts.droppedCount).toBeGreaterThan(0);
-    expect(result.loop.dshToolReceipts).toEqual(receipts.dsh);
-    expect(result.loop.toolReceiptsTruncated).toBe(true);
-    expect(result.loop.toolReceiptsDroppedCount).toBe(receipts.droppedCount);
+    expect(loop.dshToolReceipts).toEqual(receipts.dsh);
+    expect(loop.toolReceiptsTruncated).toBe(true);
+    expect(loop.toolReceiptsDroppedCount).toBe(receipts.droppedCount);
   });
 });

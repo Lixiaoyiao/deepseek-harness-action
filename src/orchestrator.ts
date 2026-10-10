@@ -148,10 +148,7 @@ export async function runAction(options: RunActionOptions = {}): Promise<RunOutc
     const validation: ValidationSummary | undefined =
       failure.phase === "validation" || state.validationIntegrity !== undefined
         ? {
-            status:
-              failure.phase === "validation" || state.validationPassed !== true
-                ? "failed"
-                : "passed",
+            status: state.validationPassed === true ? "passed" : "failed",
             commandCount: state.validationCommandCount ?? 0,
             ...(state.validationIntegrity === undefined
               ? {}

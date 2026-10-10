@@ -1,18 +1,16 @@
 import { join } from "node:path";
 
-import { AgentDeadlineError } from "../agent/loop.js";
+import { AgentDeadlineError } from "../agent/loop-errors.js";
 import type { DshComposition } from "../dsh/composition.js";
 import type { DshRuntime } from "../dsh/runtime.js";
 import { isClassifiedActionError, PolicyDeniedError } from "../errors.js";
 import type { ExtensionPlan } from "../extensions/plan.js";
 import { configuredSessionExtensionSecrets } from "../extensions/credentials.js";
 import { GitHubQuotaError } from "../github/request-policy.js";
-import { checkActorPermissions } from "../github/permissions.js";
 import type { ActionInputs } from "../inputs.js";
 import type { RunState } from "../orchestration/lifecycle.js";
 import type { AuthorizedRun } from "../orchestration/prepare.js";
 import { collectControllerSecrets } from "../security/env.js";
-import { evaluatePolicy } from "../security/policy.js";
 import {
   prepareSessionArtifacts,
   saveSessionArtifact,
@@ -162,32 +160,7 @@ export async function prepareControllerSession(options: {
       },
       authorizeCurrent: async () => {
         signal.throwIfAborted();
-        const permissions = await checkActorPermissions(
-          authorized.client,
-          context,
-          inputs.allowedBots,
-        );
-        const pullRequest =
-          authorized.snapshot?.kind === "pull_request" ? authorized.snapshot : undefined;
-        const currentPolicy = evaluatePolicy({
-          context,
-          operation: authorized.command.operation,
-          allowWrite: inputs.allowWrite,
-          permissions,
-          requestedAccess: authorized.command.requestedAccess,
-          commandSource: authorized.command.source,
-          allowWorkflowRunWrite:
-            context.rawEventName === "workflow_run" &&
-            authorized.command.operation === "fix" &&
-            pullRequest !== undefined,
-          ...(pullRequest === undefined
-            ? {}
-            : { resolvedPullRequest: { isFork: pullRequest.isFork } }),
-        });
-        if (!currentPolicy.allowed || currentPolicy.trust === "untrusted")
-          throw new PolicyDeniedError(
-            "Current actor authority no longer permits Session artifact creation",
-          );
+        await authorized.revalidateAuthority();
       },
     });
     state.session = {

@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { record } from "../src/security/record.js";
 
 interface FixtureEndpoint {
   readonly healthUrl: string;
@@ -83,7 +84,7 @@ async function startFixture(): Promise<Fixture> {
         const newline = output.indexOf("\n");
         if (newline < 0) return;
         try {
-          const value = JSON.parse(output.slice(0, newline)) as Partial<FixtureEndpoint>;
+          const value = record(JSON.parse(output.slice(0, newline)));
           if (
             typeof value.healthUrl !== "string" ||
             !/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/health$/u.test(value.healthUrl) ||
@@ -116,6 +117,7 @@ async function startFixture(): Promise<Fixture> {
     // The SDK transport's optional sessionId declaration conflicts with its
     // shared interface under exactOptionalPropertyTypes, as in the native
     // ecosystem fixture. This is only a type adaptation of the real transport.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK declares a string|undefined sessionId getter against its own exact-optional Transport interface.
     await client.connect(transport as Transport, { timeout: 5_000 });
     const fixture: Fixture = {
       ...endpoint,

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { record } from "../src/security/record.js";
 
 const mocks = vi.hoisted(() => {
-  const hookWrap = vi.fn();
+  const hookWrap = vi.fn<(event: string, hook: RequestHook) => void>();
   return {
     hookWrap,
     getOctokit: vi.fn(() => ({ request: vi.fn(), hook: { wrap: hookWrap } })),
@@ -17,6 +18,12 @@ type RequestHook = (
   options: Record<string, unknown>,
 ) => Promise<unknown>;
 
+function requestHook(): RequestHook {
+  const hook = mocks.hookWrap.mock.calls[0]?.[1];
+  if (hook === undefined) throw new Error("Expected the installed Octokit request hook");
+  return hook;
+}
+
 beforeEach(() => {
   mocks.getOctokit.mockClear();
   mocks.hookWrap.mockClear();
@@ -26,7 +33,7 @@ describe("Controller GitHub client", () => {
   it("injects the Controller run signal at the actual Octokit request boundary", async () => {
     const controller = new AbortController();
     createGitHubClient("github-token", controller.signal);
-    const hook = mocks.hookWrap.mock.calls[0]?.[1] as RequestHook;
+    const hook = requestHook();
     const request = vi.fn((options: Record<string, unknown>) => Promise.resolve(options));
 
     await hook(request, {
@@ -39,19 +46,20 @@ describe("Controller GitHub client", () => {
       userAgent: "dsh-action/0.2",
     });
     const requestOptions = request.mock.calls[0]?.[0];
-    const requestConfig = requestOptions?.request as Record<string, unknown> | undefined;
+    const requestConfig = record(requestOptions?.request);
     expect(requestConfig).toMatchObject({ marker: "preserved" });
-    expect(requestConfig?.signal).toBeInstanceOf(AbortSignal);
-    expect(requestConfig?.signal).not.toBe(controller.signal);
+    expect(requestConfig.signal).toBeInstanceOf(AbortSignal);
+    expect(requestConfig.signal).not.toBe(controller.signal);
   });
 
   it("settles on abort even when a custom request ignores the signal", async () => {
     const controller = new AbortController();
     createGitHubClient("github-token", controller.signal);
-    const hook = mocks.hookWrap.mock.calls[0]?.[1] as RequestHook;
+    const hook = requestHook();
     let requestSignal: AbortSignal | undefined;
     const request = vi.fn((options: Record<string, unknown>) => {
-      requestSignal = (options.request as { signal?: AbortSignal } | undefined)?.signal;
+      const signal = record(options.request).signal;
+      requestSignal = signal instanceof AbortSignal ? signal : undefined;
       return new Promise<unknown>(() => undefined);
     });
     const running = hook(request, { method: "GET", url: "/repos/o/r", request: {} });
@@ -77,10 +85,11 @@ describe("Controller GitHub client", () => {
     const run = new AbortController();
     const invocation = new AbortController();
     createGitHubClient("github-token", run.signal);
-    const hook = mocks.hookWrap.mock.calls[0]?.[1] as RequestHook;
+    const hook = requestHook();
     let received: AbortSignal | undefined;
     const request = vi.fn((options: Record<string, unknown>) => {
-      received = (options.request as { signal: AbortSignal }).signal;
+      const signal = record(options.request).signal;
+      received = signal instanceof AbortSignal ? signal : undefined;
       return new Promise<unknown>(() => undefined);
     });
     const running = hook(request, {

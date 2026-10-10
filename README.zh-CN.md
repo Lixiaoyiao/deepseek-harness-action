@@ -84,7 +84,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.2.0-rc.2
@@ -92,7 +92,7 @@ jobs:
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
 
-生产环境应绑定对应 GitHub Release 公布的完整 commit。历史 v0.9.2 保持 `c184872f309ebfc5e57a0c5c1397c59e774709e0`，v0.10.0 单独验证与发布。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
+生产环境应绑定对应 GitHub Release 公布的完整 commit。正式版本通过验证后，解析对应不可变 tag 的完整 SHA；安装器版本和其绑定的 Action commit 是独立的发布身份。权限、版本固定、安全检出规则和完整模板见[安装指南](docs/setup.zh-CN.md)。
 
 ## 核心能力
 

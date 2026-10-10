@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,7 +51,7 @@ async function fixture() {
         reject(new Error("Fixture exited before its endpoint was available"));
       });
     });
-    return { ...(JSON.parse(endpoint) as { origin: string }), audit, close };
+    return { ...z.looseObject({ origin: z.string() }).parse(JSON.parse(endpoint)), audit, close };
   } catch (error) {
     await close();
     throw error;
@@ -90,17 +91,25 @@ describe("trusted GitHub integration provider fixture", () => {
           if (!messagesProtocol) {
             expect(frames).toHaveLength(3);
             expect(frames[2]).toBe("data: [DONE]");
-            const first = JSON.parse(frames[0]?.slice("data: ".length) ?? "null") as {
-              choices: { delta: { content: string } }[];
-            };
-            return JSON.parse(first.choices[0]?.delta.content ?? "null") as Record<string, unknown>;
+            const first = z
+              .looseObject({
+                choices: z.array(z.looseObject({ delta: z.looseObject({ content: z.string() }) })),
+              })
+              .parse(JSON.parse(frames[0]?.slice("data: ".length) ?? "null"));
+            return z
+              .union([z.string(), z.record(z.string(), z.unknown())])
+              .parse(JSON.parse(first.choices[0]?.delta.content ?? "null"));
           }
           const events = frames.map((frame) => {
             const [name, data] = frame.split("\n");
-            const event = JSON.parse(data?.slice("data: ".length) ?? "null") as {
-              type: string;
-              delta?: { text?: string; stop_reason?: string };
-            };
+            const event = z
+              .looseObject({
+                type: z.string(),
+                delta: z
+                  .looseObject({ text: z.string().optional(), stop_reason: z.string().optional() })
+                  .optional(),
+              })
+              .parse(JSON.parse(data?.slice("data: ".length) ?? "null"));
             expect(name).toBe(`event: ${event.type}`);
             return event;
           });
@@ -113,7 +122,9 @@ describe("trusted GitHub integration provider fixture", () => {
             "message_stop",
           ]);
           expect(events[4]?.delta?.stop_reason).toBe("end_turn");
-          return JSON.parse(events[2]?.delta?.text ?? "null") as Record<string, unknown>;
+          return z
+            .union([z.string(), z.record(z.string(), z.unknown())])
+            .parse(JSON.parse(events[2]?.delta?.text ?? "null"));
         };
         for (const route of ["label", "assignee"]) {
           expect(await request(route)).toMatchObject({
@@ -156,15 +167,16 @@ describe("trusted GitHub integration provider fixture", () => {
         const audit = (await readFile(server.audit, "utf8"))
           .trim()
           .split("\n")
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                authorizationMatches: boolean;
-                prompt: string;
-                route: string;
-                kind: string;
-                index: number;
-              },
+          .map((line) =>
+            z
+              .looseObject({
+                authorizationMatches: z.boolean(),
+                prompt: z.string(),
+                route: z.string(),
+                kind: z.string(),
+                index: z.number(),
+              })
+              .parse(JSON.parse(line)),
           );
         expect(audit).toHaveLength(15);
         expect(audit.every((entry) => entry.authorizationMatches)).toBe(true);

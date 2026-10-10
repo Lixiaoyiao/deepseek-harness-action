@@ -1,56 +1,21 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import { zipSync } from "fflate";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 import { parseTaskOutputSchema, validateTaskOutput } from "../src/dsh/task-output.js";
 import { loadInputs } from "../src/inputs.js";
 
-interface FixtureModule {
-  buildSessionTask(
-    phase: string,
-    challenge: string,
-    memory?: string,
-  ): { prompt: string; schema: string };
-  assertSourceProof(proof: unknown, expected: Record<string, unknown>): unknown;
-  resultChecks(result: unknown, expected: Record<string, unknown>): Record<string, boolean>;
-  failureChecks(
-    result: unknown,
-    expected: Record<string, unknown>,
-    actionOutcome: string,
-  ): Record<string, boolean>;
-  selectSessionHistory(
-    runs: unknown[],
-    current: Record<string, unknown>,
-  ): { status: string; source?: { id: number } };
-  inspectCheckpointArchive(
-    input: Uint8Array,
-    expected: Record<string, unknown>,
-  ): {
-    payload: Buffer;
-    payloadSha256: string;
-    archiveSha256: string;
-    eventCount: number;
-    generation: number;
-  };
-}
-let fixture: FixtureModule;
+import * as fixture from "../.github/e2e/session-auto-e2e-proof.mjs";
+import { fixtureObject as object } from "./helpers/json-fixture.js";
 const now = Date.parse("2026-10-04T01:00:00Z");
 const id = "session-11111111-1111-4111-8111-111111111111";
 const memory = "a".repeat(48);
 const challenge = "b".repeat(24);
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-
-beforeAll(async () => {
-  fixture = (await import(
-    pathToFileURL(resolve(".github/e2e/session-auto-e2e-proof.mjs")).href
-  )) as FixtureModule;
-});
 
 function identity(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -167,12 +132,6 @@ function successResult(extra: Record<string, unknown> = {}): Record<string, unkn
     validation: { status: "not-applicable", commandCount: 0 },
     ...extra,
   };
-}
-
-function object(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Expected mapping");
-  return value as Record<string, unknown>;
 }
 
 describe("independent Actions Session qualification fixture", () => {

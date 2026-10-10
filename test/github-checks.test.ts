@@ -1,9 +1,10 @@
+import { githubClientFixture } from "./helpers/github-client.js";
+import { record } from "../src/security/record.js";
 import { ReadableStream } from "node:stream/web";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { fetchCiEvidence } from "../src/github/checks.js";
-import type { GitHubClient } from "../src/github/client.js";
 import { GitHubQuotaError } from "../src/github/request-policy.js";
 
 const SHA = "a".repeat(40);
@@ -85,7 +86,7 @@ function fakeClient(options: ClientOptions = {}) {
       },
     },
   };
-  return { client: client as unknown as GitHubClient, request, rest: client.rest };
+  return { client: githubClientFixture(client), request, rest: client.rest };
 }
 
 describe("CI evidence broker", () => {
@@ -161,25 +162,14 @@ describe("CI evidence broker", () => {
     expect(request).toHaveBeenCalledTimes(1);
     const apiCall = request.mock.calls[0];
     expect(apiCall?.[0]).toBe("GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs");
-    const apiOptions = apiCall?.[1] as
-      | {
-          owner?: unknown;
-          repo?: unknown;
-          job_id?: unknown;
-          request?: {
-            redirect?: unknown;
-            parseSuccessResponseBody?: unknown;
-            signal?: unknown;
-          };
-        }
-      | undefined;
+    const apiOptions = record(apiCall?.[1]);
     expect(apiOptions).toMatchObject({
       owner: "octo",
       repo: "repo",
       job_id: 20,
       request: { redirect: "manual", parseSuccessResponseBody: false },
     });
-    expect(apiOptions?.request?.signal).toBeInstanceOf(AbortSignal);
+    expect(record(apiOptions.request).signal).toBeInstanceOf(AbortSignal);
     expect(fetchImpl).toHaveBeenCalledWith(
       expect.stringContaining("pipelines.actions.githubusercontent.com"),
       expect.objectContaining({ method: "GET", redirect: "error" }),

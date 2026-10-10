@@ -39,19 +39,27 @@ interface RawDshToolReceipt {
   readonly code?: string;
 }
 
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function missingFile(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
 export async function fileSize(path: string): Promise<number> {
   try {
     return (await stat(path)).size;
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    if (missingFile(error)) return 0;
     throw error;
   }
 }
 
 function parseRawToolReceipt(line: string): RawDshToolReceipt {
-  let value: Partial<RawDshToolReceipt> & Readonly<Record<string, unknown>>;
+  let value: unknown;
   try {
-    value = JSON.parse(line) as Partial<RawDshToolReceipt> & Readonly<Record<string, unknown>>;
+    value = JSON.parse(line);
   } catch {
     throw new DshConfigurationError("DSH emitted a malformed tool receipt");
   }
@@ -68,6 +76,7 @@ function parseRawToolReceipt(line: string): RawDshToolReceipt {
     "code",
   ]);
   if (
+    !isRecord(value) ||
     Object.keys(value).some((key) => !allowedKeys.has(key)) ||
     value.schemaVersion !== 1 ||
     (value.phase !== "started" && value.phase !== "completed") ||
@@ -79,11 +88,15 @@ function parseRawToolReceipt(line: string): RawDshToolReceipt {
     value.id.length > 256 ||
     typeof value.runtimeName !== "string" ||
     !/^[A-Za-z0-9_-]{1,64}$/u.test(value.runtimeName) ||
-    !["builtin", "mcp", "plugin", "denied"].includes(value.provider ?? "") ||
+    (value.provider !== "builtin" &&
+      value.provider !== "mcp" &&
+      value.provider !== "plugin" &&
+      value.provider !== "denied") ||
     typeof value.counted !== "boolean" ||
     typeof value.ok !== "boolean" ||
+    typeof value.durationMs !== "number" ||
     !Number.isSafeInteger(value.durationMs) ||
-    (value.durationMs ?? -1) < 0 ||
+    value.durationMs < 0 ||
     (value.code !== undefined &&
       (typeof value.code !== "string" || value.code.length === 0 || value.code.length > 128))
   ) {
@@ -98,7 +111,18 @@ function parseRawToolReceipt(line: string): RawDshToolReceipt {
   ) {
     throw new DshConfigurationError("DSH emitted a malformed tool admission receipt");
   }
-  return value as RawDshToolReceipt;
+  return {
+    schemaVersion: value.schemaVersion,
+    phase: value.phase,
+    callId: value.callId,
+    id: value.id,
+    runtimeName: value.runtimeName,
+    provider: value.provider,
+    counted: value.counted,
+    ok: value.ok,
+    durationMs: value.durationMs,
+    ...(value.code === undefined ? {} : { code: value.code }),
+  };
 }
 
 async function readReceiptRange(path: string, offset: number): Promise<Buffer> {
@@ -109,7 +133,7 @@ async function readReceiptRange(path: string, offset: number): Promise<Buffer> {
   try {
     handle = await open(path, "r");
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return Buffer.alloc(0);
+    if (missingFile(error)) return Buffer.alloc(0);
     throw error;
   }
   try {
@@ -216,15 +240,20 @@ function parseInvocationRecord(
   allowedKeys: ReadonlySet<string>,
   label: string,
 ): Readonly<Record<string, number>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new DshConfigurationError(`DSH invocation ${label} state is malformed`);
   }
   const parsed: Record<string, number> = {};
   for (const [key, count] of Object.entries(value)) {
-    if (!allowedKeys.has(key) || !Number.isSafeInteger(count) || (count as number) < 0) {
+    if (
+      !allowedKeys.has(key) ||
+      typeof count !== "number" ||
+      !Number.isSafeInteger(count) ||
+      count < 0
+    ) {
       throw new DshConfigurationError(`DSH invocation ${label} state is malformed`);
     }
-    parsed[key] = count as number;
+    parsed[key] = count;
   }
   return parsed;
 }
@@ -241,19 +270,19 @@ export async function readInvocationCounts(
     }
     text = await readFile(path, "utf8");
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyInvocationCounts();
+    if (missingFile(error)) return emptyInvocationCounts();
     throw error;
   }
   let value: unknown;
   try {
-    value = JSON.parse(text) as unknown;
+    value = JSON.parse(text);
   } catch {
     throw new DshConfigurationError("DSH invocation state is malformed");
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new DshConfigurationError("DSH invocation state is malformed");
   }
-  const state = value as Readonly<Record<string, unknown>>;
+  const state = value;
   if (
     state.schemaVersion !== 1 ||
     Object.keys(state).some((key) => !["schemaVersion", "tools", "groups"].includes(key))

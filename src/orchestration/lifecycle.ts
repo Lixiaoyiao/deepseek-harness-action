@@ -1,6 +1,6 @@
 import * as core from "@actions/core";
 
-import { AgentDeadlineError } from "../agent/loop.js";
+import { AgentDeadlineError } from "../agent/loop-errors.js";
 import type { RoutedCommand } from "../commands/router.js";
 import type { DshComposition, DshMode } from "../dsh/composition.js";
 import { DshAbortedError } from "../dsh/errors.js";

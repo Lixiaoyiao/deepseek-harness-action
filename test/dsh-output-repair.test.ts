@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 
@@ -63,7 +64,7 @@ describe("tool-free result formatting", () => {
       const [url, init] = fetcher.mock.calls[0] ?? [];
       expect(url).toBe("http://127.0.0.1:3456/chat/completions");
       if (typeof init?.body !== "string") throw new Error("expected a serialized body");
-      const body = JSON.parse(init.body) as Record<string, unknown>;
+      const body = z.record(z.string(), z.unknown()).parse(JSON.parse(init.body));
       expect(body).toMatchObject({
         stream: false,
         model: "deepseek-flash",
@@ -145,7 +146,7 @@ describe("tool-free result formatting", () => {
       expect(fetcher).toHaveBeenCalledOnce();
       const body = fetcher.mock.calls[0]?.[1]?.body;
       if (typeof body !== "string") throw new Error("expected a serialized formatting request");
-      const request = JSON.parse(body) as Record<string, unknown>;
+      const request = z.record(z.string(), z.unknown()).parse(JSON.parse(body));
       expect(request).not.toHaveProperty("tools");
       expect(request).not.toHaveProperty("functions");
       expect(body).toContain("remove that leftover field only");

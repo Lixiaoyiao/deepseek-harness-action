@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
@@ -132,9 +133,9 @@ describe("extension runtime package lock", () => {
           dependencies: { runtime: "1.0.0" },
         },
       });
-      const manifest = JSON.parse(await readFile(profile.manifestPath, "utf8")) as {
-        readonly dependencies?: Readonly<Record<string, string>>;
-      };
+      const manifest = z
+        .looseObject({ dependencies: z.record(z.string(), z.string()).optional() })
+        .parse(JSON.parse(await readFile(profile.manifestPath, "utf8")));
 
       expect(profile.profileDir).toBe(runtime.packageRoot);
       expect(manifest.dependencies).toEqual({

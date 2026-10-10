@@ -1,5 +1,6 @@
 import type { GitHubClient } from "../github/client.js";
 import { issueContentFingerprint } from "../github/issue-identity.js";
+import { EntityBindingChangedError } from "./errors.js";
 
 export interface BoundIssueIdentity {
   readonly state: string;
@@ -41,6 +42,8 @@ export async function revalidateIssueIdentity(
     actualFingerprint !== expected.contentFingerprint ||
     "pull_request" in issue.data
   ) {
-    throw new Error("Issue content or state changed during the run; refusing the trusted write");
+    throw new EntityBindingChangedError(
+      "Issue content or state changed during the run; refusing the trusted write",
+    );
   }
 }

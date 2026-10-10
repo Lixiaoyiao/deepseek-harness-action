@@ -65,7 +65,9 @@ async function readBoundedBody(request: IncomingMessage, limit: number): Promise
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const value of request) {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
+    if (!Buffer.isBuffer(value))
+      throw new DshProxyError("Worker request contained invalid byte chunks");
+    const chunk = value;
     bytes += chunk.byteLength;
     if (bytes > limit) throw new DshProxyError("Worker request exceeded the proxy request limit");
     chunks.push(chunk);

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { PROFILE_TEMPLATES } from "@deepseek-ai/dsh-app-boot";
@@ -18,6 +18,7 @@ import type {
   PreparedDshComposition,
 } from "./composition.js";
 import type { NativeToolId } from "../tools/schema.js";
+import { isJsonObject, prepareCompositionLauncher } from "./composition-files.js";
 
 const NATIVE_TEMPLATE_NAME = "headless";
 const NATIVE_PROFILE_ROOT_FILENAME = "action-native-root.yml";
@@ -153,12 +154,9 @@ export async function writeNativeProfile(options: {
     ...officialBundles,
     ...options.plan.bundles.map((bundle) => bundle.definition.package),
   ];
-  const baseDependencies =
-    typeof options.manifestBase.dependencies === "object" &&
-    options.manifestBase.dependencies !== null &&
-    !Array.isArray(options.manifestBase.dependencies)
-      ? (options.manifestBase.dependencies as Readonly<Record<string, unknown>>)
-      : {};
+  const baseDependencies = isJsonObject(options.manifestBase.dependencies)
+    ? options.manifestBase.dependencies
+    : {};
   const manifest = {
     ...options.manifestBase,
     name: "dsh-profile-headless-native",
@@ -191,16 +189,6 @@ export async function writeNativeProfile(options: {
   await assertNativeProfileManifest(options.profileRoot, bundles);
 }
 
-async function assertFile(path: string, description: string): Promise<void> {
-  let details;
-  try {
-    details = await stat(path);
-  } catch (error: unknown) {
-    throw new DshConfigurationError(`${description} does not exist`, { cause: error });
-  }
-  if (!details.isFile()) throw new DshConfigurationError(`${description} is not a file`);
-}
-
 function parseObservationRow(line: string): NativeObservationRow {
   let value: unknown;
   try {
@@ -210,10 +198,10 @@ function parseObservationRow(line: string): NativeObservationRow {
       cause: error,
     });
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isJsonObject(value)) {
     throw new DshConfigurationError("Native DSH tool observation must be an object");
   }
-  const row = value as Record<string, unknown>;
+  const row = value;
   if (
     row.schemaVersion !== 1 ||
     row.source !== "ctx.tools.schemas(agent)" ||
@@ -224,18 +212,18 @@ function parseObservationRow(line: string): NativeObservationRow {
   ) {
     throw new DshConfigurationError("Native DSH tool observation has an invalid contract");
   }
-  const names = row.observedTools;
+  const names: unknown[] = row.observedTools;
   if (
     names.length === 0 ||
     names.length > 512 ||
-    names.some((name) => typeof name !== "string" || !TOOL_NAME.test(name))
+    !names.every((name): name is string => typeof name === "string" && TOOL_NAME.test(name))
   ) {
     throw new DshConfigurationError("Native DSH tool observation has an invalid inventory");
   }
   return {
     schemaVersion: 1,
     source: "ctx.tools.schemas(agent)",
-    observedTools: names as string[],
+    observedTools: names,
   };
 }
 
@@ -349,15 +337,13 @@ export class NativeComposition implements DshComposition {
     const plan = options.plan;
     const manifestBase = options.manifestBase;
     const launcherSourcePath = join(options.assetsDirectory, NATIVE_LAUNCHER_FILENAME);
-    await assertFile(launcherSourcePath, "DSH native launcher");
-    const launcherDestinationPath = join(options.runtime.packageRoot, NATIVE_LAUNCHER_FILENAME);
-    await copyFile(launcherSourcePath, launcherDestinationPath);
-    if (options.runtime.session !== undefined) {
-      await copyFile(
-        join(options.assetsDirectory, "action-session.mjs"),
-        join(options.runtime.packageRoot, "action-session.mjs"),
-      );
-    }
+    const launcher = await prepareCompositionLauncher({
+      runtime: options.runtime,
+      assetsDirectory: options.assetsDirectory,
+      launcherPath: launcherSourcePath,
+      containerLauncher: CONTAINER_NATIVE_LAUNCHER,
+      task: options.task,
+    });
 
     const profileRoot = options.runtime.packageRoot;
     await writeNativeProfile({
@@ -396,23 +382,9 @@ export class NativeComposition implements DshComposition {
       isolation: "docker",
       launchPlan: {
         command: "node",
-        args: [
-          "--expose-internals",
-          CONTAINER_NATIVE_LAUNCHER,
-          options.task,
-          ...(options.runtime.session === undefined ? [] : ["--action-session"]),
-        ],
+        args: launcher.args,
         workdir: CONTAINER_WORKSPACE,
-        mounts:
-          options.runtime.session === undefined
-            ? []
-            : [
-                {
-                  sourcePath: join(options.runtime.dshHome, "action-state", "session-plan.json"),
-                  destinationPath: "/dsh-home/action-state/session-plan.json",
-                  readOnly: true,
-                },
-              ],
+        mounts: launcher.mounts,
       },
       observedTools: {
         collect: async () => await collectObservedTools(observationPath, observationOffset),

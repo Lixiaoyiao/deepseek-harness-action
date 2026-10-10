@@ -165,6 +165,7 @@ export async function prepareExecution(options: {
           allowWrite: inputs.allowWrite,
           expectedAuthorId: inputs.botUserId,
           backend: createOctokitGitHubToolBackend(client),
+          revalidateAuthority: authorized.revalidateAuthority,
           ...(githubValidation === undefined ? {} : { validationGate: githubValidation.gate }),
           state,
           workspacePath: agentWorkspace,

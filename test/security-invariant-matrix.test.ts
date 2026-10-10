@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   buildControllerToolPolicyAudit,
@@ -53,7 +54,22 @@ type MatrixRow = { [K in AxisName]: MatrixAxes[K][number] };
 type Trust = MatrixRow["trust"];
 type ExtensionAuthority = MatrixRow["extensionAuthority"];
 
-const AXIS_NAMES = Object.keys(MATRIX_AXES) as AxisName[];
+const AXIS_NAMES = [
+  "mode",
+  "trust",
+  "profile",
+  "isolation",
+  "extensionAuthority",
+  "githubAuthority",
+] as const satisfies readonly AxisName[];
+const matrixRowSchema = z.object({
+  mode: z.enum(MATRIX_AXES.mode),
+  trust: z.enum(MATRIX_AXES.trust),
+  profile: z.enum(MATRIX_AXES.profile),
+  isolation: z.enum(MATRIX_AXES.isolation),
+  extensionAuthority: z.enum(MATRIX_AXES.extensionAuthority),
+  githubAuthority: z.enum(MATRIX_AXES.githubAuthority),
+});
 const REQUIRED_NATIVE_VALID_ROWS = [
   {
     mode: "native",
@@ -99,7 +115,7 @@ function cartesianRows(): MatrixRow[] {
   for (const axis of AXIS_NAMES) {
     rows = rows.flatMap((row) => MATRIX_AXES[axis].map((value) => ({ ...row, [axis]: value })));
   }
-  return (rows as MatrixRow[]).filter((row) => isValidMatrixRow(row));
+  return rows.map((row) => matrixRowSchema.parse(row)).filter((row) => isValidMatrixRow(row));
 }
 
 function pairTokens(row: MatrixRow): string[] {

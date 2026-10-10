@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ImplementationModule from "../src/commands/implement.js";
 
 import type { RoutedCommand } from "../src/commands/router.js";
 import type { DshRunResult } from "../src/dsh/runner.js";
-import type { GitHubClient } from "../src/github/client.js";
 import type { GitHubContext } from "../src/github/context.js";
 import type { IssueSnapshot, PullRequestSnapshot } from "../src/github/fetch.js";
-import type { ActionInputs } from "../src/inputs.js";
 import { issueTaskIdentity } from "../src/orchestration/context.js";
 import type { SecurityPolicy } from "../src/security/policy.js";
 import type { WorkspaceSnapshot } from "../src/write/workspace.js";
 import { inputs, pullRequestContext } from "./helpers.js";
+import { githubClientFixture } from "./helpers/github-client.js";
 
 const mocks = vi.hoisted(() => ({
   finishAutomationTask: vi.fn(),
   finishFix: vi.fn(),
-  finishImplementation: vi.fn(),
+  finishImplementation: vi.fn<typeof ImplementationModule.finishImplementation>(),
 }));
 
 vi.mock("../src/commands/implement.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("../src/commands/fix.js", () => ({ finishFix: mocks.finishFix }));
 
 import { executeWrite } from "../src/orchestration/write.js";
 
-const client = {} as GitHubClient;
+const client = githubClientFixture();
 const workspace: WorkspaceSnapshot = {
   sourceRoot: "source",
   workerRoot: "worker",
@@ -163,25 +163,29 @@ beforeEach(() => {
 describe("executeWrite", () => {
   it("routes an Issue implementation with immutable identity and validation deadline", async () => {
     const onPhase = vi.fn();
-    const write = await executeWrite(
-      client,
-      entityContext,
-      command("implement"),
-      inputs({
+    const write = await executeWrite({
+      authorized: {
+        client: client,
+        context: entityContext,
+        command: command("implement"),
+        policy: policy,
+        snapshot: issue,
+        revalidateAuthority: () => Promise.resolve(),
+      },
+      inputs: inputs({
         allowWrite: true,
         baseBranch: "release/next",
         branchPrefix: "automation/",
         branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
       }),
-      policy,
-      issue,
-      workspace,
-      "d".repeat(40),
-      result,
-      123_456,
-      "task-key",
-      onPhase,
-    );
+      workspaceCopy: workspace,
+      boundWriteSha: "d".repeat(40),
+      agentResult: result,
+      validationDeadlineMs: 123_456,
+      taskIdentity: "task-key",
+      onPhase: onPhase,
+      onValidationPassed: () => undefined,
+    });
 
     expect(write).toEqual({
       writeStatus: "success",
@@ -204,30 +208,31 @@ describe("executeWrite", () => {
         onPhase,
       }),
     );
-    const finishCall = mocks.finishImplementation.mock.calls[0]?.[0] as unknown as {
-      readonly inputs: ActionInputs;
-    };
-    expect(finishCall.inputs).toMatchObject({
+    expect(mocks.finishImplementation.mock.calls[0]?.[0].inputs).toMatchObject({
       branchPrefix: "automation/",
       branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
     });
   });
 
   it("routes an Issue task and binds its related Issue identity", async () => {
-    const write = await executeWrite(
-      client,
-      entityContext,
-      command("task"),
-      inputs({ allowWrite: true }),
-      policy,
-      issue,
-      workspace,
-      "d".repeat(40),
-      result,
-      123_456,
-      "task-key",
-      vi.fn(),
-    );
+    const write = await executeWrite({
+      authorized: {
+        client: client,
+        context: entityContext,
+        command: command("task"),
+        policy: policy,
+        snapshot: issue,
+        revalidateAuthority: () => Promise.resolve(),
+      },
+      inputs: inputs({ allowWrite: true }),
+      workspaceCopy: workspace,
+      boundWriteSha: "d".repeat(40),
+      agentResult: result,
+      validationDeadlineMs: 123_456,
+      taskIdentity: "task-key",
+      onPhase: vi.fn(),
+      onValidationPassed: () => undefined,
+    });
 
     expect(write).toMatchObject({ writeStatus: "success", pullRequestNumber: 12 });
     expect(mocks.finishAutomationTask).toHaveBeenCalledWith(
@@ -246,20 +251,24 @@ describe("executeWrite", () => {
   });
 
   it("routes a same-repository pull request fix to the controller finalizer", async () => {
-    const write = await executeWrite(
-      client,
-      pullRequestContext(),
-      command("fix"),
-      inputs({ allowWrite: true, baseBranch: "release/next" }),
-      policy,
-      pullRequest,
-      workspace,
-      "d".repeat(40),
-      result,
-      123_456,
-      "task-key",
-      vi.fn(),
-    );
+    const write = await executeWrite({
+      authorized: {
+        client: client,
+        context: pullRequestContext(),
+        command: command("fix"),
+        policy: policy,
+        snapshot: pullRequest,
+        revalidateAuthority: () => Promise.resolve(),
+      },
+      inputs: inputs({ allowWrite: true, baseBranch: "release/next" }),
+      workspaceCopy: workspace,
+      boundWriteSha: "d".repeat(40),
+      agentResult: result,
+      validationDeadlineMs: 123_456,
+      taskIdentity: "task-key",
+      onPhase: vi.fn(),
+      onValidationPassed: () => undefined,
+    });
 
     expect(write).toEqual({
       writeStatus: "partial-success",
@@ -268,33 +277,40 @@ describe("executeWrite", () => {
     });
     expect(mocks.finishFix).toHaveBeenCalledWith(
       expect.objectContaining({
-        boundHeadSha: pullRequest.headSha,
-        headBranch: pullRequest.headRef,
+        identity: {
+          headSha: pullRequest.headSha,
+          headRef: pullRequest.headRef,
+          headRepositoryId: pullRequest.headRepositoryId,
+          baseRepositoryId: pullRequest.baseRepositoryId,
+        },
         validationDeadlineMs: 123_456,
       }),
     );
   });
 
   it("routes an entity-less automation task with the bound default branch", async () => {
-    const write = await executeWrite(
-      client,
-      automationContext,
-      command("task"),
-      inputs({
+    const write = await executeWrite({
+      authorized: {
+        client: client,
+        context: automationContext,
+        command: command("task"),
+        policy: policy,
+        revalidateAuthority: () => Promise.resolve(),
+      },
+      inputs: inputs({
         allowWrite: true,
         baseBranch: "release/next",
         branchPrefix: "automation/",
         branchNameTemplate: "{{prefix}}{{operation}}-{{key}}",
       }),
-      policy,
-      undefined,
-      workspace,
-      "d".repeat(40),
-      result,
-      123_456,
-      "automation-key",
-      vi.fn(),
-    );
+      workspaceCopy: workspace,
+      boundWriteSha: "d".repeat(40),
+      agentResult: result,
+      validationDeadlineMs: 123_456,
+      taskIdentity: "automation-key",
+      onPhase: vi.fn(),
+      onValidationPassed: () => undefined,
+    });
 
     expect(write).toMatchObject({ writeStatus: "success", branchName: "dsh/task" });
     expect(mocks.finishAutomationTask).toHaveBeenCalledWith(
@@ -310,40 +326,48 @@ describe("executeWrite", () => {
 
   it("fails closed for unsupported targets and before routing a cancelled write", async () => {
     await expect(
-      executeWrite(
-        client,
-        entityContext,
-        command("review"),
-        inputs(),
-        policy,
-        issue,
-        workspace,
-        "d".repeat(40),
-        result,
-        123_456,
-        "task-key",
-        vi.fn(),
-      ),
+      executeWrite({
+        authorized: {
+          client: client,
+          context: entityContext,
+          command: command("review"),
+          policy: policy,
+          snapshot: issue,
+          revalidateAuthority: () => Promise.resolve(),
+        },
+        inputs: inputs(),
+        workspaceCopy: workspace,
+        boundWriteSha: "d".repeat(40),
+        agentResult: result,
+        validationDeadlineMs: 123_456,
+        taskIdentity: "task-key",
+        onPhase: vi.fn(),
+        onValidationPassed: () => undefined,
+      }),
     ).rejects.toThrow("does not support this write operation");
 
     const controller = new AbortController();
     controller.abort();
     await expect(
-      executeWrite(
-        client,
-        entityContext,
-        command("implement"),
-        inputs(),
-        policy,
-        issue,
-        workspace,
-        "d".repeat(40),
-        result,
-        123_456,
-        "task-key",
-        vi.fn(),
-        controller.signal,
-      ),
+      executeWrite({
+        authorized: {
+          client: client,
+          context: entityContext,
+          command: command("implement"),
+          policy: policy,
+          snapshot: issue,
+          revalidateAuthority: () => Promise.resolve(),
+        },
+        inputs: inputs(),
+        workspaceCopy: workspace,
+        boundWriteSha: "d".repeat(40),
+        agentResult: result,
+        validationDeadlineMs: 123_456,
+        taskIdentity: "task-key",
+        onPhase: vi.fn(),
+        onValidationPassed: () => undefined,
+        signal: controller.signal,
+      }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(mocks.finishImplementation).not.toHaveBeenCalled();
   });

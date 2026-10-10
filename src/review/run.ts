@@ -1,3 +1,4 @@
+import type { ModelUsage } from "../dsh/usage.js";
 import type { ActionInputs } from "../inputs.js";
 import {
   runDsh,
@@ -16,6 +17,7 @@ import type { AnyExtensionAudit, ExtensionPlan } from "../extensions/plan.js";
 import { nativeToolSchema, type NativeToolId } from "../tools/schema.js";
 import type { DshComposition } from "../dsh/composition.js";
 import { selectDshComposition } from "../dsh/select-composition.js";
+import { DshAbortedError, DshConfigurationError } from "../dsh/errors.js";
 
 export interface AgentTask {
   readonly operation: Operation;
@@ -34,6 +36,7 @@ export interface RunAgentTaskOptions {
 }
 
 export interface DshTurnMetadata {
+  readonly usage?: ModelUsage;
   readonly isolationReport: DshIsolationReport;
   readonly rawStdout?: string;
   readonly extensionAudit?: AnyExtensionAudit;
@@ -70,6 +73,10 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
   public readonly id = "dsh";
   public readonly version: string;
   private readonly composition: DshComposition;
+  private activeRun:
+    { readonly controller: AbortController; readonly settled: Promise<void> } | undefined;
+  private closing = false;
+  private disposal: Promise<void> | undefined;
 
   public constructor(
     private readonly inputs: ActionInputs,
@@ -83,6 +90,42 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
   }
 
   public async runTurn(request: AgentTurnRequest) {
+    if (this.closing)
+      throw new DshConfigurationError("A disposed DSH engine cannot start another turn");
+    if (this.activeRun !== undefined)
+      throw new DshConfigurationError(
+        "A DSH engine cannot run overlapping turns against its runtime",
+      );
+    const controller = new AbortController();
+    const signal =
+      request.signal === undefined
+        ? controller.signal
+        : AbortSignal.any([request.signal, controller.signal]);
+    const running = this.executeTurn({ ...request, signal });
+    const active = {
+      controller,
+      settled: running.then(
+        () => undefined,
+        () => undefined,
+      ),
+    };
+    this.activeRun = active;
+    try {
+      return await running;
+    } finally {
+      if (this.activeRun === active) this.activeRun = undefined;
+    }
+  }
+
+  /** Cancellation initiates shutdown; settlement proves the runtime is no longer borrowed. */
+  public dispose(): Promise<void> {
+    this.closing = true;
+    this.activeRun?.controller.abort(new DshAbortedError());
+    this.disposal ??= this.activeRun?.settled ?? Promise.resolve();
+    return this.disposal;
+  }
+
+  private async executeTurn(request: AgentTurnRequest) {
     const { nativeTools, controllerTools, extensionTools } = partitionDshToolPlanes(request.tools);
     const actualExtensionIds = extensionTools.map(({ id }) => id).sort();
     if (this.extensions?.profileName === "github-action") {
@@ -131,6 +174,7 @@ export class DshAgentEngine implements AgentEngine<DshOutput, DshTurnMetadata> {
       durationMs: result.durationMs,
       metadata: {
         isolationReport: result.isolationReport,
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.rawStdout === undefined ? {} : { rawStdout: result.rawStdout }),
         ...(result.extensionAudit === undefined ? {} : { extensionAudit: result.extensionAudit }),
         ...(result.toolReceipts === undefined ? {} : { toolReceipts: result.toolReceipts }),
@@ -167,6 +211,7 @@ export async function runAgentTask(
     output: turn.output,
     durationMs: turn.durationMs,
     isolationReport: turn.metadata.isolationReport,
+    ...(turn.metadata.usage === undefined ? {} : { usage: turn.metadata.usage }),
     ...(turn.metadata.rawStdout === undefined ? {} : { rawStdout: turn.metadata.rawStdout }),
     ...(turn.metadata.extensionAudit === undefined
       ? {}

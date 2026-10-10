@@ -1,3 +1,4 @@
+import { isRecord } from "../security/record.js";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -388,12 +389,6 @@ export function renderControlledProfilePatch(options: PrepareControlledProfileOp
   };
 }
 
-interface PackageManifest {
-  readonly name?: unknown;
-  readonly main?: unknown;
-  readonly exports?: unknown;
-}
-
 function importExportTarget(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
@@ -403,8 +398,8 @@ function importExportTarget(value: unknown): string | undefined {
     }
     return undefined;
   }
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Readonly<Record<string, unknown>>;
+  if (!isRecord(value)) return undefined;
+  const record = value;
   if (Object.hasOwn(record, ".")) return importExportTarget(record["."]);
   for (const [condition, candidate] of Object.entries(record)) {
     if (condition !== "node" && condition !== "import" && condition !== "default") continue;
@@ -424,9 +419,9 @@ async function installedPluginEntry(
   packageName: string,
 ): Promise<string> {
   const packageReal = await realpath(packageDirectory);
-  const manifest = JSON.parse(
-    await readFile(join(packageReal, "package.json"), "utf8"),
-  ) as PackageManifest;
+  const decoded: unknown = JSON.parse(await readFile(join(packageReal, "package.json"), "utf8"));
+  if (!isRecord(decoded)) throw new Error(`Invalid installed plugin manifest: ${packageName}`);
+  const manifest = decoded;
   if (manifest.name !== packageName) {
     throw new Error(`Installed direct plugin package identity mismatch: ${packageName}`);
   }
@@ -501,12 +496,9 @@ export async function prepareControlledProfile(
     ...PROFILE_BUNDLES,
     ...options.plan.bundles.map((bundle) => bundle.definition.package),
   ];
-  const baseDependencies =
-    typeof options.manifestBase.dependencies === "object" &&
-    options.manifestBase.dependencies !== null &&
-    !Array.isArray(options.manifestBase.dependencies)
-      ? (options.manifestBase.dependencies as Readonly<Record<string, unknown>>)
-      : {};
+  const baseDependencies = isRecord(options.manifestBase.dependencies)
+    ? options.manifestBase.dependencies
+    : {};
   const manifest = {
     ...options.manifestBase,
     name: "dsh-profile-github-action",

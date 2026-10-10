@@ -87,7 +87,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.0
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.1
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           dsh-version: 0.2.0-rc.2
@@ -95,7 +95,7 @@ jobs:
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
 
-For production, pin the complete commit published in the corresponding GitHub Release. The existing v0.9.2 release remains `c184872f309ebfc5e57a0c5c1397c59e774709e0`; v0.10.0 is qualified separately. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
+For production, pin the complete commit published in the corresponding GitHub Release. Resolve the corresponding immutable release tag to its full SHA after qualification; the installer version and its Action binding are independent release identities. See [Setup](docs/setup.md) for permissions, pinning, checkout rules, and complete templates.
 
 ## Core capabilities
 

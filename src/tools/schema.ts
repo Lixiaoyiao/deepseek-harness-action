@@ -106,9 +106,24 @@ export type AllowedToolId = NativeToolId | CommandToolId | GitHubToolId | McpToo
 const allowedToolIdSchema = z.union([
   nativeToolSchema,
   githubToolSchema,
-  z.string().regex(/^command\.[a-z][a-z0-9-]{0,31}$/u),
-  z.string().regex(/^mcp\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
-  z.string().regex(/^plugin\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u),
+  z
+    .string()
+    .regex(/^command\.[a-z][a-z0-9-]{0,31}$/u)
+    .transform((value) => `command.${value.slice(8)}` as const),
+  z
+    .string()
+    .regex(/^mcp\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u)
+    .transform((value) => {
+      const [, server, tool] = value.split(".");
+      return `mcp.${server ?? ""}.${tool ?? ""}` as const;
+    }),
+  z
+    .string()
+    .regex(/^plugin\.[a-z][a-z0-9-]{0,31}\.[a-z][a-z0-9_-]{0,63}$/u)
+    .transform((value) => {
+      const [, extension, tool] = value.split(".");
+      return `plugin.${extension ?? ""}.${tool ?? ""}` as const;
+    }),
 ]);
 
 function decodeJson(raw: string, label: string): unknown {
@@ -142,7 +157,7 @@ function parseToolIds(raw: string, label: "allowed-tools" | "disallowed-tools") 
   }
   const duplicate = result.data.find((id, index) => result.data.indexOf(id) !== index);
   if (duplicate !== undefined) throw new Error(`Invalid ${label}: duplicate tool id ${duplicate}`);
-  return result.data as AllowedToolId[];
+  return result.data;
 }
 
 export function commandToolId(name: string): CommandToolId {
@@ -162,9 +177,9 @@ export function validateAllowedToolReferences(
   configuration: ToolConfiguration,
   label = "allowed-tools",
 ): void {
-  const configured = new Set(configuration.commands.map(({ name }) => commandToolId(name)));
+  const configured = new Set<string>(configuration.commands.map(({ name }) => commandToolId(name)));
   const missing = toolIds.find(
-    (id): id is CommandToolId => id.startsWith("command.") && !configured.has(id as CommandToolId),
+    (id): id is CommandToolId => id.startsWith("command.") && !configured.has(id),
   );
   if (missing !== undefined) {
     throw new Error(`${label} references undefined command tool: ${missing}`);

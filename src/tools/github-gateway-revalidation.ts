@@ -1,6 +1,7 @@
 import { issueContentFingerprint } from "../github/issue-identity.js";
 import type { GitHubBackendRequestControl, GitHubToolBackend } from "./github-backend.js";
 import type { GitHubToolBinding } from "./github-catalog.js";
+import { EntityBindingChangedError } from "../write/errors.js";
 
 export type GitHubEntityBinding = Extract<GitHubToolBinding, { target: "issue" | "pull_request" }>;
 
@@ -41,7 +42,9 @@ export async function revalidateGitHubEntity(
       fingerprint !== binding.contentFingerprint ||
       (issue.state === "closed" && !allowClosed)
     ) {
-      throw new Error("Bound issue identity or state changed before GitHub tool mutation");
+      throw new EntityBindingChangedError(
+        "Bound issue identity or state changed before GitHub tool mutation",
+      );
     }
     return;
   }
@@ -61,6 +64,8 @@ export async function revalidateGitHubEntity(
     binding.headRepositoryId !== binding.baseRepositoryId ||
     (pull.state === "closed" && !allowClosed)
   ) {
-    throw new Error("Bound pull request identity or state changed before GitHub tool mutation");
+    throw new EntityBindingChangedError(
+      "Bound pull request identity or state changed before GitHub tool mutation",
+    );
   }
 }

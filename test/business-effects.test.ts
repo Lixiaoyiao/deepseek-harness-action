@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -100,12 +101,23 @@ function invoke(mode: string, replies: Reply[], env: Record<string, string> = en
     { input: JSON.stringify({ mode, replies, environment: env }), encoding: "utf8" },
   );
   expect(result.status).toBe(0);
-  return JSON.parse(result.stdout) as {
-    result?: { mode: string; head?: string; pull?: number; absent?: boolean };
-    error?: string;
-    requests: { method: string; path: string; body?: unknown }[];
-    remaining: number;
-  };
+  return z
+    .looseObject({
+      result: z
+        .looseObject({
+          mode: z.string(),
+          head: z.string().optional(),
+          pull: z.number().optional(),
+          absent: z.boolean().optional(),
+        })
+        .optional(),
+      error: z.string().optional(),
+      requests: z.array(
+        z.looseObject({ method: z.string(), path: z.string(), body: z.unknown().optional() }),
+      ),
+      remaining: z.number(),
+    })
+    .parse(JSON.parse(result.stdout));
 }
 
 describe("trusted business effect and cleanup assertions", () => {

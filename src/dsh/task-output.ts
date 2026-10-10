@@ -59,10 +59,10 @@ function integerKeyword(
 ): number | undefined {
   const value = schema[keyword];
   if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${keyword} must be a non-negative safe integer`);
   }
-  return value as number;
+  return value;
 }
 
 function numericKeyword(schema: Record<string, unknown>, keyword: string): number | undefined {

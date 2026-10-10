@@ -1,5 +1,25 @@
 import type { GitHubClient } from "../github/client.js";
 import { validateCommitSha, validateRefName } from "../security/refs.js";
+import { EntityBindingChangedError } from "./errors.js";
+import type { BranchWriteOperationKind } from "./operation-commit.js";
+
+function repositoryId(repository: unknown): number | undefined {
+  return typeof repository === "object" &&
+    repository !== null &&
+    "id" in repository &&
+    typeof repository.id === "number"
+    ? repository.id
+    : undefined;
+}
+
+function repositoryName(repository: unknown): string | undefined {
+  return typeof repository === "object" &&
+    repository !== null &&
+    "full_name" in repository &&
+    typeof repository.full_name === "string"
+    ? repository.full_name.toLowerCase()
+    : undefined;
+}
 
 export async function revalidatePullRequestHead(
   client: GitHubClient,
@@ -11,7 +31,7 @@ export async function revalidatePullRequestHead(
   const expected = validateCommitSha(expectedSha);
   const pull = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
   if (pull.data.head.sha !== expected) {
-    throw new Error(
+    throw new EntityBindingChangedError(
       "Pull request head changed during the run; refusing stale write or publication",
     );
   }
@@ -40,11 +60,13 @@ export async function revalidatePullRequestIdentity(
     pull.data.state !== "open" ||
     pull.data.head.sha !== expectedSha ||
     pull.data.head.ref !== expected.headRef ||
-    headRepo.id !== expected.headRepositoryId ||
-    pull.data.base.repo.id !== expected.baseRepositoryId ||
+    repositoryId(headRepo) !== expected.headRepositoryId ||
+    repositoryId(pull.data.base.repo) !== expected.baseRepositoryId ||
     expected.headRepositoryId !== expected.baseRepositoryId
   ) {
-    throw new Error("Pull request identity changed during the run; refusing the trusted write");
+    throw new EntityBindingChangedError(
+      "Pull request identity changed during the run; refusing the trusted write",
+    );
   }
 }
 
@@ -103,6 +125,46 @@ export interface ReconciledPullRequest {
   readonly snapshotFingerprint: string;
 }
 
+/** Only same-repository head/base refs and an authenticated marker may be reconciled. */
+async function findBoundOperationPullRequest(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+  snapshotForBody: (body: string) => string | undefined,
+): Promise<ReconciledPullRequest | null> {
+  validateRefName(head);
+  validateRefName(base);
+  const response = await client.rest.pulls.list({
+    owner,
+    repo,
+    head: `${owner}:${head}`,
+    base,
+    state: "all",
+    per_page: 100,
+  });
+  const fullName = `${owner}/${repo}`.toLowerCase();
+  for (const candidate of response.data) {
+    if (
+      candidate.head.ref !== head ||
+      candidate.base.ref !== base ||
+      repositoryName(candidate.head.repo) !== fullName ||
+      repositoryName(candidate.base.repo) !== fullName
+    )
+      continue;
+    const snapshotFingerprint = snapshotForBody(candidate.body ?? "");
+    if (snapshotFingerprint === undefined) continue;
+    return {
+      number: candidate.number,
+      url: candidate.html_url,
+      headSha: validateCommitSha(candidate.head.sha),
+      snapshotFingerprint,
+    };
+  }
+  return null;
+}
+
 export async function findPullRequestByOperation(
   client: GitHubClient,
   owner: string,
@@ -111,8 +173,6 @@ export async function findPullRequestByOperation(
   base: string,
   reconciliationMarker: string,
 ): Promise<ReconciledPullRequest | null> {
-  validateRefName(head);
-  validateRefName(base);
   if (
     !/^<!-- dsh-action:(?:implement|task):v1 operation=[a-f0-9]{24} snapshot=[a-f0-9]{24} -->$/u.test(
       reconciliationMarker,
@@ -120,34 +180,15 @@ export async function findPullRequestByOperation(
   ) {
     throw new Error("Invalid pull request reconciliation marker");
   }
-  const response = await client.rest.pulls.list({
-    owner,
-    repo,
-    head: `${owner}:${head}`,
-    base,
-    state: "all",
-    per_page: 100,
-  });
-  const fullName = `${owner}/${repo}`.toLowerCase();
-  const pull = response.data.find(
-    (candidate) =>
-      candidate.head.ref === head &&
-      candidate.base.ref === base &&
-      candidate.head.repo.full_name.toLowerCase() === fullName &&
-      candidate.body?.includes(reconciliationMarker) === true,
+  const snapshot = / snapshot=([a-f0-9]{24}) -->$/u.exec(reconciliationMarker)?.[1];
+  return await findBoundOperationPullRequest(client, owner, repo, head, base, (body) =>
+    body.includes(reconciliationMarker) ? snapshot : undefined,
   );
-  const snapshotFingerprint = / snapshot=([a-f0-9]{24}) -->$/u.exec(reconciliationMarker)?.[1];
-  if (pull === undefined || snapshotFingerprint === undefined) return null;
-  return {
-    number: pull.number,
-    url: pull.html_url,
-    headSha: validateCommitSha(pull.head.sha),
-    snapshotFingerprint,
-  };
 }
 
-/** Find a completed prior attempt even if its issue/base snapshot has since advanced. */
+/** A completed operation may legitimately have advanced its original Issue/base snapshot. */
 export async function findPullRequestByOperationKey(
+  kind: BranchWriteOperationKind,
   client: GitHubClient,
   owner: string,
   repo: string,
@@ -155,87 +196,17 @@ export async function findPullRequestByOperationKey(
   base: string,
   operationKey: string,
 ): Promise<ReconciledPullRequest | null> {
-  validateRefName(head);
-  validateRefName(base);
   if (!/^[a-f0-9]{24}$/u.test(operationKey)) throw new Error("Invalid operation key");
-  const response = await client.rest.pulls.list({
-    owner,
-    repo,
-    head: `${owner}:${head}`,
-    base,
-    state: "all",
-    per_page: 100,
-  });
-  const fullName = `${owner}/${repo}`.toLowerCase();
   const marker = new RegExp(
-    `<!-- dsh-action:implement:v1 operation=${operationKey} snapshot=([a-f0-9]{24}) -->`,
+    `<!-- dsh-action:${kind}:v1 operation=${operationKey} snapshot=([a-f0-9]{24}) -->`,
     "u",
   );
-  for (const candidate of response.data) {
-    if (
-      candidate.head.ref !== head ||
-      candidate.base.ref !== base ||
-      candidate.head.repo.full_name.toLowerCase() !== fullName ||
-      candidate.base.repo.full_name.toLowerCase() !== fullName
-    ) {
-      continue;
-    }
-    const snapshotFingerprint = marker.exec(candidate.body ?? "")?.[1];
-    if (snapshotFingerprint !== undefined) {
-      return {
-        number: candidate.number,
-        url: candidate.html_url,
-        headSha: validateCommitSha(candidate.head.sha),
-        snapshotFingerprint,
-      };
-    }
-  }
-  return null;
-}
-
-/** Reconcile a completed generic automation task by stable run/task identity. */
-export async function findTaskPullRequestByOperationKey(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  head: string,
-  base: string,
-  operationKey: string,
-): Promise<ReconciledPullRequest | null> {
-  validateRefName(head);
-  validateRefName(base);
-  if (!/^[a-f0-9]{24}$/u.test(operationKey)) throw new Error("Invalid operation key");
-  const response = await client.rest.pulls.list({
+  return await findBoundOperationPullRequest(
+    client,
     owner,
     repo,
-    head: `${owner}:${head}`,
+    head,
     base,
-    state: "all",
-    per_page: 100,
-  });
-  const fullName = `${owner}/${repo}`.toLowerCase();
-  const marker = new RegExp(
-    `<!-- dsh-action:task:v1 operation=${operationKey} snapshot=([a-f0-9]{24}) -->`,
-    "u",
+    (body) => marker.exec(body)?.[1],
   );
-  for (const candidate of response.data) {
-    if (
-      candidate.head.ref !== head ||
-      candidate.base.ref !== base ||
-      candidate.head.repo.full_name.toLowerCase() !== fullName ||
-      candidate.base.repo.full_name.toLowerCase() !== fullName
-    ) {
-      continue;
-    }
-    const snapshotFingerprint = marker.exec(candidate.body ?? "")?.[1];
-    if (snapshotFingerprint !== undefined) {
-      return {
-        number: candidate.number,
-        url: candidate.html_url,
-        headSha: validateCommitSha(candidate.head.sha),
-        snapshotFingerprint,
-      };
-    }
-  }
-  return null;
 }

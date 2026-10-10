@@ -1,13 +1,9 @@
+import type { AuthorizedRun } from "./prepare.js";
 import { finishImplementation } from "../commands/implement.js";
-import type { RoutedCommand } from "../commands/router.js";
 import { finishAutomationTask } from "../commands/task.js";
 import type { DshRunResult } from "../dsh/runner.js";
-import type { GitHubClient } from "../github/client.js";
-import type { GitHubContext } from "../github/context.js";
-import type { EntitySnapshot } from "../github/fetch.js";
 import type { ActionInputs } from "../inputs.js";
 import { throwIfCancelled } from "../lifecycle/cancellation.js";
-import type { SecurityPolicy } from "../security/policy.js";
 import type { WorkspaceSnapshot } from "../write/workspace.js";
 import { issueTaskIdentity, resolveBaseBranch, runUrl } from "./context.js";
 
@@ -21,21 +17,36 @@ export interface WriteOutcome {
 }
 
 /** Route an already-authorized result to the matching Controller write finalizer. */
-export async function executeWrite(
-  client: GitHubClient,
-  context: GitHubContext,
-  command: RoutedCommand,
-  inputs: ActionInputs,
-  policy: SecurityPolicy,
-  snapshot: EntitySnapshot | undefined,
-  workspaceCopy: WorkspaceSnapshot,
-  boundWriteSha: string,
-  agentResult: DshRunResult,
-  validationDeadlineMs: number,
-  taskIdentity: string,
-  onPhase: (phase: "validation" | "write") => void,
-  signal?: AbortSignal,
-): Promise<WriteOutcome> {
+export interface ExecuteWriteOptions {
+  readonly authorized: Pick<
+    AuthorizedRun,
+    "client" | "context" | "command" | "policy" | "snapshot" | "revalidateAuthority"
+  >;
+  readonly inputs: ActionInputs;
+  readonly workspaceCopy: WorkspaceSnapshot;
+  readonly boundWriteSha: string;
+  readonly agentResult: DshRunResult;
+  readonly validationDeadlineMs: number;
+  readonly taskIdentity: string;
+  readonly onPhase: (phase: "validation" | "write") => void;
+  readonly onValidationPassed: () => void;
+  readonly signal?: AbortSignal;
+}
+
+export async function executeWrite(options: ExecuteWriteOptions): Promise<WriteOutcome> {
+  const {
+    authorized,
+    inputs,
+    workspaceCopy,
+    boundWriteSha,
+    agentResult,
+    validationDeadlineMs,
+    taskIdentity,
+    onPhase,
+    onValidationPassed,
+    signal,
+  } = options;
+  const { client, context, command, policy, snapshot, revalidateAuthority } = authorized;
   throwIfCancelled(signal);
   const baseBranch = resolveBaseBranch(context, inputs.baseBranch);
   const requireBaseBranch = (): string => {
@@ -69,6 +80,8 @@ export async function executeWrite(
       validationDeadlineMs,
       ...(signal === undefined ? {} : { signal }),
       onPhase,
+      revalidateAuthority,
+      onValidationPassed,
     });
     return {
       writeStatus: "success",
@@ -109,6 +122,8 @@ export async function executeWrite(
         },
       },
       onPhase,
+      revalidateAuthority,
+      onValidationPassed,
     });
     return {
       writeStatus: "success",
@@ -135,8 +150,6 @@ export async function executeWrite(
       },
       expectedAuthorId: inputs.botUserId,
       snapshot: workspaceCopy,
-      boundHeadSha: snapshot.headSha,
-      headBranch: snapshot.headRef,
       identity: {
         headSha: snapshot.headSha,
         headRef: snapshot.headRef,
@@ -149,6 +162,8 @@ export async function executeWrite(
       validationDeadlineMs,
       ...(signal === undefined ? {} : { signal }),
       onPhase,
+      revalidateAuthority,
+      onValidationPassed,
     });
     return {
       writeStatus: result.status,
@@ -181,6 +196,8 @@ export async function executeWrite(
       validationDeadlineMs,
       ...(signal === undefined ? {} : { signal }),
       onPhase,
+      revalidateAuthority,
+      onValidationPassed,
     });
     return {
       writeStatus: "success",

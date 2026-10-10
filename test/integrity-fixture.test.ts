@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,7 +51,7 @@ async function fixture(protocol: "chat" | "messages" = "chat") {
         reject(new Error("Fixture exited before its endpoint was available"));
       });
     });
-    const { baseUrl } = JSON.parse(line) as { baseUrl: string };
+    const { baseUrl } = z.looseObject({ baseUrl: z.string() }).parse(JSON.parse(line));
     const request = (body: unknown, key = fixtureKey) =>
       fetch(`${baseUrl}/${protocol === "messages" ? "v1/messages" : "chat/completions"}`, {
         method: "POST",
@@ -76,12 +77,23 @@ describe("deterministic integrity model fixture", () => {
         messages: [prompt],
         tools: [{ function: { name: "bash" } }],
       });
-      const result = (await first.json()) as {
-        choices: {
-          finish_reason: string;
-          message: { tool_calls: { id: string; function: { name: string; arguments: string } }[] };
-        }[];
-      };
+      const result = z
+        .looseObject({
+          choices: z.array(
+            z.looseObject({
+              finish_reason: z.string(),
+              message: z.looseObject({
+                tool_calls: z.array(
+                  z.looseObject({
+                    id: z.string(),
+                    function: z.looseObject({ name: z.string(), arguments: z.string() }),
+                  }),
+                ),
+              }),
+            }),
+          ),
+        })
+        .parse(await first.json());
       expect(first.status).toBe(200);
       expect(result.choices[0]?.finish_reason).toBe("tool_calls");
       expect(result.choices[0]?.message.tool_calls).toHaveLength(1);
@@ -99,9 +111,16 @@ describe("deterministic integrity model fixture", () => {
           { role: "tool", tool_call_id: callId, content: "DSH_E2E_INTEGRITY_WEAKENED\n" },
         ],
       });
-      const final = (await second.json()) as {
-        choices: { finish_reason: string; message: { content: string } }[];
-      };
+      const final = z
+        .looseObject({
+          choices: z.array(
+            z.looseObject({
+              finish_reason: z.string(),
+              message: z.looseObject({ content: z.string() }),
+            }),
+          ),
+        })
+        .parse(await second.json());
       expect(second.status).toBe(200);
       expect(final.choices[0]?.finish_reason).toBe("stop");
       expect(JSON.parse(final.choices[0]?.message.content ?? "null")).toMatchObject({
@@ -194,19 +213,43 @@ describe("deterministic integrity model fixture", () => {
       const readMessage = async (response: Response) => {
         expect(response.status).toBe(200);
         if (!stream)
-          return response.json() as Promise<{
-            content: { type: string; id?: string; name?: string; input?: unknown; text?: string }[];
-            stop_reason: string;
-          }>;
+          return z
+            .looseObject({
+              content: z.array(
+                z.looseObject({
+                  type: z.string(),
+                  id: z.string().optional(),
+                  name: z.string().optional(),
+                  input: z.unknown().optional(),
+                  text: z.string().optional(),
+                }),
+              ),
+              stop_reason: z.string(),
+            })
+            .parse(await response.json());
         expect(response.headers.get("content-type")).toBe("text/event-stream");
         const frames = (await response.text()).trim().split("\n\n");
         const events = frames.map((frame) => {
           const [name, data] = frame.split("\n");
-          const event = JSON.parse(data?.slice("data: ".length) ?? "null") as {
-            type: string;
-            content_block?: { type: string; id?: string; name?: string };
-            delta?: { partial_json?: string; text?: string; stop_reason?: string };
-          };
+          const event = z
+            .looseObject({
+              type: z.string(),
+              content_block: z
+                .looseObject({
+                  type: z.string(),
+                  id: z.string().optional(),
+                  name: z.string().optional(),
+                })
+                .optional(),
+              delta: z
+                .looseObject({
+                  partial_json: z.string().optional(),
+                  text: z.string().optional(),
+                  stop_reason: z.string().optional(),
+                })
+                .optional(),
+            })
+            .parse(JSON.parse(data?.slice("data: ".length) ?? "null"));
           expect(name).toBe(`event: ${event.type}`);
           return event;
         });

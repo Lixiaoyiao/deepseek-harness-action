@@ -14,6 +14,10 @@ const branchTemplateVariables = [
 
 type BranchTemplateVariable = (typeof branchTemplateVariables)[number];
 
+function isBranchTemplateVariable(value: string): value is BranchTemplateVariable {
+  return branchTemplateVariables.some((name) => name === value);
+}
+
 export interface BranchNameConfiguration {
   readonly branchPrefix?: string;
   readonly branchNameTemplate?: string;
@@ -62,8 +66,7 @@ export function validateBranchNameTemplate(value: string): string {
   if (tokens.length > 32) {
     throw new Error("branch-name-template contains too many variables");
   }
-  const known = new Set<string>(branchTemplateVariables);
-  const unknown = tokens.find((token) => !known.has(token));
+  const unknown = tokens.find((token) => !isBranchTemplateVariable(token));
   if (unknown !== undefined) {
     throw new Error(`branch-name-template contains unknown variable {{${unknown}}}`);
   }
@@ -123,8 +126,10 @@ export function buildControllerBranchName(input: ControllerBranchIdentity): stri
   const rendered = template.replace(
     /\{\{([A-Za-z][A-Za-z0-9]*)\}\}/gu,
     (_token, rawName: string) => {
-      const name = rawName as BranchTemplateVariable;
-      return safeTemplateValue(name, variables[name]);
+      if (!isBranchTemplateVariable(rawName)) {
+        throw new Error(`branch-name-template contains unknown variable {{${rawName}}}`);
+      }
+      return safeTemplateValue(rawName, variables[rawName]);
     },
   );
   const branch = sanitizeBranchName(rendered);

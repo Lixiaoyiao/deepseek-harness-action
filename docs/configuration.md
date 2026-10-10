@@ -850,11 +850,31 @@ changing the fixed envelope or schema version. `status` is one of `success`, `ne
 records the Controller lifecycle location where the error surfaced; it does not
 reclassify a known error.
 
+When the official headless worker reports step usage, the additive `modelUsage`
+field records `source: headless-worker`, `completeness`, `reportedSteps`,
+`observedSteps`, and optional `tokens`. These are informational worker reports.
+They do not affect permissions, validation, publication or retry decisions.
+Missing usage remains unknown; it is never converted to zero.
+
+For the pinned DSH `0.2.0-rc.2` protocol, `inputTokens` counts uncached input;
+`cacheReadTokens` and `cacheWriteTokens` are separate input buckets.
+`reasoningTokens` is included within `outputTokens`. A `step_end` sample already
+includes that step's model retries and is counted once. Optional buckets are
+only aggregated when every reported contribution supplies them. `partial`
+counts are known subtotals: missing, invalid, duplicated or truncated metadata,
+failed workers and formatting repair can prevent a complete report. An
+overflowing required total becomes unknown. No model price or charge is inferred.
+The step summary shows the same report and labels its completeness.
+`complete` covers the observed main-agent step stream. Native child agents and
+other extension-owned model calls need not appear in that stream; formatting
+repair is a separate call. The report is not a total for every model call made
+by the whole Action.
+
 Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.9.2
+- uses: Lixiaoyiao/deepseek-harness-action@v0.10.1
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

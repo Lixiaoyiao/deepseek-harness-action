@@ -3,6 +3,26 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning for published action releases.
 
+## [0.10.1] - 2026-10-10
+
+- Keeps Controller, worker, Gateway and validation ownership while concentrating
+  lifecycle budgets, resource disposal, input validation and result projection
+  in cohesive modules.
+- Shares validated repository-write transactions for new PRs and existing PR
+  heads, with fresh actor authority before the first persistent effect and
+  stable, non-retryable errors for changed entity bindings. Protects both root
+  Action metadata filenames, `action.yml` and `action.yaml`.
+- Preserves successful validation and confirmed PR/commit evidence when later
+  Session publication fails. Keeps terminal progress publication best effort.
+- Fixes POSIX descendant-held output pipes and late Docker network cleanup.
+  The credential proxy binds the inspected local Linux bridge gateway; no
+  wildcard listener fallback is used.
+- Queues Session qualification requests without replacing pending runs,
+  improves public-interface regression coverage, enables unsafe assertion
+  checking by default and documents resource-budget design choices.
+- Retains the exact production DSH `0.2.0-rc.2` family. The guided installer is
+  qualified and versioned independently after the formal Action canary.
+
 ## Installer 0.5.0 - 2026-10-08
 
 - Adds controlled/native automatic Session starter workflows with matching key identity and concurrency; existing review/commands/both modes remain.

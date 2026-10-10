@@ -9,6 +9,7 @@ import {
 } from "../extensions/runtime-lock.js";
 import { DshConfigurationError } from "./errors.js";
 import type { DshRuntime } from "./runtime.js";
+import { isJsonObject, readDshManifest } from "./composition-files.js";
 
 export async function prepareLockedRuntimeFiles(
   runtime: DshRuntime,
@@ -17,15 +18,13 @@ export async function prepareLockedRuntimeFiles(
 ): Promise<Record<string, unknown>> {
   const manifestSource = join(actionRoot, "package.json");
   const lockSource = join(actionRoot, "package-lock.json");
-  const manifest = JSON.parse(await readFile(manifestSource, "utf8")) as Record<string, unknown>;
-  const lock = JSON.parse(await readFile(lockSource, "utf8")) as {
-    readonly packages?: Readonly<Record<string, { readonly version?: string }>>;
-  };
-  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+  const manifest = await readDshManifest(manifestSource);
+  const lock = await readDshManifest(lockSource);
+  for (const [path, entry] of Object.entries(isJsonObject(lock.packages) ? lock.packages : {})) {
     if (!/(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/u.test(path)) continue;
-    if (entry.version !== version) {
+    if (!isJsonObject(entry) || entry.version !== version) {
       throw new DshConfigurationError(
-        `DSH lockfile drift at ${path}: expected ${version}, found ${entry.version ?? "unknown"}`,
+        `DSH lockfile drift at ${path}: expected ${version}, found ${isJsonObject(entry) && typeof entry.version === "string" ? entry.version : "unknown"}`,
       );
     }
   }
@@ -55,12 +54,7 @@ export async function verifyInstalledExtensions(
     );
     const packageReal = await realpath(packageDirectory);
     const manifestPath = join(packageReal, "package.json");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-      readonly name?: string;
-      readonly version?: string;
-      readonly gitHead?: string;
-      readonly dsh?: { readonly bundle?: { readonly patch?: string } };
-    };
+    const manifest = await readDshManifest(manifestPath);
     if (manifest.name !== extension.definition.package) {
       throw new DshConfigurationError(
         `Installed extension package identity mismatch: ${extension.definition.id}`,
@@ -69,7 +63,7 @@ export async function verifyInstalledExtensions(
     const source = extension.definition.source;
     if (/^\d/u.test(source) && manifest.version !== source) {
       throw new DshConfigurationError(
-        `Installed extension ${extension.definition.package} is ${manifest.version ?? "unknown"}, expected ${source}`,
+        `Installed extension ${extension.definition.package} is ${typeof manifest.version === "string" ? manifest.version : "unknown"}, expected ${source}`,
       );
     }
     // npm does not guarantee that a git install rewrites package.json with
@@ -85,7 +79,11 @@ export async function verifyInstalledExtensions(
       );
     }
     if (bundle) {
-      const patch = manifest.dsh?.bundle?.patch;
+      const bundle =
+        isJsonObject(manifest.dsh) && isJsonObject(manifest.dsh.bundle)
+          ? manifest.dsh.bundle
+          : undefined;
+      const patch = bundle?.patch;
       if (typeof patch !== "string" || patch.trim() === "") {
         throw new DshConfigurationError(
           `Bundle ${extension.definition.package} has no dsh.bundle.patch`,
@@ -126,10 +124,7 @@ export async function installedTopLevelPackageInventory(
 
   const inventory: Record<string, string> = {};
   for (const packagePath of packagePaths) {
-    const manifest = JSON.parse(await readFile(join(packagePath, "package.json"), "utf8")) as {
-      readonly name?: unknown;
-      readonly version?: unknown;
-    };
+    const manifest = await readDshManifest(join(packagePath, "package.json"));
     if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
       throw new DshConfigurationError(`Installed package has invalid identity: ${packagePath}`);
     }

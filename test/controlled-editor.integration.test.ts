@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -15,8 +16,8 @@ import { messageToolResults, sendMessagesSse } from "./fixtures/messages-sse.mjs
 
 const execFileAsync = promisify(execFile);
 interface FixtureRequest {
-  readonly messages?: readonly { readonly content?: unknown }[];
-  readonly tools?: readonly { readonly name?: string }[];
+  readonly messages?: readonly { readonly content?: unknown }[] | undefined;
+  readonly tools?: readonly { readonly name?: string | undefined }[] | undefined;
 }
 
 it("inserts and executes the official editor, plus native Bash on POSIX, under the exact controlled inventory", async () => {
@@ -49,7 +50,12 @@ it("inserts and executes the official editor, plus native Bash on POSIX, under t
       const chunks: Buffer[] = [];
       for await (const chunk of request)
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as FixtureRequest;
+      const body = z
+        .looseObject({
+          messages: z.array(z.looseObject({ content: z.unknown().optional() })).optional(),
+          tools: z.array(z.looseObject({ name: z.string().optional() })).optional(),
+        })
+        .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       requests.push(body);
       const results = messageToolResults(body);
       if (results.length < (bashAvailable ? 2 : 1)) {
@@ -133,7 +139,9 @@ it("inserts and executes the official editor, plus native Bash on POSIX, under t
         .href,
       workerStatePath: join(dshHome, "action-state", "counts.json"),
       workerAuditPath: join(dshHome, "action-state", "receipts.jsonl"),
-      manifestBase: JSON.parse(await readFile("package.json", "utf8")) as Record<string, unknown>,
+      manifestBase: z
+        .record(z.string(), z.unknown())
+        .parse(JSON.parse(await readFile("package.json", "utf8"))),
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -181,15 +189,16 @@ it("inserts and executes the official editor, plus native Bash on POSIX, under t
     const receipts = (await readFile(join(dshHome, "action-state", "receipts.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            phase: string;
-            id: string;
-            runtimeName: string;
-            counted: boolean;
-            ok: boolean;
-          },
+      .map((line) =>
+        z
+          .looseObject({
+            phase: z.string(),
+            id: z.string(),
+            runtimeName: z.string(),
+            counted: z.boolean(),
+            ok: z.boolean(),
+          })
+          .parse(JSON.parse(line)),
       );
     const completed = receipts.filter(({ phase }) => phase === "completed");
     expect(completed).toHaveLength(bashAvailable ? 2 : 1);
@@ -210,7 +219,9 @@ it("inserts and executes the official editor, plus native Bash on POSIX, under t
     const final = result.stdout
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { type: string; text?: string })
+      .map((line) =>
+        z.looseObject({ type: z.string(), text: z.string().optional() }).parse(JSON.parse(line)),
+      )
       .at(-1);
     expect(final).toEqual({ type: "final", text: JSON.stringify(output) });
   } finally {

@@ -3,7 +3,7 @@ import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
-import { assertPinnedContainerImage } from "../dsh/runner.js";
+import { assertPinnedContainerImage } from "../dsh/docker-policy.js";
 import {
   ActionConfigurationError,
   ClassifiedActionError,

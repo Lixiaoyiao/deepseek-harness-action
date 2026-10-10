@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -58,15 +59,8 @@ interface DeepSeekMessage {
 }
 
 interface DeepSeekRequest {
-  readonly messages?: readonly DeepSeekMessage[];
-  readonly tools?: readonly DeepSeekTool[];
-}
-
-interface ToolReceipt {
-  readonly id: string;
-  readonly runtimeName: string;
-  readonly provider: string;
-  readonly ok: boolean;
+  readonly messages?: readonly DeepSeekMessage[] | undefined;
+  readonly tools?: readonly DeepSeekTool[] | undefined;
 }
 
 afterEach(async () => {
@@ -133,9 +127,9 @@ describe("official rc.2 Profile package extension boot", () => {
       expect(plan.packageDependencies).toEqual({ [PACKAGE_NAME]: PACKAGE_VERSION });
       expect(plan[planKey]).toHaveLength(1);
 
-      const manifestBase = JSON.parse(
-        await readFile(join(process.cwd(), "package.json"), "utf8"),
-      ) as Record<string, unknown>;
+      const manifestBase = z
+        .record(z.string(), z.unknown())
+        .parse(JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")));
       const profileOptions = {
         dshHome,
         plan,
@@ -182,9 +176,15 @@ describe("official rc.2 Profile package extension boot", () => {
         // A direct plugin must be mounted by the generated Cordis row, not by
         // smuggling its package into the Profile's Bundle list.
         expect(fixtureLayer).toBeUndefined();
-        const patch = JSON.parse(await readFile(profile.patchPath, "utf8")) as {
-          readonly insert?: readonly { readonly id?: string; readonly name?: string }[];
-        }[];
+        const patch = z
+          .array(
+            z.looseObject({
+              insert: z
+                .array(z.looseObject({ id: z.string().optional(), name: z.string().optional() }))
+                .optional(),
+            }),
+          )
+          .parse(JSON.parse(await readFile(profile.patchPath, "utf8")));
         const installedEntry = join(installedFixture, "index.mjs");
         expect(patch.flatMap((row) => row.insert ?? [])).toContainEqual(
           expect.objectContaining({
@@ -232,10 +232,12 @@ describe("official rc.2 Profile package extension boot", () => {
         expect(transcript).not.toContain(HIDDEN_MARKER);
         expect(transcript).toMatch(/unknown tool|not authorized|not available/iu);
 
-        const counts = JSON.parse(await readFile(profile.statePath, "utf8")) as {
-          readonly tools: Readonly<Record<string, number>>;
-          readonly groups: Readonly<Record<string, number>>;
-        };
+        const counts = z
+          .looseObject({
+            tools: z.record(z.string(), z.number()),
+            groups: z.record(z.string(), z.number()),
+          })
+          .parse(JSON.parse(await readFile(profile.statePath, "utf8")));
         expect(counts).toMatchObject({
           tools: { "plugin.fixture.allowed": 1 },
           groups: { [groupId]: 1 },
@@ -245,7 +247,16 @@ describe("official rc.2 Profile package extension boot", () => {
         const receipts = (await readFile(profile.auditPath, "utf8"))
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line) as ToolReceipt);
+          .map((line) =>
+            z
+              .looseObject({
+                id: z.string(),
+                runtimeName: z.string(),
+                provider: z.string(),
+                ok: z.boolean(),
+              })
+              .parse(JSON.parse(line)),
+          );
         expect(receipts).toContainEqual(
           expect.objectContaining({
             id: "plugin.fixture.allowed",
@@ -279,7 +290,14 @@ async function readJsonRequest(request: IncomingMessage): Promise<DeepSeekReques
     else if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
     else throw new TypeError("DeepSeek fixture received a non-byte request chunk");
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as DeepSeekRequest;
+  return z
+    .looseObject({
+      messages: z
+        .array(z.looseObject({ role: z.unknown().optional(), content: z.unknown().optional() }))
+        .optional(),
+      tools: z.array(z.looseObject({ name: z.unknown().optional() })).optional(),
+    })
+    .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
 }
 
 async function startDeepSeekFixture(): Promise<{

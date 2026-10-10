@@ -1,3 +1,4 @@
+import { githubClientFixture, githubTransportMock } from "./helpers/github-client.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { GitHubClient } from "../src/github/client.js";
@@ -46,7 +47,7 @@ function pullResponse(headSha = "a".repeat(40), state = "open") {
 function pullClient(pulls: readonly ReturnType<typeof pullResponse>[]): GitHubClient {
   const getPull = vi.fn();
   for (const pull of pulls) getPull.mockResolvedValueOnce(pull);
-  return {
+  return githubClientFixture({
     rest: {
       pulls: {
         get: getPull,
@@ -76,7 +77,7 @@ function pullClient(pulls: readonly ReturnType<typeof pullResponse>[]): GitHubCl
         }),
       },
     },
-  } as unknown as GitHubClient;
+  });
 }
 
 function issueResponse(overrides: Readonly<Record<string, unknown>> = {}) {
@@ -99,7 +100,7 @@ function issueClient(responses: readonly ReturnType<typeof issueResponse>[]) {
   for (const response of responses) get.mockResolvedValueOnce(response);
   const listComments = vi.fn().mockResolvedValue({ data: [], headers: {} });
   return {
-    client: { rest: { issues: { get, listComments } } } as unknown as GitHubClient,
+    client: githubClientFixture({ rest: { issues: { get, listComments } } }),
     get,
     listComments,
   };
@@ -224,7 +225,7 @@ describe("GitHub data snapshotting", () => {
 
   it("uses the webhook copy of the triggering comment", async () => {
     const client = pullClient([pullResponse(), pullResponse()]);
-    const listComments = client.rest.issues.listComments as unknown as ReturnType<typeof vi.fn>;
+    const listComments = githubTransportMock(client.rest.issues.listComments);
     listComments.mockResolvedValue({
       data: [
         {
@@ -257,7 +258,7 @@ describe("GitHub data snapshotting", () => {
 
   it("applies actor filters while collecting bounded historical comments", async () => {
     const client = pullClient([pullResponse(), pullResponse()]);
-    const listComments = client.rest.issues.listComments as unknown as ReturnType<typeof vi.fn>;
+    const listComments = githubTransportMock(client.rest.issues.listComments);
     listComments.mockResolvedValue({
       data: [
         {
@@ -323,14 +324,14 @@ describe("GitHub data snapshotting", () => {
           updated_at: "2026-08-14T01:00:00Z",
         },
       });
-    const client = {
+    const client = githubClientFixture({
       rest: {
         issues: {
           get: getIssue,
           listComments: vi.fn().mockResolvedValue({ data: [], headers: {} }),
         },
       },
-    } as unknown as GitHubClient;
+    });
     const context = pullRequestContext({
       isPullRequest: false,
       pullRequest: undefined,
@@ -356,14 +357,14 @@ describe("GitHub data snapshotting", () => {
       state: "open",
       updated_at: "2026-08-14T01:00:01Z",
     };
-    const client = {
+    const client = githubClientFixture({
       rest: {
         issues: {
           get: vi.fn().mockResolvedValue({ data: issue }),
           listComments: vi.fn().mockResolvedValue({ data: [], headers: {} }),
         },
       },
-    } as unknown as GitHubClient;
+    });
     const context = pullRequestContext({
       isPullRequest: false,
       pullRequest: undefined,
@@ -389,14 +390,14 @@ describe("GitHub data snapshotting", () => {
       ...issue,
       title: "Issue edited after trigger",
     };
-    const changedClient = {
+    const changedClient = githubClientFixture({
       rest: {
         issues: {
           get: vi.fn().mockResolvedValue({ data: changedBeforeStart }),
           listComments: vi.fn(),
         },
       },
-    } as unknown as GitHubClient;
+    });
     await expect(fetchIssueSnapshot(changedClient, context, 7)).rejects.toThrow(
       "changed after the triggering event",
     );

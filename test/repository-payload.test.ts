@@ -1,10 +1,10 @@
+import { githubClientFixture, githubTransportMock } from "./helpers/github-client.js";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { GitHubClient } from "../src/github/client.js";
 import { isFailedWorkflowRun, readEventPayload } from "../src/github/payload.js";
 import { materializeRepositoryAtSha } from "../src/github/repository.js";
 
@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 function api(entries: unknown[], content = "content\n") {
-  return {
+  return githubClientFixture({
     rest: {
       git: {
         getCommit: vi.fn().mockResolvedValue({ data: { sha: commitSha, tree: { sha: treeSha } } }),
@@ -34,7 +34,7 @@ function api(entries: unknown[], content = "content\n") {
         }),
       },
     },
-  } as unknown as GitHubClient;
+  });
 }
 
 describe("immutable repository materialization", () => {
@@ -97,7 +97,7 @@ describe("immutable repository materialization", () => {
     });
     let active = 0;
     let maximum = 0;
-    vi.mocked(client.rest.git.getBlob).mockImplementation(async () => {
+    githubTransportMock(client.rest.git.getBlob).mockImplementation(async () => {
       active += 1;
       maximum = Math.max(maximum, active);
       await gate;
@@ -108,7 +108,7 @@ describe("immutable repository materialization", () => {
           encoding: "base64",
           content: Buffer.from("content\n").toString("base64"),
         },
-      } as never;
+      };
     });
 
     const running = materializeRepositoryAtSha(client, "o", "r", commitSha, output);
@@ -194,25 +194,25 @@ describe("immutable repository materialization", () => {
     roots.push(root);
     const entry = { path: "file", type: "blob", mode: "100644", sha: blobSha, size: 8 };
     const wrongCommit = api([entry]);
-    vi.mocked(wrongCommit.rest.git.getCommit).mockResolvedValueOnce({
+    githubTransportMock(wrongCommit.rest.git.getCommit).mockResolvedValueOnce({
       data: { sha: "f".repeat(40), tree: { sha: treeSha } },
-    } as never);
+    });
     await expect(
       materializeRepositoryAtSha(wrongCommit, "o", "r", commitSha, join(root, "wrong")),
     ).rejects.toThrow("different commit");
 
     const truncated = api([entry]);
-    vi.mocked(truncated.rest.git.getTree).mockResolvedValueOnce({
+    githubTransportMock(truncated.rest.git.getTree).mockResolvedValueOnce({
       data: { sha: treeSha, truncated: true, tree: [entry] },
-    } as never);
+    });
     await expect(
       materializeRepositoryAtSha(truncated, "o", "r", commitSha, join(root, "truncated")),
     ).rejects.toThrow("truncated");
 
     const malformed = api([entry]);
-    vi.mocked(malformed.rest.git.getBlob).mockResolvedValueOnce({
+    githubTransportMock(malformed.rest.git.getBlob).mockResolvedValueOnce({
       data: { sha: blobSha, encoding: "base64", content: "***=" },
-    } as never);
+    });
     await expect(
       materializeRepositoryAtSha(malformed, "o", "r", commitSha, join(root, "malformed")),
     ).rejects.toThrow("valid base64");

@@ -6,5 +6,5 @@ export function sendMessagesSse(
   finishReason: string,
 ): void;
 export function messageToolResults(request: {
-  readonly messages?: readonly { readonly content?: unknown }[];
+  readonly messages?: readonly { readonly content?: unknown }[] | undefined;
 }): readonly { readonly type: "tool_result"; readonly content: unknown }[];

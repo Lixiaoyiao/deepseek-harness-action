@@ -1,19 +1,5 @@
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-
-import { beforeAll, describe, expect, it } from "vitest";
-
-let inspect: (
-  first: Record<string, unknown>,
-  second: Record<string, unknown>,
-  relation: string,
-) => Record<string, unknown>;
-beforeAll(async () => {
-  const fixture = (await import(
-    pathToFileURL(resolve("scripts/probe-session-run-concurrency.mjs")).href
-  )) as { inspectSessionRunConcurrency: typeof inspect };
-  inspect = fixture.inspectSessionRunConcurrency;
-});
+import { describe, expect, it } from "vitest";
+import { inspectSessionRunConcurrency as inspect } from "../scripts/probe-session-run-concurrency.mjs";
 
 const first = {
   repository: "octo/repo",

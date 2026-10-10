@@ -1,3 +1,4 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
@@ -68,7 +69,7 @@ function fixture(text: string | Buffer = "Summarize this repository.") {
     getTree: vi.fn().mockResolvedValue(tree),
     getBlob: vi.fn().mockResolvedValue(blob),
   };
-  return { client: { rest: { git } } as unknown as GitHubClient, git, tree, blob, blobSha, entry };
+  return { client: githubClientFixture({ rest: { git } }), git, tree, blob, blobSha, entry };
 }
 
 function read(

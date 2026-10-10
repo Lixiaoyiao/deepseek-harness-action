@@ -76,7 +76,8 @@ function withoutKeys(value: JsonRecord, excluded: ReadonlySet<string>): JsonReco
 
 function stringMap(value: unknown, description: string): Readonly<Record<string, string>> {
   if (!isRecord(value)) throw new DshConfigurationError(`${description} must be an object`);
-  const result = Object.create(null) as Record<string, string>;
+  const result: Record<string, string> = {};
+  Object.setPrototypeOf(result, null);
   for (const [name, source] of Object.entries(value)) {
     if (typeof source !== "string" || source.length === 0) {
       throw new DshConfigurationError(`${description}.${name} must be a non-empty string`);

@@ -6,10 +6,14 @@ export interface GitHubToolFlushReceipt {
   readonly durationMs: number;
 }
 
+function isReceiptOutput(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export function githubFlushHasExternalEffect(receipts: readonly GitHubToolFlushReceipt[]): boolean {
   return receipts.some(({ result }) => {
-    if (typeof result.output !== "object" || result.output === null) return false;
-    const output = result.output as Record<string, unknown>;
+    if (!isReceiptOutput(result.output)) return false;
+    const output = result.output;
     return (
       output.effect === "created" ||
       output.effect === "updated" ||
@@ -28,10 +32,7 @@ export function mergeGitHubFlushReceipts(
   return receipts.map((receipt) => {
     const flush = byCallId.get(receipt.callId);
     if (flush === undefined) return receipt;
-    const output =
-      typeof flush.result.output === "object" && flush.result.output !== null
-        ? (flush.result.output as Record<string, unknown>)
-        : {};
+    const output = isReceiptOutput(flush.result.output) ? flush.result.output : {};
     const effect = output.effect;
     return {
       ...receipt,

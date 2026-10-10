@@ -6,7 +6,7 @@ import {
   deferProgressUntilWriteValidation,
   reportFailure,
 } from "../src/orchestrator.js";
-import type { EntitySnapshot } from "../src/github/fetch.js";
+import { issueSnapshot, pullRequestSnapshot } from "./helpers/entity-snapshot.js";
 import type { GitHubContext } from "../src/github/context.js";
 import { taskIdentity } from "../src/orchestration/context.js";
 import { buildAutomationTaskOperation } from "../src/write/task.js";
@@ -90,8 +90,8 @@ describe("orchestrator bounds and failure reporting", () => {
       entityNumber: 1,
       isPullRequest: false,
     } satisfies GitHubContext;
-    const issue = { kind: "issue" } as EntitySnapshot;
-    const pullRequest = { kind: "pull_request" } as EntitySnapshot;
+    const issue = issueSnapshot();
+    const pullRequest = pullRequestSnapshot();
 
     expect(() =>
       assertOperationContext(
@@ -153,7 +153,7 @@ describe("orchestrator bounds and failure reporting", () => {
       entityNumber: 1,
       isPullRequest: true,
     } satisfies GitHubContext;
-    const pullRequest = { kind: "pull_request", headRef: "main" } as EntitySnapshot;
+    const pullRequest = pullRequestSnapshot({ headRef: "main" });
     expect(() =>
       assertOperationContext(
         {
@@ -176,7 +176,7 @@ describe("orchestrator bounds and failure reporting", () => {
           requestedAccess: "write",
         },
         context,
-        { kind: "pull_request", headRef: "feature" } as EntitySnapshot,
+        pullRequestSnapshot({ headRef: "feature" }),
       ),
     ).not.toThrow();
 
@@ -189,7 +189,7 @@ describe("orchestrator bounds and failure reporting", () => {
           requestedAccess: "write",
         },
         context,
-        { kind: "pull_request", headRef: "release/next" } as EntitySnapshot,
+        pullRequestSnapshot({ headRef: "release/next" }),
         "release/next",
       ),
     ).toThrow("configured base branch");
@@ -236,7 +236,7 @@ describe("orchestrator bounds and failure reporting", () => {
           requestedAccess: "write",
         },
         issueContext,
-        { kind: "issue" } as EntitySnapshot,
+        issueSnapshot(),
       ),
     ).toThrow("base branch identity");
 
@@ -249,7 +249,7 @@ describe("orchestrator bounds and failure reporting", () => {
           requestedAccess: "write",
         },
         issueContext,
-        { kind: "issue" } as EntitySnapshot,
+        issueSnapshot(),
         "release/next",
       ),
     ).not.toThrow();

@@ -1,6 +1,6 @@
+import { githubClientFixture } from "./helpers/github-client.js";
 import { describe, expect, it, vi } from "vitest";
 
-import type { GitHubClient } from "../src/github/client.js";
 import type { PullRequestSnapshot } from "../src/github/fetch.js";
 import { publishPullRequestReview, ReviewPublicationQuotaError } from "../src/review/publisher.js";
 import { GitHubQuotaError } from "../src/github/request-policy.js";
@@ -177,7 +177,7 @@ function fakeClient(
   };
 
   return {
-    value: value as unknown as GitHubClient,
+    value: githubClientFixture(value),
     inlineComments,
     issueComments,
     getPull,

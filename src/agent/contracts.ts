@@ -83,6 +83,7 @@ export interface AgentEngine<TOutput = unknown, TMetadata = unknown> {
   readonly id: string;
   readonly version: string;
   runTurn(request: AgentTurnRequest): Promise<AgentTurnResponse<TOutput, TMetadata>>;
+  /** Settle only after active work stops borrowing runtime resources, including on failure. */
   dispose?(): Promise<void>;
 }
 

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -643,10 +644,12 @@ describe("validation definition integrity", () => {
     const runner = vi.fn<ValidationIntegrityRunner>(
       async (cwd, _commands, _image, _timeout, signal) => {
         expect(signal).toBe(controller.signal);
-        const manifest = JSON.parse(await readFile(join(cwd, "package.json"), "utf8")) as {
-          scripts: Record<string, string>;
-          dependencies: Record<string, string>;
-        };
+        const manifest = z
+          .looseObject({
+            scripts: z.record(z.string(), z.string()),
+            dependencies: z.record(z.string(), z.string()),
+          })
+          .parse(JSON.parse(await readFile(join(cwd, "package.json"), "utf8")));
         expect(manifest.scripts.test).toBe("vitest run");
         expect(manifest.dependencies).toEqual({ existing: "1.0.0", candidate: "2.0.0" });
         await expect(readFile(join(cwd, "src", "value.ts"), "utf8")).resolves.toContain(
@@ -698,10 +701,12 @@ describe("validation definition integrity", () => {
     await write(snapshot.workerRoot, "package.json", manifest("<rootDir>/dummy/**/*.js", true));
     const strict = await audit(snapshot, "strict", [["npm", "test"]]);
     const runner = vi.fn<ValidationIntegrityRunner>(async (cwd) => {
-      const replayed = JSON.parse(await readFile(join(cwd, "package.json"), "utf8")) as {
-        dependencies: Record<string, string>;
-        jest: { testMatch: string[] };
-      };
+      const replayed = z
+        .looseObject({
+          dependencies: z.record(z.string(), z.string()),
+          jest: z.looseObject({ testMatch: z.array(z.string()) }),
+        })
+        .parse(JSON.parse(await readFile(join(cwd, "package.json"), "utf8")));
       expect(replayed.jest.testMatch).toEqual(["<rootDir>/test/**/*.test.js"]);
       expect(replayed.dependencies).toEqual({ jest: "1.0.0", candidate: "2.0.0" });
       return [passed()];

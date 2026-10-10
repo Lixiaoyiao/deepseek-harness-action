@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -220,7 +221,9 @@ describe("offline configuration check", () => {
       [fileURLToPath(new URL("../scripts/check-config.mjs", import.meta.url)), "--config", path],
       { cwd: directory, windowsHide: true },
     );
-    expect(JSON.parse(stdout) as { ok: boolean }).toMatchObject({ ok: true });
+    expect(z.looseObject({ ok: z.boolean() }).parse(JSON.parse(stdout))).toMatchObject({
+      ok: true,
+    });
     await expect(readFile(marker)).rejects.toThrow();
     expect(stdout).not.toContain("unsafe");
     expect(stdout).not.toContain(credentialInputs["deepseek-api-key"]);
@@ -253,10 +256,12 @@ describe("offline configuration check", () => {
     );
     expect(result.failed).toBe(true);
     expect(result.stderr).toBe("");
-    const parsed = JSON.parse(result.stdout) as {
-      ok: boolean;
-      diagnostics: { id: string; status: string }[];
-    };
+    const parsed = z
+      .looseObject({
+        ok: z.boolean(),
+        diagnostics: z.array(z.looseObject({ id: z.string(), status: z.string() })),
+      })
+      .parse(JSON.parse(result.stdout));
     expect(parsed.ok).toBe(false);
     expect(parsed.diagnostics.find(({ id }) => id === "deepseek-api-key")?.status).toBe("failed");
     expect(result.stdout).not.toContain(credentialInputs["deepseek-api-key"]);

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,11 +9,11 @@ import { parse } from "yaml";
 
 interface CanaryStep {
   readonly name: string;
-  readonly id?: string;
-  readonly if?: string;
-  readonly "continue-on-error"?: boolean;
-  readonly run?: string;
-  readonly env?: Readonly<Record<string, string>>;
+  readonly id?: string | undefined;
+  readonly if?: string | undefined;
+  readonly "continue-on-error"?: boolean | undefined;
+  readonly run?: string | undefined;
+  readonly env?: Readonly<Record<string, string>> | undefined;
 }
 
 describe("independent release canary evidence", () => {
@@ -21,9 +22,31 @@ describe("independent release canary evidence", () => {
   let diagnosticScript: string;
 
   beforeAll(async () => {
-    const workflow = parse(
-      await readFile(new URL("../.github/workflows/release-canary.yml", import.meta.url), "utf8"),
-    ) as { jobs: { smoke: { steps: readonly CanaryStep[] } } };
+    const workflow = z
+      .looseObject({
+        jobs: z.looseObject({
+          smoke: z.looseObject({
+            steps: z.array(
+              z.looseObject({
+                name: z.string(),
+                id: z.string().optional(),
+                if: z.string().optional(),
+                "continue-on-error": z.boolean().optional(),
+                run: z.string().optional(),
+                env: z.record(z.string(), z.string()).optional(),
+              }),
+            ),
+          }),
+        }),
+      })
+      .parse(
+        parse(
+          await readFile(
+            new URL("../.github/workflows/release-canary.yml", import.meta.url),
+            "utf8",
+          ),
+        ),
+      );
     steps = workflow.jobs.smoke.steps;
     const step = steps.find(
       (entry) => entry.name === "Record diagnostics and require both release modes",
@@ -100,7 +123,7 @@ describe("independent release canary evidence", () => {
       const records = result.stdout
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+        .map((line) => z.record(z.string(), z.unknown()).parse(JSON.parse(line)));
       expect(records.map((record) => record.mode)).toEqual(["controlled", "native"]);
       const summary = await readFile(summaryPath, "utf8");
       expect(summary).toContain("| controlled |");

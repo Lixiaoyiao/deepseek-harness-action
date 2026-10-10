@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createHash } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,14 +36,14 @@ const mocks = vi.hoisted(() => ({
   checkActorPermissions: vi.fn(),
   fetchEntitySnapshot: vi.fn(),
   fetchPullRequestSnapshot: vi.fn(),
-  materializeRepositoryAtSha: vi.fn(),
+  materializeRepositoryAtSha: vi.fn<typeof RepositoryModule.materializeRepositoryAtSha>(),
   createWorkspaceSnapshot: vi.fn(),
   inspectWorkspaceChanges: vi.fn(),
   fingerprintWorkspace: vi.fn(),
   inspectValidationIntegrity: vi.fn(),
   enforceValidationIntegrity: vi.fn(),
   runValidationCommandsInDocker: vi.fn(),
-  runAgentLoop: vi.fn(),
+  runAgentLoop: vi.fn<typeof AgentLoopModule.runAgentLoop<AnswerFinalization>>(),
   publishTaskAnswer: vi.fn(),
   finishAutomationTask: vi.fn(),
   finishImplementation: vi.fn(),
@@ -253,7 +254,9 @@ beforeEach(() => {
   });
   mocks.fetchEntitySnapshot.mockResolvedValue(issue);
   mocks.getBranchHead.mockResolvedValue(headSha);
-  mocks.materializeRepositoryAtSha.mockResolvedValue(undefined);
+  mocks.materializeRepositoryAtSha.mockImplementation((_client, _owner, _repo, sha, root) =>
+    Promise.resolve({ root, sha, files: 0, bytes: 0 }),
+  );
   mocks.createWorkspaceSnapshot.mockResolvedValue(workspaceSnapshot);
   mocks.inspectWorkspaceChanges.mockResolvedValue({
     added: [],
@@ -289,8 +292,7 @@ beforeEach(() => {
     },
   ]);
   mocks.publishTaskAnswer.mockResolvedValue(4242);
-  mocks.runAgentLoop.mockImplementation(async (...args: unknown[]) => {
-    const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+  mocks.runAgentLoop.mockImplementation(async (_task, _inputs, hooks) => {
     const stats: AgentLoopModule.AgentLoopStats = {
       turns: 1,
       toolCalls: 0,
@@ -358,7 +360,9 @@ describe("orchestrator task no-change publication", () => {
       expect(outcome.error?.message).toContain(diagnostic);
       const outputs = buildActionOutputs(outcome);
       expect(outputs["error-code"]).toBe("POLICY_DENIED");
-      const result = JSON.parse(String(outputs["result-json"])) as { status: string };
+      const result = z
+        .looseObject({ status: z.string() })
+        .parse(JSON.parse(String(outputs["result-json"])));
       expect(result.status).toBe("denied");
       expect(mocks.readEventPayload).not.toHaveBeenCalled();
       expect(mocks.createGitHubClient).not.toHaveBeenCalled();
@@ -373,8 +377,7 @@ describe("orchestrator task no-change publication", () => {
 
     expect(mocks.getBranchHead).toHaveBeenCalledWith(client, "octo", "repo", "main");
     expect(mocks.materializeRepositoryAtSha).toHaveBeenCalledOnce();
-    const materializationCalls = mocks.materializeRepositoryAtSha.mock
-      .calls as unknown as readonly (readonly unknown[])[];
+    const materializationCalls = mocks.materializeRepositoryAtSha.mock.calls;
     const immutableSource = materializationCalls[0]?.[4];
     expect(immutableSource).toEqual(expect.any(String));
     expect(mocks.createWorkspaceSnapshot).toHaveBeenCalledWith(
@@ -513,8 +516,7 @@ describe("orchestrator task no-change publication", () => {
         taskOutputSchema,
       }),
     );
-    mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+    mocks.runAgentLoop.mockImplementationOnce(async (_task, _inputs, hooks) => {
       const stats: AgentLoopModule.AgentLoopStats = {
         turns: 1,
         toolCalls: 0,
@@ -544,8 +546,7 @@ describe("orchestrator task no-change publication", () => {
   });
 
   it("does not publish a no-change answer after the Controller deadline is exhausted", async () => {
-    mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+    mocks.runAgentLoop.mockImplementationOnce(async (_task, _inputs, hooks) => {
       const stats: AgentLoopModule.AgentLoopStats = {
         turns: 1,
         toolCalls: 0,
@@ -616,8 +617,7 @@ describe("orchestrator task no-change publication", () => {
           issues: { get: getIssue, setLabels },
         },
       });
-      mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
-        const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+      mocks.runAgentLoop.mockImplementationOnce(async (_task, _inputs, hooks) => {
         expect(mocks.runValidationCommandsInDocker).toHaveBeenCalledOnce();
         expect(setLabels).not.toHaveBeenCalled();
         const scheduled = await hooks.toolProvider?.invoke(
@@ -733,8 +733,7 @@ describe("orchestrator task no-change publication", () => {
     });
     const firstCallId = `call-${"a".repeat(40)}`;
     const secondCallId = `call-${"b".repeat(40)}`;
-    mocks.runAgentLoop.mockImplementationOnce(async (...args: unknown[]) => {
-      const hooks = args[2] as AgentLoopModule.AgentLoopHooks<AnswerFinalization>;
+    mocks.runAgentLoop.mockImplementationOnce(async (_task, _inputs, hooks) => {
       await hooks.toolProvider?.invoke(
         {
           callId: firstCallId,

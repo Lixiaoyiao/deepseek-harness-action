@@ -81,13 +81,73 @@ change, validate it, revalidate the bound entity, and use its own credential to
 perform an allowed mutation. A writable mount is therefore never equivalent to
 permission to commit, push, comment, or update GitHub metadata.
 
-The fixed DSH 0.2.0-rc.2 runtime creates and flushes a fresh Session for each
-worker turn. Session events and projection caches live only under the
-Controller's disposable runtime directory, with narrowly writable Docker
-mounts and cleanup at run completion or cancellation. No public input selects
-or resumes a previous Session. Headless events describe execution; only the
-terminal text can enter the unchanged Controller business schema. Result
-formatting repair receives that text alone and cannot drive another Agent turn.
+The fixed DSH 0.2.0-rc.2 runtime uses disposable, run-scoped Session storage.
+The optional `session-mode` inputs let the Controller import verified portable
+text history and save a bounded checkpoint artifact. Provenance, compatibility,
+settlement and current actor authority are checked before import or upload;
+restored history never grants authority or replays old writes. Worker mounts and
+runtime storage are cleaned at completion or cancellation. Headless events
+describe execution; only terminal text enters the Controller business schema.
+Result formatting repair receives that text alone and cannot drive another
+Agent turn.
+
+## Module design and lifecycle
+
+The architecture above remains the organizing principle. Refactoring follows
+responsibility and ownership, rather than file size. A module should hide the
+ordering rules callers would otherwise repeat, expose a small interface and be
+tested through that interface. A shared abstraction needs two real uses; a
+generic workflow framework or a pass-through wrapper earns no place here.
+
+The dependency direction is entrypoint → orchestration → domain modules →
+external adapters. Input schemas decode values; input invariant validation
+checks combinations and credential isolation before side effects. Result types,
+failure classification, Action output serialization and Markdown rendering have
+independent implementations behind the existing public result contract.
+
+`runAgentLoop` owns turn/retry decisions. Its lifecycle module owns acquisition,
+bounded execution and disposal; feedback handles bounded, untrusted repair
+context. Operation finalization owns Controller validation and publication.
+Validation success is recorded when validation succeeds, so a later authority,
+write or Session failure cannot rewrite that stage's outcome. Confirmed external
+effects remain visible when a later stage fails.
+
+Write transactions own validation → fresh actor authorization → entity/ref
+revalidation → effects → reconciliation. Task and implementation share the
+new-PR transaction; a PR-head fix uses its separate update semantics. Both reuse
+the same validation/authority stage. The Gateway applies the same fresh actor
+gate to queued typed mutations. Reauthorization can revoke admitted capability;
+it cannot add capability to a running Agent.
+
+DSH resource ownership stays run-scoped. Controlled and native compositions may
+share installation and environment preparation, while their tool-policy owners
+and admission rules remain distinct. Cleanup uses one bounded grace period and
+attempts every acquired resource's disposer, preserving the primary outcome.
+
+## Installation design
+
+The installer defaults to a guided read-only PR review. Advanced modes are an
+explicit choice. Guided and manual entrypoints share template admission and
+atomic workflow installation, so onboarding cannot invent another configuration
+format. Prompts collect decisions; Git/`gh` adapters perform external operations;
+publication owns the local index/ref transaction and remote reconciliation.
+
+Secrets are passed to `gh` on stdin and never persisted in local recovery state.
+Recovery observes the actual workflow, Secret names and Git refs. Each commit and
+push requires the human installer's explicit confirmation. A private Git index
+limits a commit to generated workflow files; the push checks its remote parent
+so it cannot silently publish unrelated local commits.
+
+## Verification seams
+
+Behavior is verified at four interfaces: the complete Action lifecycle/results;
+DSH/Agent execution, deadlines and disposal; write/Gateway transactions and
+external effects; and installer CLI onboarding in a fresh Git repository.
+GitHub, Docker and model transports are external adapters. Internal validation,
+policy, state transitions and output projection stay real wherever feasible.
+An extraction must preserve these behavior tests; new tests target meaningful
+failure paths, rather than mirroring private helpers. Release qualification then
+checks the exact candidate SHA and fresh public consumers.
 
 ## Extension points
 

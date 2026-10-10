@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createHash } from "node:crypto";
 import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -638,10 +639,11 @@ describe("portable text Session admission", () => {
         .toString("utf8")
         .trimEnd()
         .split("\n")
-        .map((line: string) => JSON.parse(line) as Record<string, unknown>);
+        .map((line: string) => z.record(z.string(), z.unknown()).parse(JSON.parse(line)));
       const result = rows.find((row) => row.type === "tool/result");
       if (result === undefined) throw new Error("Fixture must contain a tool result");
-      (result.data as Record<string, unknown>).meta = { content: [block], business: block };
+      const data = z.record(z.string(), z.unknown()).parse(result.data);
+      result.data = { ...data, meta: { content: [block], business: block } };
       const withMetadata = Buffer.from(rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
       expect(validate(withMetadata).eventCount).toBe(9);
       expect(validate(raw([opaque({ content: [block], business: block })])).eventCount).toBe(1);

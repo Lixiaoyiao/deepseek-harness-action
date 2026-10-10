@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,7 +41,28 @@ describe("independent Actions content-read quota diagnostic", () => {
       new URL("../.github/workflows/e2e-rate-limit.yml", import.meta.url),
       "utf8",
     );
-    workflow = parse(source) as DiagnosticWorkflow;
+    workflow = z
+      .looseObject({
+        name: z.string(),
+        on: z.record(z.string(), z.unknown()),
+        permissions: z.record(z.string(), z.string()),
+        jobs: z.record(
+          z.string(),
+          z.looseObject({
+            if: z.string(),
+            "timeout-minutes": z.number(),
+            steps: z.array(
+              z.looseObject({
+                name: z.string(),
+                shell: z.string(),
+                env: z.record(z.string(), z.string()),
+                run: z.string(),
+              }),
+            ),
+          }),
+        ),
+      })
+      .parse(parse(source));
     const step = workflow.jobs.inspect?.steps[0];
     if (step === undefined) throw new Error("Missing quota diagnostic step");
     script = step.run;

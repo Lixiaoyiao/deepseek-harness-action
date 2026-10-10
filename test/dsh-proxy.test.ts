@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startDeepSeekProxy } from "../src/dsh/proxy.js";
@@ -152,7 +151,9 @@ describe("DeepSeek credential proxy", () => {
       });
     });
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-    const address = upstream.address() as AddressInfo;
+    const address = upstream.address();
+    if (typeof address !== "object" || address === null)
+      throw new Error("Expected a listening TCP server");
 
     try {
       const handle = await startDeepSeekProxy({
@@ -265,7 +266,9 @@ describe("DeepSeek credential proxy", () => {
       });
     });
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-    const address = upstream.address() as AddressInfo;
+    const address = upstream.address();
+    if (typeof address !== "object" || address === null)
+      throw new Error("Expected a listening TCP server");
 
     try {
       const handle = await startDeepSeekProxy({
