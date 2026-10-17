@@ -3,7 +3,7 @@
 [English](../session.md) · [配置](../configuration.md) · [安全边界](../../SECURITY.md)
 
 Session 是显式 opt-in，用于在后续 Actions run 中继续同一便携文本任务。它复用固定
-**DSH 0.2.0-rc.2** 的公开 JSONL persistence 和 `--session-id`。检查点保存完整的
+**DSH 0.2.1-rc.2** 的公开 JSONL persistence 和 `--session-id`。检查点保存完整的
 原始 v4 Session 日志及来源 manifest；headless NDJSON 事件投影、拼接历史评论都
 不能替代真实 Session 日志。
 
@@ -164,3 +164,7 @@ workflow/run/artifact 读取复用现有 Controller GitHub client 与配额诊�
 生成部分附件检查点。损坏状态或凭据拒绝时，修复生成配置或输出并创建新 Session。手工编辑
 原始记录会失去完整性和无损恢复保证。配置检查入口不会假装已经核验在线来源、
 Docker 可用性或 artifact 权限；实际 run 会在模型启动前完成这些检查。
+
+### 升级到 DSH 0.2.1-rc.2
+
+检查点绑定精确 DSH 版本。升级后请使用新的 Session key；0.2.0-rc.2 创建的检查点不会被自动导入。原有归档仍可由原版本运行时使用。

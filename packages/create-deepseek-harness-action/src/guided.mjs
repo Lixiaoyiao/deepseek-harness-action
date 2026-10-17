@@ -199,7 +199,7 @@ export async function runGuidedSetup(options) {
         : "Created the pinned PR Review workflow.\n",
     );
     output.write(
-      "Configuration checked: read-only worker, trusted base checkout and immutable Action reference. API key acceptance, Actions permissions, quota and Docker are verified by the first run.\n",
+      "Configuration checked: Review can comment on code but cannot change files. The first GitHub run checks your key and runner setup.\n",
     );
     const secret = loggedIn
       ? await configureSecret({ repository, root, prompt, output, invoke })

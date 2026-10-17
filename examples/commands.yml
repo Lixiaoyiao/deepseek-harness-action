@@ -29,10 +29,10 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
-          dsh-version: 0.2.0-rc.2
+          dsh-version: 0.2.1-rc.2
           permission-profile: standard
           allow-write: "true"
           run-tests: "true"

@@ -108,7 +108,7 @@ export function inspectCheckpointArchive(input, expected) {
     manifest.session.sessionId === expected.sessionId &&
       manifest.session.generation === expected.generation &&
       manifest.session.keyHash === expected.keyHash &&
-      manifest.runtime.dshVersion === "0.2.0-rc.2" &&
+      manifest.runtime.dshVersion === "0.2.1-rc.2" &&
       manifest.runtime.mode === expected.dshMode &&
       manifest.workflow.runId === expected.runId &&
       manifest.workflow.runAttempt === expected.runAttempt &&

@@ -45,7 +45,7 @@ async function fixture(extra: Record<string, string> = {}, now = Date.now()) {
     },
     task: { kind: "automation", identity: "task:source-key" },
     runtime: {
-      dshVersion: "0.2.0-rc.2",
+      dshVersion: "0.2.1-rc.2",
       mode: "controlled",
       compositionId: "controlled-fixture",
       containerImage: `node@sha256:${"a".repeat(64)}`,

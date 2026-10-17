@@ -143,7 +143,7 @@ describe("Marketplace action metadata", () => {
     expect(ci).toContain("Pinned native binding must load directly from the read-only package");
     expect(ci).toContain('.[-1].type == "final"');
     expect(ci).toContain(".[-1].text | fromjson");
-    expect(ci).toContain('index("web_fetch") == null');
+    expect(ci).toContain('index("web_fetch") != null');
     expect(ci).toContain('index("list_mcp_resources") == null');
     expect(ci).toContain("native frozen-SHA ecosystem Docker smoke ok");
     expect(ci).toContain('"ctx.tools.schemas(agent)"');

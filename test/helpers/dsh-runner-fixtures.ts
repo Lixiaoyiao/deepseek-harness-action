@@ -61,7 +61,7 @@ export function request(overrides: Partial<DshRunRequest>): DshRunRequest {
     apiKey: "controller-real-key",
     baseUrl: "https://api.deepseek.com",
     webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
-    dshVersion: "0.2.0-rc.2",
+    dshVersion: "0.2.1-rc.2",
     containerImage: "node:24-bookworm",
     ...overrides,
   };

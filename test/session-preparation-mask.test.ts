@@ -70,7 +70,7 @@ function sourceResponses(automatic: boolean, resume: boolean) {
           runAttempt: 1,
           sourceSha: "d".repeat(40),
         },
-        runtime: { dshVersion: "0.2.0-rc.2", mode: "controlled" },
+        runtime: { dshVersion: "0.2.1-rc.2", mode: "controlled" },
         session: { sessionId, generation: 1, keyHash },
         payload: { file: "session.jsonl", bytes: payload.length, sha256: hash(payload) },
       }),

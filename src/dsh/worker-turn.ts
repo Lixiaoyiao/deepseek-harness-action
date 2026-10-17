@@ -77,7 +77,14 @@ export class DshWorker {
             apiKey: request.apiKey,
             baseUrl: request.baseUrl,
             ...(context.webSearchEnabled ? { webSearchBaseUrl: request.webSearchBaseUrl } : {}),
-            allowWebSearch: context.webSearchEnabled,
+            allowWebSearch:
+              context.webSearchEnabled &&
+              (context.composition.toolPolicyOwner === "dsh" ||
+                context.nativeTools.includes("native.web-search")),
+            allowWebFetch:
+              context.webSearchEnabled &&
+              (context.composition.toolPolicyOwner === "dsh" ||
+                context.nativeTools.includes("native.web-fetch")),
             bindHost: proxyAddress,
             workerHost: proxyAddress,
             requestTimeoutMs: request.timeoutMs,
@@ -103,7 +110,12 @@ export class DshWorker {
       async (lateProxy) => lateProxy.close(),
     );
     scope.own("proxy", async () => proxy.close());
-    if (context.webSearchEnabled && proxy.workerWebSearchBaseUrl === undefined) {
+    if (
+      context.webSearchEnabled &&
+      (context.composition.toolPolicyOwner === "dsh" ||
+        context.nativeTools.includes("native.web-search")) &&
+      proxy.workerWebSearchBaseUrl === undefined
+    ) {
       throw new DshConfigurationError(
         "The Controller proxy did not expose the required mediated web-search route",
       );

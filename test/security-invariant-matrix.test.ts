@@ -227,6 +227,7 @@ function expectedBuiltinIds(row: MatrixRow): NativeToolId[] {
     ...(writeDocker ? (["workspace.edit"] as const) : []),
     ...(writeDocker && autonomyRequested ? (["native.bash"] as const) : []),
     ...(trustedDocker && autonomyRequested ? (["native.web-search"] as const) : []),
+    ...(trustedDocker && row.profile === "custom" ? (["native.web-fetch"] as const) : []),
     ...(writeDocker && autonomyRequested ? (["native.subagent"] as const) : []),
   ];
 }

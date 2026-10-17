@@ -23,13 +23,13 @@ validation, image, extension, executable, or credential-routing inputs.
 
 <!-- BEGIN GENERATED ACTION INPUTS: credentials -->
 
-| Input                 | Required/default                        | Description                                                                                                                                 |
-| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deepseek-api-key`    | Required                                | DeepSeek API key. Kept by the controller-side credential proxy; never passed to DSH or repository code.                                     |
-| `github-token`        | `${{ github.token }}`                   | GitHub token used only by the trusted controller.                                                                                           |
-| `base-url`            | `https://api.deepseek.com`              | Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content. |
-| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | Trusted credential-routing input for the Controller-mediated DeepSeek Anthropic Messages web-search endpoint.                               |
-| `bot-user-id`         | `41898282`                              | Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot].                                                 |
+| Input                 | Required/default                        | Description                                                                                                                                       |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deepseek-api-key`    | Required                                | DeepSeek API key. Kept by the controller-side credential proxy; never passed to DSH or repository code.                                           |
+| `github-token`        | `${{ github.token }}`                   | GitHub token used only by the trusted controller.                                                                                                 |
+| `base-url`            | `https://api.deepseek.com`              | Trusted credential-routing input for model requests and DeepSeek Search/Fetch APIs. Never derive it from untrusted content.                       |
+| `web-search-base-url` | `https://api.deepseek.com/anthropic/v1` | An explicit custom URL preserves legacy Messages search. The default uses the new DeepSeek Search API through base-url; Fetch also uses base-url. |
+| `bot-user-id`         | `41898282`                              | Numeric ID of the bot account that owns tracking comments. Defaults to github-actions[bot].                                                       |
 
 <!-- END GENERATED ACTION INPUTS: credentials -->
 
@@ -118,7 +118,7 @@ an actual `needs_tool` result is ineligible for terminal formatting repair.
 | `session-source-run-id`  | Empty                                                                                                             | For session-mode=resume, the explicit successful producer Actions run ID. Only its verified current attempt and latest compatible checkpoint may be restored.                                                                                             |
 | `session-retention-days` | `3`                                                                                                               | Checkpoint retention, 1-7 days. Only the complete raw DSH Session and a bounded provenance manifest are saved; credentials and Controller authorization are excluded.                                                                                     |
 | `dsh-mode`               | `controlled`                                                                                                      | DSH composition ownership: controlled preserves the Controller-owned ToolRuntime policy; experimental native uses the official DSH headless Profile, MCP, Bundle, Plugin, Skill, Subagent, and Workflow graph inside the Action's Docker safety boundary. |
-| `dsh-version`            | `0.2.0-rc.2`                                                                                                      | Pinned @deepseek-ai/dsh version. The Action accepts only the audited 0.2.0-rc.2 runtime.                                                                                                                                                                  |
+| `dsh-version`            | `0.2.1-rc.2`                                                                                                      | Pinned @deepseek-ai/dsh version. The Action accepts only the audited 0.2.1-rc.2 runtime.                                                                                                                                                                  |
 | `dsh-executable`         | Empty                                                                                                             | Trusted capability input. Optional absolute path to a preinstalled DSH executable; host mode executes it without a container boundary.                                                                                                                    |
 | `isolation`              | `docker`                                                                                                          | Trusted capability input selecting the DSH isolation backend. 'none' removes the OS/container boundary; Docker is required for untrusted review data, writes, and extensions.                                                                             |
 | `container-image`        | `docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059` | Trusted worker-code input. Every value must be one Docker/OCI image reference and cannot be parsed as a Docker option; extensions and writes require a full name@sha256 digest.                                                                           |
@@ -142,7 +142,7 @@ is therefore equivalent to explicitly selecting `controlled`; existing users
 do not opt into a new tool surface accidentally.
 
 `native` is an experimental `NativeComposition` over the locked official DSH
-`0.2.0-rc.2` headless composition. DSH owns its internal capability graph and
+`0.2.1-rc.2` headless composition. DSH owns its internal capability graph and
 model-facing inventory. Native is not implemented by deleting a few deny rows
 from `ControlledComposition`, and the Action does not present its controlled
 ToolRuntime allowlist as authority over DSH's complete native inventory.
@@ -283,7 +283,7 @@ MCP, Bundle, and Plugin names.
 Canonical Action tool IDs are:
 
 - `workspace.read`, `workspace.search`, and `workspace.edit`;
-- `native.bash`, `native.web-search`, and `native.subagent`;
+- `native.bash`, `native.web-search`, opt-in `native.web-fetch`, and `native.subagent`;
 - `command.<name>` for Controller fixed-argv tools;
 - `github.issue.labels.set`, `github.issue.assignees.set`,
   `github.issue.state.update`, `github.comment.create`,
@@ -366,9 +366,10 @@ These canonical IDs apply to `dsh-mode: controlled`:
 - `native.bash` is opt-in through `standard` or `custom`, requires trusted-write
   Docker, runs bounded foreground commands without credentials, and cannot
   share a worker with a bridge-networked extension.
-- `native.web-search` is mediated by the Controller through
-  `web-search-base-url`. It does not expose the real key, provide arbitrary URL
-  fetch, or imply general Docker bridge egress.
+- `native.web-search` uses the Controller-mediated DeepSeek Search API.
+- `native.web-fetch` explicitly enables the Fetch API through the same proxy; it
+  is not included in the standard preset. Both use `base-url` and expose neither
+  the real key nor general Docker bridge egress.
 - `native.subagent` is available only under eligible trusted-write policy. Its
   ordinary response returns to the root Agent; it does not bypass the Action's
   root structured-output contract.
@@ -724,7 +725,7 @@ proves identity, not safety; review and maintain the image separately.
 ### GitHub image attachments
 
 v0.9.1 does not download or forward GitHub image attachments. The exact audited
-`@deepseek-ai/dsh-headless@0.2.0-rc.2` entrypoint accepts one text `task` and
+`@deepseek-ai/dsh-headless@0.2.1-rc.2` entrypoint accepts one text `task` and
 constructs one text content block; it exposes no formal multimodal input
 contract. Markdown image references therefore remain inert as `[image removed]`.
 Reference definitions, HTML image/source elements, and recognized raw GitHub
@@ -856,7 +857,7 @@ field records `source: headless-worker`, `completeness`, `reportedSteps`,
 They do not affect permissions, validation, publication or retry decisions.
 Missing usage remains unknown; it is never converted to zero.
 
-For the pinned DSH `0.2.0-rc.2` protocol, `inputTokens` counts uncached input;
+For the pinned DSH `0.2.1-rc.2` protocol, `inputTokens` counts uncached input;
 `cacheReadTokens` and `cacheWriteTokens` are separate input buckets.
 `reasoningTokens` is included within `outputTokens`. A `step_end` sample already
 includes that step's model retries and is counted once. Optional buckets are
@@ -874,7 +875,7 @@ Failed steps set outputs before failing. Read them from a later `always()` step
 without interpolating model-derived text into a shell command:
 
 ```yaml
-- uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+- uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
   id: dsh
   with:
     deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}

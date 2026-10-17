@@ -230,24 +230,18 @@ whitespace, and other argument-breaking forms are rejected even on read-only
 paths where a mutable tag remains compatible. This prevents Docker option
 injection but does not make an operator-selected image trustworthy.
 
-DSH receives an ephemeral proxy token. A controller-side proxy injects the real
-DeepSeek key only on fixed POST routes: model Messages, tool-free result-repair
-chat completions, plus the separate exact web-search Messages route when
-controlled mode makes `native.web-search`
-effective or native mode runs the official headless graph that exposes
-`web_search`. The upstream receives the real key only when that tool actually
-makes an accepted proxy request. For the latter, the Controller replaces both
-upstream `Authorization` and `x-api-key`
-credentials. The model Messages route accepts only the run-scoped token,
-including the official API-key header form, and drops user/session attribution
-headers. It rejects Files and model-discovery requests; its only admitted beta
-is the published mid-conversation tool-change protocol. The Messages routes
-reject query strings, extra path segments, `web_fetch`, and
-arbitrary URLs. The actual backend, workspace access and known limitations are
-recorded in the structured isolation report rather than inferred from the
-requested profile. Both `base-url` and `web-search-base-url` choose upstreams
-that receive the real key, so they are trusted credential-routing inputs, not
-untrusted request data.
+DSH receives an ephemeral proxy token. The Controller injects the real DeepSeek
+key only on fixed POST routes: model Messages, result-repair chat completions,
+the legacy search Messages endpoint, and the new `/v1/tools/search` and
+`/v1/tools/fetch` endpoints. Controlled Search and Fetch require their separate
+effective grants; Native uses both through its official capability graph. Fetch
+is not added to the Controlled standard preset. Requests cannot select another
+upstream or forward their own credentials. Messages and web API routes reject
+query strings and extra path segments. Files and model-discovery routes remain
+closed. Messages drops user/session attribution and accepts only the published
+mid-conversation tool-change beta. `base-url` and `web-search-base-url` remain
+trusted credential-routing inputs. The isolation report records actual workspace
+and network access, including the shared worker limitations.
 
 The additive `result-json.authority` audit records only authority sources that
 the Action explicitly knows, configures, or mediates. Its fixed Controller
@@ -388,8 +382,8 @@ ToolRouter. The same capability compiler supplies both enforcement planes:
   always requires network. Network-enabled worker execution is not a
   destination allowlist.
 - `native.web-search` is a separate Controller-mediated path to the configured
-  DeepSeek Messages endpoint. It exposes neither the real key nor arbitrary URL
-  fetch and does not imply general Docker bridge egress. `native.bash` remains
+  DeepSeek Search API. `native.web-fetch` separately admits the Fetch API.
+  Neither exposes the real key or implies general Docker bridge egress. `native.bash` remains
   inside the credential-free trusted-write Docker worker and cannot share a
   worker with a bridge-networked extension.
 - A non-bridge worker still reaches the Controller proxy through the inspected

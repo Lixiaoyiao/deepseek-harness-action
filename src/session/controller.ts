@@ -163,7 +163,7 @@ export function createControllerSession(
                   identity: `${operation}:${logicalKey}`,
                 },
           runtime: {
-            dshVersion: "0.2.0-rc.2",
+            dshVersion: "0.2.1-rc.2",
             mode: inputs.dshMode,
             compositionId: options.compositionId,
             containerImage: inputs.containerImage,

@@ -169,7 +169,7 @@ jobs:
             throw new Error("Pinned native binding must load directly from the read-only package");
           }
 
-          const expectedVersion = "0.2.0-rc.2";
+          const expectedVersion = "0.2.1-rc.2";
           const manifest = JSON.parse(await readFile("package.json", "utf8"));
           const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
           const expectedPackages = Object.keys(manifest.dependencies ?? {})
@@ -329,7 +329,7 @@ jobs:
             (.[0].observedTools | index("mcp__fixture__add") != null) and
             (.[0].observedTools | index("native_bundle_echo") != null) and
             (.[0].observedTools | index("native_plugin_echo") != null) and
-            (.[0].observedTools | index("web_fetch") == null) and
+            (.[0].observedTools | index("web_fetch") != null) and
             (.[0].observedTools | index("list_mcp_resources") == null) and
             (.[0].observedTools | index("workspace.read") == null)
           ' "$smoke_dir/home/action-state/native-observed-tools.jsonl" >/dev/null

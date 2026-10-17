@@ -6,7 +6,12 @@ export const workspaceToolSchema = z.enum(["workspace.read", "workspace.search",
 export type WorkspaceToolId = z.infer<typeof workspaceToolSchema>;
 
 /** Audited model-facing tools shipped by the exact DSH runtime lock. */
-export const autonomyToolSchema = z.enum(["native.bash", "native.web-search", "native.subagent"]);
+export const autonomyToolSchema = z.enum([
+  "native.bash",
+  "native.web-search",
+  "native.web-fetch",
+  "native.subagent",
+]);
 export type AutonomyToolId = z.infer<typeof autonomyToolSchema>;
 export const nativeToolSchema = z.union([workspaceToolSchema, autonomyToolSchema]);
 export type NativeToolId = z.infer<typeof nativeToolSchema>;

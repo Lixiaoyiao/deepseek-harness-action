@@ -228,7 +228,7 @@ describe("locked rc.2 native ecosystem boot", () => {
         const rootRequests = llm.requests.filter(isRootTaskRequest);
         expect(rootRequests.length).toBeGreaterThanOrEqual(7);
         const firstTools = toolNames(rootRequests[0]);
-        expect(firstTools).not.toContain("web_fetch");
+        expect(firstTools).toContain("web_fetch");
         expect(firstTools).not.toContain("list_mcp_resources");
         expect(firstTools).not.toContain("read_mcp_resource");
         for (const request of llm.requests) {
@@ -252,8 +252,8 @@ describe("locked rc.2 native ecosystem boot", () => {
         expect(transcript).toContain("NATIVE-HTTP");
         expect(transcript).toContain("NATIVE_BUNDLE_MARKER");
         expect(transcript).toContain("NATIVE_PLUGIN_MARKER:CORDIS_NATIVE");
-        const childRequests = llm.requests.filter((request) =>
-          hasUserText(request, "CHILD_NATIVE_MARKER"),
+        const childRequests = llm.requests.filter(
+          (request) => hasUserText(request, "CHILD_NATIVE_MARKER") && !isRootTaskRequest(request),
         );
         expect(
           childRequests.length,
@@ -408,7 +408,17 @@ function hasUserText(request: DeepSeekRequest, marker: string): boolean {
 
 function isRootTaskRequest(request: DeepSeekRequest): boolean {
   return (
-    !hasUserText(request, "CHILD_NATIVE_MARKER") &&
+    !(request.messages ?? []).some(
+      ({ role, content }) =>
+        role === "user" &&
+        Array.isArray(content) &&
+        content.some(
+          (block: { type?: string; text?: string }) =>
+            block.type === "text" &&
+            (block.text === "CHILD_NATIVE_MARKER" ||
+              block.text === "Return CHILD_NATIVE_MARKER exactly."),
+        ),
+    ) &&
     (request.messages ?? []).some(
       ({ role, content }) =>
         role === "user" &&
@@ -519,7 +529,10 @@ async function startNativeLlmFixture(): Promise<{
           sendSse(response, { content: "Native Ecosystem" }, "stop");
           return;
         }
-        if (hasUserText(body, "CHILD_NATIVE_MARKER")) {
+        if (
+          hasUserText(body, "CHILD_NATIVE_MARKER") &&
+          !hasUserText(body, "Use the requested native ecosystem capabilities")
+        ) {
           sendSse(response, { content: "CHILD_NATIVE_MARKER_OK" }, "stop");
           return;
         }
@@ -543,7 +556,6 @@ async function startNativeLlmFixture(): Promise<{
             sendToolCall(response, results, "subagent", {
               description: "Native child marker",
               prompt: "Return CHILD_NATIVE_MARKER exactly.",
-              run_in_background: false,
             });
             return;
           case 5:

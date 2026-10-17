@@ -99,7 +99,7 @@ async function main() {
     dshHome,
   );
 
-  // loadProfile and boot are the official 0.2.0-rc.2 Profile/Bundle and Cordis
+  // loadProfile and boot are the official 0.2.1-rc.2 Profile/Bundle and Cordis
   // entrypoints. The Action deliberately omits the product CLI's layered .env,
   // home patch, and live user-patch watchers because workflow inputs — not the
   // checked-out repository or model output — are the authorization boundary.
@@ -115,6 +115,22 @@ async function main() {
   const patches = [
     ...profile.layers.flatMap((layer) => layer.patches),
     ...profile.patches,
+    ...(process.env.DSH_ACTION_SEARCH_PROVIDER === "deepseek-official"
+      ? [
+          {
+            id: "web",
+            config: { searchProvider: "deepseek-official", fetchProvider: "deepseek-fetch-api" },
+          },
+          { id: "web-search-deepseek", disabled: false, config: { apiKeyEnv: "DEEPSEEK_API_KEY" } },
+        ]
+      : []),
+    {
+      id: "web-deepseek-api",
+      config: {
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        baseURL: `${process.env.DEEPSEEK_BASE_URL}/v1/tools`,
+      },
+    },
     // These upstream defaults send extra durable log or installed-package
     // data. An Action runtime upgrade must not opt the user into that upload.
     { id: "session-log-deepseek", disabled: true },

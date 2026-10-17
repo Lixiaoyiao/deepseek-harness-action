@@ -16,60 +16,66 @@ Action 会启动与凭据隔离的 DSH worker，校验结构化结果，再由�
 
 ## 快速开始
 
-在需要接入的现有 GitHub 仓库内运行安装器：
+Action 会在 GitHub 的 Linux 运行器上安装并运行 DSH，**你的电脑不需要安装 DSH 或 Docker**。本地 DSH 是在你电脑上运行的独立程序，它的密钥和设置不会自动同步到 GitHub。
 
-```bash
-npm create deepseek-harness-action@latest
+### 1. 安装工具
+
+Windows 用户先安装 [Node.js 24 或更新版本](https://nodejs.org/en/download)、[Git for Windows](https://git-scm.com/download/win) 和 [GitHub CLI](https://cli.github.com/)。保持安装程序的默认选项即可。安装后关闭并重新打开 PowerShell，检查：
+
+```powershell
+node --version
+npm.cmd --version
+git --version
+gh --version
 ```
 
-终端中的默认引导从**只读 PR Review** 开始。安装器查找 Git 根目录和
-`github.com` origin，检查 GitHub CLI 与登录状态，经你确认后创建固定完整 SHA
-的 workflow，不会创建远端仓库。已登录时，可确认通过隐藏输入设置
-`DEEPSEEK_API_KEY`；密钥仅通过 stdin 传给 `gh`，不会出现在参数或日志里。
-缺少登录或 Secret 权限时会给出恢复步骤；再次运行会保留内容完全相同的 workflow。
+PowerShell 如果提示禁止运行 `npm.ps1`，请使用这里的 `npm.cmd`，无需修改执行策略。macOS 和 Linux 用户可以直接使用 `npm`。
 
-Commit 和 push 分别确认，均默认否。安装器只提交它生成的 workflow，保留
-其它改动，有已暂存文件时拒绝提交，不执行仓库 hooks 或 filters。
-安装器创建未签名 commit，且只对兼容的现有分支执行经检查的非 force push；
-需签名或包含其它未发布历史时可手工完成。Workflow 到达默认分支后才能触发 PR Review。
+### 2. 打开仓库并登录 GitHub
 
-通过 `--advanced` 显式进入 workflow 和 controlled/native 选择：
+在已有的本地仓库文件夹中打开 PowerShell，不必重新下载代码。
 
-```bash
-npm create deepseek-harness-action@latest -- --advanced
+```powershell
+cd "C:\你的路径\你的仓库"
+git remote -v
+gh auth login
 ```
 
-高级选项是 **PR Review**、**@dsh Coding Commands**、**Both** 和
-**Automatic Session**；该流程和显式 `--mode` 仅生成文件。
-在 CI 或其它非交互环境中必须显式传入 mode：
+登录时选择 GitHub.com 和浏览器登录。`origin` 应指向你要接入的 GitHub 仓库。安装器使用现有仓库，不会替你创建远端仓库。
 
-```bash
-npm create deepseek-harness-action@latest -- --mode both
+### 3. 安装工作流并配置密钥
+
+```powershell
+npm.cmd create deepseek-harness-action@latest
 ```
 
-显式 `--mode` 在任何环境下都默认 `controlled`，需要 native 时明确指定：
+默认引导安装**只读 PR Review**。安装器会显示目标仓库，在创建文件、设置密钥、提交和推送之前分别询问。在隐藏输入提示中粘贴 DeepSeek API Key，它会保存为该仓库的 `DEEPSEEK_API_KEY` Actions Secret。
 
-```bash
-npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
+也可以手工添加：在 GitHub 仓库打开 **Settings → Secrets and variables → Actions → New repository secret**，名称填 `DEEPSEEK_API_KEY`，值填你的密钥。只在本地 DSH 中配置密钥，云端 Action 仍然无法使用它。
+
+### 4. 触发第一次 PR Review
+
+先让生成的 `.github/workflows/dsh-review.yml` 到达仓库默认分支，通常是 `main`。如果默认分支不能直接推送，先为工作流创建 PR 并合并。
+
+然后新建一个分支，做一个小改动，推送后创建**非草稿 PR**。Action 会把审查结果发到 PR 中。运行进度和失败原因可在仓库的 **Actions → DSH review** 查看。如果 PR 在安装前就已存在，向它推送一次新提交即可触发。Review 会评论代码，不会改动文件。
+
+### 可选：导入本地插件或安装其他功能
+
+需要选择 Review、Coding Commands、两者一起安装或自动 Session 时，使用 `--advanced`。已经有本地 DSH 插件时，再加 `--import-plugins`，安装器会列出已安装版本和兼容情况，让你选择并确认：
+
+```powershell
+npm.cmd create deepseek-harness-action@latest -- --advanced --import-plugins
 ```
 
-Automatic Session 生成只读 starter，使用 `queue: max` 保留排队的后续请求。
-提交到默认分支后，从默认分支 dispatch；选择小写 key，后续使用同 key 和新
-prompt 续接，无需 source run ID。失败、过期、损坏或状态不明的历史须先协调解决。
+Native 模式可直接使用 DSH Bundle。Controlled 模式还会询问插件实际提供的只读工具名（`plugin__owner__tool`）；没有符合要求的工具名时，需要手工配置。GitHub 会重新安装选中的精确版本，本地密钥和设置不会被复制。仅存在本地、已停用或不兼容的包会显示简单原因。DSH 使用其他目录时，可加 `--dsh-home "C:\你的路径\.dsh"`。
 
-```bash
-npm create deepseek-harness-action@latest -- --mode session
+只生成文件或在 CI 中运行，可以明确指定选项：
+
+```powershell
+npm.cmd create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
-安装器 `0.6.1` 面向正式 Action `v0.10.2`，保持精确 DSH `0.2.0-rc.2`。
-打包只在 Tag、Release 和 canary 身份
-一致后，通过 `DSH_ACTION_RELEASE_SHA` 注入核验过的完整 Action commit。
-安装器另有不可变源码 Tag `create-deepseek-harness-action-v0.6.1`，两个身份均不能猜填。
-
-引导未配置 Secret 时，在 **Settings → Secrets and variables → Actions** 中添加
-`DEEPSEEK_API_KEY`。Workflow 到达默认分支后，打开或更新非 draft PR。
-使用 Coding Commands 时，把 `@dsh` 写在 Issue 或 PR 评论的第一行，请求写入前
-配置可信 validation。恢复与手工接入步骤见[安装指南](docs/setup.zh-CN.md)。
+默认仍为 Controlled。需要自动修改代码时，还要配置明确的验证命令，安装器会给出提示。安装器 `0.7.0` 对应 Action `v0.10.3` 和 DSH `0.2.1-rc.2`；打包通过 `DSH_ACTION_RELEASE_SHA` 绑定已验证的 Action commit，源码 Tag 为 `create-deepseek-harness-action-v0.7.0`。手工安装和故障恢复见[安装指南](docs/setup.zh-CN.md)。
 
 ### 手工安装
 
@@ -97,10 +103,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
-          dsh-version: 0.2.0-rc.2
+          dsh-version: 0.2.1-rc.2
 ```
 
 打开一个非 draft PR。Action 只会检出受信任的 base SHA，通过 GitHub API 读取 PR，并且不会运行 fork 中的代码。
@@ -119,13 +125,13 @@ jobs:
 | 受控工具         | 以精确工具档位提供原生、固定命令、Controller GitHub、MCP、Bundle 与 Plugin 工具 |
 | 结构化结果       | 保留 schema-v1 审计信封，并可校验维护者定义的可选 task 结果                     |
 
-v0.9.2 继续提供基于锁定 DSH `0.2.0-rc.2` runtime 的实验性 `dsh-mode: native` 路径及其官方生态 composition。Native MCP server、Profile Bundle、direct Cordis Plugin、仓库 Skills、Subagent 和 Workflow 保留 DSH-native discovery 与行为。`controlled` 仍是兼容默认值，因此未配置 `dsh-mode` 的 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
+Action 提供基于锁定 DSH `0.2.1-rc.2` runtime 的实验性 `dsh-mode: native` 路径及其官方生态 composition。Native MCP server、Profile Bundle、direct Cordis Plugin、仓库 Skills、Subagent 和 Workflow 保留 DSH-native discovery 与行为。`controlled` 仍是兼容默认值，因此未配置 `dsh-mode` 的 workflow 会继续使用原有 composition、权限、工具、budget、receipt 和输出行为。
 
 Native 模式并不是 unsafe 模式。它把 DSH 内部 headless composition、capability graph 和 model-visible inventory 的 ownership 交还给 DSH。Native MCP 通过官方 `@deepseek-ai/dsh-mcp-client` 加载；Bundle 作为官方 Profile layer 组合；direct Plugin 通过 Cordis 加载；仓库 Skills、Subagent 与 Workflow 保留 DSH-native 行为。它使用 definition-only 扩展 schema 来声明 owner 和进程需求，而不是声明 Action tool、grant 或 per-tool budget。动态生态工具只通过运行时 `observedTools` 出现，native `toolPolicy` 不会虚构 Controller `effectiveTools`。
 
 Action 仍拥有 trusted-workflow admission、package exact pin、lifecycle script 禁用、runtime inventory audit、Docker 与 `.git`-less workspace 边界、run-scoped DeepSeek 凭据代理、GitHub 凭据隔离、actor/repository trust、validation 与 deferred write、deadline、cancellation 和 secret redaction。Native 仍仅支持 Docker；bridge network 和 read/write mount 都是 whole-worker 能力，不是 per-extension 或 per-tool sandbox。用户自行配置并携带自有凭据的 GitHub MCP 属于受信任外部扩展，其直接副作用不享受 Controller Gateway 的 binding、revalidation、validation 或 deferred-mutation 保证。Controller-owned `command.*` 与 `github.*` 能力继续作为独立且与 mode 正交的平面。
 
-v0.10.0 新增[按 key 自动创建或续接 Session](docs/zh-CN/session.md)，保留显式保存与恢复。受信工作流自动定位最新成功且兼容的检查点；失败、状态不明、缺失、过期或损坏的历史会明确阻断，避免静默回退。同 key 串行，不同 key 可以并行。继续复用 DSH 已发布的 persistence 和 Headless 接口，保持 Controller / DSH / Gateway / validation 分层、DSH `0.2.0-rc.2` 精确锁定及 Session 默认关闭。本次权限重新计算，旧 GitHub 写入不会重放。[文本文件上下文](docs/text-files.md)、[离线配置检查](docs/configuration-check.md)和[限界 GitHub 请求诊断](docs/github-requests.md)继续可用。真实图片与 Office 附件仍因[已记录的运行时和传输边界](docs/v0.9.2-runtime-audit.md)暂缓。
+Action 支持[按 key 自动创建或续接 Session](docs/zh-CN/session.md)，保留显式保存与恢复。受信工作流自动定位最新成功且兼容的检查点；失败、状态不明、缺失、过期或损坏的历史会明确阻断，避免静默回退。同 key 串行，不同 key 可以并行。继续复用 DSH 已发布的 persistence 和 Headless 接口，保持 Controller / DSH / Gateway / validation 分层、DSH `0.2.1-rc.2` 精确锁定及 Session 默认关闭。本次权限重新计算，旧 GitHub 写入不会重放。[文本文件上下文](docs/text-files.md)、[离线配置检查](docs/configuration-check.md)和[限界 GitHub 请求诊断](docs/github-requests.md)继续可用。真实图片与 Office 附件仍因[已记录的运行时和传输边界](docs/v0.9.2-runtime-audit.md)暂缓。
 
 ## 真实运行
 

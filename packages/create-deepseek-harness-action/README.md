@@ -102,7 +102,7 @@ It requires no source run ID. A previous failed or unknown run, or a missing,
 expired, corrupt or incompatible checkpoint must be reconciled before continuing.
 See the [Session contract](../../docs/session.md) for boundaries and explicit usage.
 
-Installer 0.6.1 accepts explicit maintainer-selected write validation:
+Installer 0.7.0 accepts explicit maintainer-selected write validation:
 
 ```bash
 npm create deepseek-harness-action@latest -- --mode commands \
@@ -123,10 +123,10 @@ For an offline static check from a reviewed Action source checkout, use
 `npm run check:config -- --config examples/config-check.json` as described in
 [Setup](../../docs/setup.md#check-configuration-before-the-first-model-run).
 
-Version `0.6.1` targets formal Action `v0.10.2`. Its Action SHA is not filled in
+Version `0.7.0` targets formal Action `v0.10.3`. Its Action SHA is not filled in
 until the immutable tag, GitHub Release and controlled/native release canary
 agree. The installer has a separate source identity and immutable
-`create-deepseek-harness-action-v0.6.1` source tag.
+`create-deepseek-harness-action-v0.7.0` source tag.
 Installer source review, exact-source CI/tag, the real guided first run,
 qualified tarball, npm publication and fresh anonymous public consumers are
 distinct gates.
@@ -134,7 +134,7 @@ distinct gates.
 The verified Action commit is supplied through `DSH_ACTION_RELEASE_SHA` at
 pack time. Source templates retain a controlled build token; generated workflows
 never use a candidate SHA, floating tag, or branch. Their audited exact DSH pin
-is `0.2.0-rc.2`, with controlled as the default and native selected explicitly.
+is `0.2.1-rc.2`, with controlled as the default and native selected explicitly.
 
 ## Maintainer notes: process budgets and recovery
 
@@ -163,3 +163,17 @@ resume checks `ls-remote` first: an exact published commit is recognized without
 another push, its expected parent allows the reviewed push, and any other
 history stops for manual reconciliation. These budgets do not establish that a
 remote effect was rolled back.
+
+## Import local DSH plugins
+
+Run `npm create deepseek-harness-action@latest -- --advanced --import-plugins` in a terminal. The installer reads only package metadata under `DSH_HOME/profiles` (default `~/.dsh/profiles`). It lists third-party package names, installed versions and compatibility with DSH `0.2.1-rc.2`, then asks for the package numbers and confirmation. Use `--dsh-home` for another location.
+
+Enabled npm DSH Bundles can be reinstalled at exact versions in Native mode. Controlled mode also asks for the exact `plugin__owner__tool` names and grants only the selected read-only tools. Packages using arbitrary tool names need Native mode or manual configuration. Local paths, npm aliases, disabled Bundles, incompatible versions and plain dependencies need manual setup; the list explains each case. An undeclared compatibility range is shown as unverified.
+
+The generated workflow enables package installation only after confirmation. It does not copy `.env`, credentials, local Cordis patches, compatibility exceptions or plugin settings. Imported plugins use package defaults and request no extra network or workspace-write access; existing workflow permissions and shared worker mounts still apply. Add any required cloud configuration separately with the existing extension inputs. Fork reviews retain their extension-free configuration.
+
+Native web search and fetch now use the DeepSeek Search/Fetch API through the Controller proxy. Controlled search uses the same Search API; add `native.web-fetch` explicitly under a custom or standard permission profile to enable Fetch. The `base-url` input also selects the upstream for these API routes; `web-search-base-url` remains the legacy Messages-search route. The API model ID for the new Flash catalog entry is `deepseek-flash`.
+
+Controlled automatic import targets read-only Review and Session workflows. Coding-command plugins need manual per-task permission declarations; selecting both workflows imports into Review and leaves Commands unchanged. Native commands retain the existing trusted-context gates, so plugins cannot run for untrusted fork commands.
+
+An explicit custom `web-search-base-url` keeps its legacy Messages-search protocol. The default selects the new Search API. Fetch always uses its separate API grant and `base-url`, including when Fetch is the only selected web tool.

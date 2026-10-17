@@ -26,7 +26,7 @@ const taskSchema = z.strictObject({
   identity: z.string().min(1).max(256),
 });
 const runtimeSchema = z.strictObject({
-  dshVersion: z.literal("0.2.0-rc.2"),
+  dshVersion: z.literal("0.2.1-rc.2"),
   mode: z.enum(["controlled", "native"]),
   compositionId: z.string().min(1).max(128),
   containerImage: z.string().min(1).max(512),

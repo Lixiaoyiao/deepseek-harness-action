@@ -103,9 +103,9 @@ inputs:
     required: false
     default: "controlled"
   dsh-version:
-    description: "Pinned @deepseek-ai/dsh version. The Action accepts only the audited 0.2.0-rc.2 runtime."
+    description: "Pinned @deepseek-ai/dsh version. The Action accepts only the audited 0.2.1-rc.2 runtime."
     required: false
-    default: "0.2.0-rc.2"
+    default: "0.2.1-rc.2"
   dsh-executable:
     description: "Trusted capability input. Optional absolute path to a preinstalled DSH executable; host mode executes it without a container boundary."
     required: false
@@ -139,11 +139,11 @@ inputs:
     required: false
     default: "warn"
   base-url:
-    description: "Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content."
+    description: "Trusted credential-routing input for model requests and DeepSeek Search/Fetch APIs. Never derive it from untrusted content."
     required: false
     default: "https://api.deepseek.com"
   web-search-base-url:
-    description: "Trusted credential-routing input for the Controller-mediated DeepSeek Anthropic Messages web-search endpoint."
+    description: "An explicit custom URL preserves legacy Messages search. The default uses the new DeepSeek Search API through base-url; Fetch also uses base-url."
     required: false
     default: "https://api.deepseek.com/anthropic/v1"
   bot-user-id:

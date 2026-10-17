@@ -3,7 +3,7 @@
   "inputs": {
     "command": "task",
     "prompt": "Describe this repository's public API.",
-    "dsh-version": "0.2.0-rc.2",
+    "dsh-version": "0.2.1-rc.2",
     "dsh-mode": "controlled",
     "isolation": "docker",
     "task-access": "read"

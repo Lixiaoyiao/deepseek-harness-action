@@ -33,7 +33,7 @@ async function logFiles(path) {
 
 export async function runSessionAdmissionProbe({ retainRoot = false } = {}) {
   const manifestPath = require.resolve("@deepseek-ai/dsh/package.json");
-  assert.equal(JSON.parse(await readFile(manifestPath, "utf8")).version, "0.2.0-rc.2");
+  assert.equal(JSON.parse(await readFile(manifestPath, "utf8")).version, "0.2.1-rc.2");
   const cli = join(dirname(manifestPath), "lib", "bin.js");
   const base = process.platform === "win32" ? (process.env.PUBLIC ?? tmpdir()) : tmpdir();
   const root = await mkdtemp(join(base, "dsh-session-admission-"));
@@ -133,8 +133,8 @@ export async function runSessionAdmissionProbe({ retainRoot = false } = {}) {
         name: "session-admission-probe",
         private: true,
         dependencies: {
-          "@deepseek-ai/dsh-base": "0.2.0-rc.2",
-          "@deepseek-ai/dsh-headless": "0.2.0-rc.2",
+          "@deepseek-ai/dsh-base": "0.2.1-rc.2",
+          "@deepseek-ai/dsh-headless": "0.2.1-rc.2",
         },
         dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] } },
       }),
@@ -467,7 +467,7 @@ export async function runSessionAdmissionProbe({ retainRoot = false } = {}) {
     }
     return {
       schemaVersion: 1,
-      runtimeVersion: "0.2.0-rc.2",
+      runtimeVersion: "0.2.1-rc.2",
       scope:
         "published official Headless + public Cordis lifecycle plugin, actual worker processes and local fake provider; not live Action artifact E2E",
       remoteModelCalls: 0,

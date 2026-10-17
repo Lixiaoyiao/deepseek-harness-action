@@ -1,7 +1,7 @@
 /** Release constants shared by runtime policy and repository contract checks. */
-export const ACTION_VERSION = "0.10.2" as const;
+export const ACTION_VERSION = "0.10.3" as const;
 export const ACTION_TAG = `v${ACTION_VERSION}` as const;
-export const DSH_VERSION = "0.2.0-rc.2" as const;
+export const DSH_VERSION = "0.2.1-rc.2" as const;
 export const RELEASE_CANARY_VARIABLE = "DSH_RELEASE_CANARY_SHA" as const;
 
 /** Exact DSH packages imported by the Controller, launcher or generated Profile. */
@@ -16,7 +16,6 @@ export const DSH_RUNTIME_PACKAGES = [
   "@deepseek-ai/dsh-fs-sandbox",
   "@deepseek-ai/dsh-fs",
   "@deepseek-ai/dsh-headless",
-  "@deepseek-ai/dsh-invariants",
   "@deepseek-ai/dsh-launch-environment",
   "@deepseek-ai/dsh-mcp-client",
   "@deepseek-ai/dsh-output-retention",
@@ -29,7 +28,6 @@ export const DSH_RUNTIME_PACKAGES = [
   "@deepseek-ai/dsh-spill",
   "@deepseek-ai/dsh-subagent",
   "@deepseek-ai/dsh-subagent-spawn-in-process",
-  "@deepseek-ai/dsh-subagent-in-process-driver",
   "@deepseek-ai/dsh-tool-bash",
   "@deepseek-ai/dsh-tool-str-replace-editor",
   "@deepseek-ai/dsh-tool-subagent",
@@ -37,6 +35,7 @@ export const DSH_RUNTIME_PACKAGES = [
   "@deepseek-ai/dsh-timeout",
   "@deepseek-ai/dsh-user-approval",
   "@deepseek-ai/dsh-web",
+  "@deepseek-ai/dsh-web-deepseek-api",
   "@deepseek-ai/dsh-web-search-deepseek",
   "@deepseek-ai/dsh-workflow",
 ] as const;

@@ -133,10 +133,13 @@ function renderPrompt(input: RenderPromptInput): string {
         ]
       : []),
     ...(enabled.has("native.web-search")
-      ? ["use Controller-mediated web_search (no arbitrary fetch or general network grant)"]
+      ? ["use Controller-mediated web_search (no general network grant)"]
+      : []),
+    ...(enabled.has("native.web-fetch")
+      ? ["read public pages with Controller-mediated web_fetch"]
       : []),
     ...(enabled.has("native.subagent")
-      ? ["delegate to one foreground depth-1 subagent that inherits this same tool boundary"]
+      ? ["delegate to a managed depth-1 subagent that inherits this same tool boundary"]
       : []),
   ];
   const toolPolicy =
@@ -144,7 +147,7 @@ function renderPrompt(input: RenderPromptInput): string {
       ? "Do not execute repository code or use shell, filesystem, search, edit, web, skill, instruction-loading, or subagent tools. Analyze only the supplied context packet."
       : input.toolPolicy.policyOwner === "dsh"
         ? "DSH owns the internal model-visible capability graph for this native run; its runtime tools are not a Controller allowlist or grant. You may use the tools DSH actually provides only within the current DSH permission mode and the Action-owned Docker workspace, network, credential, and timeout boundaries. The catalog below lists only Controller-owned command and typed GitHub request capabilities. Never bypass the workspace boundary, seek credentials, change the permission mode, approve an extension, or perform GitHub commit/push/PR/release operations directly; GitHub effects require an explicitly listed typed Controller tool."
-        : `You may only ${directCapabilities.length === 0 ? "analyze the supplied context" : directCapabilities.join("; ")}. When using an authorized DSH runtime capability, invoke its DSH-provided tool directly through the runtime tool-call interface. The Controller catalog is separate: only requests through state=needs_tool must use an exact catalog ID; the controller may run its maintainer-defined fixed argv in a separate credential-free container or defer one typed GitHub operation bound to the trusted current entity and Controller policy. ${enabled.has("native.bash") ? "" : "Do not use shell or execute repository code directly. "}${enabled.has("native.web-search") ? "" : "Do not access the web. "}${enabled.has("native.subagent") ? "" : "Do not spawn subagents. "}Never load repository instructions or skills, leave the workspace, change the permission profile, approve an extension, or perform GitHub commit/push/PR/release operations directly; GitHub effects require an explicitly listed typed Controller tool.`;
+        : `You may only ${directCapabilities.length === 0 ? "analyze the supplied context" : directCapabilities.join("; ")}. When using an authorized DSH runtime capability, invoke its DSH-provided tool directly through the runtime tool-call interface. The Controller catalog is separate: only requests through state=needs_tool must use an exact catalog ID; the controller may run its maintainer-defined fixed argv in a separate credential-free container or defer one typed GitHub operation bound to the trusted current entity and Controller policy. ${enabled.has("native.bash") ? "" : "Do not use shell or execute repository code directly. "}${enabled.has("native.web-search") || enabled.has("native.web-fetch") ? "" : "Do not access the web. "}${enabled.has("native.subagent") ? "" : "Do not spawn subagents. "}Never load repository instructions or skills, leave the workspace, change the permission profile, approve an extension, or perform GitHub commit/push/PR/release operations directly; GitHub effects require an explicitly listed typed Controller tool.`;
   const untrustedBytes = Buffer.byteLength(input.untrustedJson, "utf8");
   const untrustedAttributes = input.untrustedTruncated
     ? `byte_length=${String(untrustedBytes)} original_byte_length=${String(input.originalUntrustedBytes)} truncated=true`

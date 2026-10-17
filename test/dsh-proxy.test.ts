@@ -11,6 +11,54 @@ afterEach(async () => {
 });
 
 describe("DeepSeek credential proxy", () => {
+  it("mediates the new Search and Fetch APIs with separate grants and replaced credentials", async () => {
+    const upstream = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ results: [] }));
+    const handle = await startDeepSeekProxy({
+      apiKey: "controller-only-key",
+      baseUrl: "https://api.deepseek.com",
+      webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
+      allowWebSearch: true,
+      allowWebFetch: true,
+      fetchImplementation: upstream,
+    });
+    handles.push(handle);
+    expect(handle.workerWebSearchProvider).toBe("deepseek-search-api");
+    for (const operation of ["search", "fetch"]) {
+      const response = await fetch(`${handle.workerBaseUrl}/v1/tools/${operation}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${handle.workerToken}` },
+        body: JSON.stringify({ query: "fixture", url: "https://example.com" }),
+      });
+      expect(response.status).toBe(200);
+      expect(upstream.mock.lastCall?.[0]).toEqual(
+        new URL(`https://api.deepseek.com/v1/tools/${operation}`),
+      );
+      expect(upstream.mock.lastCall?.[1]?.headers).toMatchObject({
+        authorization: "Bearer controller-only-key",
+      });
+    }
+    const searchOnly = await startDeepSeekProxy({
+      apiKey: "controller-only-key",
+      baseUrl: "https://api.deepseek.com",
+      webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
+      allowWebSearch: true,
+      fetchImplementation: upstream,
+    });
+    handles.push(searchOnly);
+    for (const path of ["/v1/tools/fetch", "/v1/tools/search?target=other", "/v1/tools/files"]) {
+      expect(
+        (
+          await fetch(`${searchOnly.workerBaseUrl}${path}`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${searchOnly.workerToken}` },
+            body: "{}",
+          })
+        ).status,
+      ).toBe(404);
+    }
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["https://api.deepseek.com", "https://api.deepseek.com/anthropic/v1/messages"],
     ["https://api.deepseek.com/v1", "https://api.deepseek.com/anthropic/v1/messages"],
@@ -279,6 +327,7 @@ describe("DeepSeek credential proxy", () => {
       });
       handles.push(handle);
       const workerSearchBase = handle.workerWebSearchBaseUrl;
+      expect(handle.workerWebSearchProvider).toBe("deepseek-official");
       if (workerSearchBase === undefined)
         throw new Error("Worker web search route was not exposed");
       expect(workerSearchBase).toBe(`${handle.workerBaseUrl}/anthropic/v1`);

@@ -237,7 +237,7 @@ describe("buildDshPrompt", () => {
     });
     expect(prompt).toContain("bounded foreground Bash");
     expect(prompt).toContain("Controller-mediated web_search");
-    expect(prompt).toContain("foreground depth-1 subagent");
+    expect(prompt).toContain("managed depth-1 subagent");
     expect(prompt).toContain("Never load repository instructions or skills");
     expect(prompt).toContain("GitHub commit/push/PR/release operations");
     expect(prompt).toContain('"operation": "task"');
@@ -257,7 +257,7 @@ describe("buildDshPrompt", () => {
     },
     {
       tool: "native.subagent",
-      capability: "foreground depth-1 subagent",
+      capability: "managed depth-1 subagent",
       deny: "Do not spawn subagents.",
     },
   ] as const)(
@@ -319,7 +319,7 @@ describe("buildDshPrompt", () => {
     expect(prompt).toContain("Do not spawn subagents.");
     expect(prompt).not.toContain("use Controller-mediated web_search");
     expect(prompt).not.toContain("run bounded foreground Bash");
-    expect(prompt).not.toContain("delegate to one foreground depth-1 subagent");
+    expect(prompt).not.toContain("delegate to one managed depth-1 subagent");
   });
 
   it("retains untrusted tool denial and native DSH inventory ownership under the final-text rule", () => {

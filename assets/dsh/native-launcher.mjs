@@ -18,7 +18,7 @@ import {
 const NAME = "dsh-action-native";
 // The Action installs the locked runtime and any admitted out-of-tree packages
 // in this run-scoped Profile directory. Its ordered Bundle layers still begin
-// with the official 0.2.0-rc.2 headless template.
+// with the official 0.2.1-rc.2 headless template.
 const PROFILE = "github-action";
 const PROFILE_ROOT_FILENAME = "action-native-root.yml";
 const INSTALL_ANCHOR = createRequire(import.meta.url).resolve("@deepseek-ai/dsh/package.json");
@@ -152,11 +152,27 @@ async function main() {
   const patches = [
     ...profile.layers.flatMap((layer) => layer.patches),
     ...profile.patches,
-    // Preserve the Action's established mediated-search network surface: the
-    // new anonymous fetch default is not an implicitly authorized capability.
+    // Both web tools use the Controller's fixed DeepSeek API routes.
     { id: "web-fetch-http", disabled: true },
     { id: "mcp-resources", disabled: true },
-    { id: "tool-web", config: { search: true, fetch: false, searchTimeoutMs: 60_000 } },
+    {
+      id: "web",
+      config: {
+        searchProvider:
+          process.env.DSH_ACTION_SEARCH_PROVIDER === "deepseek-official"
+            ? "deepseek-official"
+            : "deepseek-search-api",
+        fetchProvider: "deepseek-fetch-api",
+      },
+    },
+    {
+      id: "web-deepseek-api",
+      config: {
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        baseURL: `${process.env.DEEPSEEK_BASE_URL}/v1/tools`,
+      },
+    },
+    { id: "tool-web", config: { search: true, fetch: true, searchTimeoutMs: 60_000 } },
     // Session-log and package-inventory uploads are independent of telemetry.
     { id: "session-log-deepseek", disabled: true },
     { id: "plugin-package-inventory-deepseek", disabled: true },

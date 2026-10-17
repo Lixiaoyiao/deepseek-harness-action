@@ -365,7 +365,7 @@ the worker, repeat tools, or waive the strict schema. Do not blindly rerun a
 workflow that may already have performed extension-owned side effects. If the
 result still fails:
 
-1. Confirm `dsh-version` is exactly `0.2.0-rc.2` and the Action version is
+1. Confirm `dsh-version` is exactly `0.2.1-rc.2` and the Action version is
    v0.9.1.
 2. Inspect the schema error in the Actions log and the bounded `error-message`.
    A `diagnosis` value, when present, must be a non-empty string; omit optional
@@ -398,7 +398,7 @@ bounded log message.
 
 ### DSH runtime
 
-- v0.9.1 accepts only the exact `0.2.0-rc.2` DSH family. Do not use `latest`, a
+- v0.9.1 accepts only the exact `0.2.1-rc.2` DSH family. Do not use `latest`, a
   range, a floating Git ref, or mixed DSH package versions.
 - The runtime installs from the committed lockfile in an ephemeral,
   credential-free container and audits the installed DSH inventory. Registry,

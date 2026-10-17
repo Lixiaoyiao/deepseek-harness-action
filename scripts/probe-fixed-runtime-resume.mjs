@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const dsh = require.resolve("@deepseek-ai/dsh/package.json");
 const manifest = JSON.parse(await readFile(dsh, "utf8"));
-assert.equal(manifest.version, "0.2.0-rc.2");
+assert.equal(manifest.version, "0.2.1-rc.2");
 const cli = join(dirname(dsh), "lib", "bin.js");
 const temporaryBase = process.platform === "win32" ? (process.env.PUBLIC ?? tmpdir()) : tmpdir();
 const root = await mkdtemp(join(temporaryBase, "dsh-fixed-resume-probe-"));
@@ -65,8 +65,8 @@ async function createHome(name) {
       name: "fixed-runtime-resume-probe",
       private: true,
       dependencies: {
-        "@deepseek-ai/dsh-base": "0.2.0-rc.2",
-        "@deepseek-ai/dsh-headless": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-base": "0.2.1-rc.2",
+        "@deepseek-ai/dsh-headless": "0.2.1-rc.2",
       },
       dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] } },
     }),

@@ -19,7 +19,7 @@ makes no network request and changes no remote state. The configuration file
 is limited to 256 KiB, strict UTF-8 and the declared schema. Unknown Action
 inputs and malformed configuration fail. Diagnostics redact credential values.
 
-Checks cover credential presence, the exact DSH `0.2.0-rc.2` pin, input and
+Checks cover credential presence, the exact DSH `0.2.1-rc.2` pin, input and
 extension schemas, mode/isolation requirements, and explicit write-task
 validation argv, `run-tests=true` and a digest-pinned image. `command: auto`
 cannot resolve a future event offline: its write eligibility is checked again

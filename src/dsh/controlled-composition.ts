@@ -98,7 +98,7 @@ export class ControlledComposition implements DshComposition {
   }
 
   public requiresWebSearchProxy(nativeTools: readonly NativeToolId[]): boolean {
-    return nativeTools.includes("native.web-search");
+    return nativeTools.includes("native.web-search") || nativeTools.includes("native.web-fetch");
   }
 
   public isolationMetadata(options: {

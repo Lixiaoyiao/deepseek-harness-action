@@ -65,6 +65,7 @@ const runtimeFiles = [
   "prompts.mjs",
   "publication.mjs",
   "workflow-text.mjs",
+  "local-plugins.mjs",
 ];
 const sourceTemplateFiles = ["dsh-review.yml", "dsh-commands.yml", "dsh-session.yml"];
 const runtime = new Map();

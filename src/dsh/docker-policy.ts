@@ -137,7 +137,10 @@ function containerEnvironment(
     DEEPSEEK_BASE_URL: proxy.workerBaseUrl,
     ...(proxy.workerWebSearchBaseUrl === undefined
       ? {}
-      : { DEEPSEEK_SEARCH_BASE_URL: proxy.workerWebSearchBaseUrl }),
+      : {
+          DEEPSEEK_SEARCH_BASE_URL: proxy.workerWebSearchBaseUrl,
+          DSH_ACTION_SEARCH_PROVIDER: proxy.workerWebSearchProvider ?? "deepseek-search-api",
+        }),
   };
 }
 

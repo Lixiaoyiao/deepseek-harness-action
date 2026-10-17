@@ -16,6 +16,7 @@ export interface DeepSeekProxyOptions {
   /** Controller-selected Anthropic-compatible upstream used only by the web_search tool. */
   readonly webSearchBaseUrl?: string;
   readonly allowWebSearch?: boolean;
+  readonly allowWebFetch?: boolean;
   readonly bindHost?: string;
   /** Hostname advertised to the worker, e.g. host.docker.internal. */
   readonly workerHost?: string;
@@ -31,6 +32,8 @@ export interface DeepSeekProxyHandle {
   readonly workerBaseUrl: string;
   /** Fixed worker base; the only accepted search endpoint below it is /messages. */
   readonly workerWebSearchBaseUrl?: string;
+  /** An explicit custom legacy endpoint retains its existing Messages protocol. */
+  readonly workerWebSearchProvider?: "deepseek-official" | "deepseek-search-api";
   readonly workerToken: string;
   readonly boundHost: string;
   readonly port: number;
@@ -171,6 +174,8 @@ interface ProxyRuntime {
   readonly token: string;
   readonly base: URL;
   readonly webSearchBase?: URL;
+  readonly allowWebSearch: boolean;
+  readonly allowWebFetch: boolean;
   readonly requestLimit: number;
   readonly responseLimit: number;
   readonly timeoutMs: number;
@@ -179,11 +184,23 @@ interface ProxyRuntime {
 }
 
 interface RoutedUpstream {
-  readonly kind: "chat" | "messages" | "web-search";
+  readonly kind: "chat" | "messages" | "web-search" | "web-api";
   readonly target: URL;
 }
 
 function routeUpstream(runtime: ProxyRuntime, rawPath: string): RoutedUpstream | null {
+  if (
+    (rawPath === "/v1/tools/search" && runtime.allowWebSearch) ||
+    (rawPath === "/v1/tools/fetch" && runtime.allowWebFetch)
+  ) {
+    const target = new URL(runtime.base);
+    let prefix = target.pathname.replace(/\/+$/u, "");
+    if (target.origin === "https://api.deepseek.com" && prefix === "/anthropic/v1") prefix = "";
+    target.pathname = `${prefix.endsWith("/v1") ? prefix : `${prefix}/v1`}/tools/${rawPath.endsWith("/search") ? "search" : "fetch"}`;
+    target.search = "";
+    target.hash = "";
+    return { kind: "web-api", target };
+  }
   const messages = makeMessagesUpstreamUrl(runtime.base, rawPath);
   if (messages !== null) return { kind: "messages", target: messages };
   const chat = makeUpstreamUrl(runtime.base, rawPath);
@@ -337,6 +354,8 @@ export async function startDeepSeekProxy(
     apiKey: options.apiKey,
     token,
     base,
+    allowWebSearch: options.allowWebSearch === true,
+    allowWebFetch: options.allowWebFetch === true,
     ...(webSearchBase === undefined ? {} : { webSearchBase }),
     requestLimit: positiveInteger(
       options.maxRequestBytes ?? DEFAULT_REQUEST_LIMIT,
@@ -373,7 +392,13 @@ export async function startDeepSeekProxy(
     workerBaseUrl: `http://${workerHost}:${String(port)}`,
     ...(webSearchBase === undefined
       ? {}
-      : { workerWebSearchBaseUrl: `http://${workerHost}:${String(port)}/anthropic/v1` }),
+      : {
+          workerWebSearchBaseUrl: `http://${workerHost}:${String(port)}/anthropic/v1`,
+          workerWebSearchProvider:
+            webSearchBase.href.replace(/\/+$/u, "") === "https://api.deepseek.com/anthropic/v1"
+              ? "deepseek-search-api"
+              : "deepseek-official",
+        }),
     workerToken: token,
     boundHost: bindHost,
     port,

@@ -5,6 +5,22 @@ versioning for published action releases.
 
 ## Unreleased
 
+## [0.10.3]
+
+- Upgrades the exact DSH package family to `0.2.1-rc.2`, adapts managed
+  Subagents and Headless credentials, and retains Session continuation.
+- Uses the new DeepSeek Search and Fetch APIs through the Controller credential
+  proxy. Native supports both; Controlled keeps Fetch opt-in as `native.web-fetch`.
+  The Flash model ID remains `deepseek-flash`.
+- Prepares installer `0.7.0` with optional local DSH Bundle discovery, installed
+  versions and compatibility checks, explicit selection and confirmation, and
+  fixed-version cloud configuration. Local keys and settings are never copied.
+  Its `DSH_ACTION_RELEASE_SHA` binding targets formal Action `v0.10.3`.
+- Rewrites both quick starts with Windows prerequisites, API key setup and the
+  first PR Review. Preserves the existing file-only and guided installation paths.
+- Integrates #431's version-neutral example comments and #432's exact Git path
+  handling for renamed files, Unicode spellings and literal backslashes.
+
 - Deduplicates Review findings by their final source identity before applying
   the unique finding limit, preserving the highest-ranked opinion and existing
   thread identity across reruns and source movement.

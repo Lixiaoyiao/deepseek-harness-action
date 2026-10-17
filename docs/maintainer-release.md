@@ -4,7 +4,7 @@
 
 This guide is for repository maintainers qualifying and publishing an Action release. A successful run proves only the exact commit SHA it tested. After any candidate change, repeat every required check against the new latest SHA.
 
-For v0.10.2, retain the exact production DSH `0.2.0-rc.2` family. Qualify
+For v0.10.3, retain the exact production DSH `0.2.1-rc.2` family. Qualify
 `session-mode: auto` with fresh keys in controlled and native compositions.
 Use the trusted [automatic Session E2E workflow](../.github/workflows/session-auto-e2e.yml)
 on live `main`: first creation and an
@@ -26,8 +26,8 @@ The advisory stable/RC/alpha upstream canaries never replace these production ga
 Do not rerun task-bearing failures without first reconciling their diagnostics
 and confirmed effects; preserve a bounded continuation record for external blocks.
 
-The guided installer is prepared as an independently qualified `0.6.1` release
-after the v0.10.2 formal canary succeeds. Its first-repository qualification must
+The guided installer is prepared as an independently qualified `0.7.0` release
+after the v0.10.3 formal canary succeeds. Its first-repository qualification must
 exercise the real Git/gh path, Secret detection, readonly workflow generation,
 separate commit/push confirmations, configuration checks and first-run guidance.
 Keep cancelled confirmations and unrelated working-tree changes covered. Public
@@ -102,7 +102,7 @@ DSH configuration qualification checks patch acceptance against the locked runti
 Production launcher, Session lifecycle and native ecosystem tests exercise text-task
 binding, JSON output, resume admission, persistence and observed tools. A narrow
 upload-suppression probe remains until composed launcher configuration has a direct
-test seam. The [migration audit](dsh-0.2.0-rc.2-migration.md) records the fixed
+test seam. The [migration audit](dsh-0.2.1-rc.2-migration.md) records the fixed
 dependency inventory and upstream limitations.
 
 Before committing, inspect the complete diff and confirm that only intended source, test, metadata, documentation, and generated bundle changes are present. For a documentation-only PR, verify explicitly that `src/`, `dist/`, runtime assets, `action.yml`, and package files did not change.
@@ -125,7 +125,7 @@ CLI tests, documentation, controlled/native templates and release-SHA
 contract aligned. `DSH_ACTION_RELEASE_SHA` must be the full commit resolved
 from the newly qualified formal Action tag.
 Source preparation never invents that SHA. Installer source-template and
-packed-workflow checks must retain the exact audited `0.2.0-rc.2` pin.
+packed-workflow checks must retain the exact audited `0.2.1-rc.2` pin.
 
 For a DSH version bump, additionally:
 
@@ -396,9 +396,9 @@ If the smoke fails after publication, keep the tag immutable. Diagnose the failu
 
 ## Publish the npm create package
 
-The independent installer is `0.6.1`, targeting formal Action `v0.10.2`
-with exact DSH `0.2.0-rc.2`. Its source tag is
-`create-deepseek-harness-action-v0.6.1`. Keep the Action SHA and installer source
+The independent installer is `0.7.0`, targeting formal Action `v0.10.3`
+with exact DSH `0.2.1-rc.2`. Its source tag is
+`create-deepseek-harness-action-v0.7.0`. Keep the Action SHA and installer source
 SHA unresolved until their respective gates establish them. Do not copy a
 historical release SHA into the new binding.
 
@@ -493,7 +493,7 @@ Inspect the packed artifact, not only the source tree. It must contain version
 unresolved release token or floating Action reference, and generate controlled
 and native workflows bound only to `release_sha`. Verify that every source
 template, packed template, and generated workflow has exactly one
-`dsh-version: 0.2.0-rc.2` input; the old `0.1.7-rc.2` pin is rejected by
+`dsh-version: 0.2.1-rc.2` input; the old `0.1.7-rc.2` pin is rejected by
 the current Action:
 
 The exact allowlisted archive contains `package.json`, `README.md`, `LICENSE`,

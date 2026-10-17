@@ -32,7 +32,7 @@ const binding: SessionBinding = {
   workflow: { path: ".github/workflows/action.yml", jobId: "dsh", jobName: "DSH" },
   task: { kind: "issue", identity: "issue:17" },
   runtime: {
-    dshVersion: "0.2.0-rc.2",
+    dshVersion: "0.2.1-rc.2",
     mode: "controlled",
     compositionId: "controlled",
     containerImage: `node:24-bookworm@sha256:${"a".repeat(64)}`,

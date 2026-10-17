@@ -285,7 +285,7 @@ describe("runDsh installation", () => {
   });
 
   it("binds policy patches to the audited DSH version", () => {
-    expect(() => assertSupportedDshVersion("0.2.0-rc.2")).not.toThrow();
+    expect(() => assertSupportedDshVersion("0.2.1-rc.2")).not.toThrow();
     expect(() => assertSupportedDshVersion("0.1.7-rc.2")).toThrow(/no audited/u);
     expect(() => assertSupportedDshVersion("0.2.1-alpha.1")).toThrow(/no audited/u);
     expect(() => assertSupportedDshVersion("0.1.1-rc.2")).toThrow();

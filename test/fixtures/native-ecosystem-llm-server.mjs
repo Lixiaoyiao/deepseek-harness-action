@@ -60,7 +60,10 @@ const server = createServer((request, response) => {
         sendSse(response, { content: "Native Ecosystem CI" }, "stop");
         return;
       }
-      if (hasUserText(body, "CHILD_NATIVE_MARKER")) {
+      if (
+        hasUserText(body, "CHILD_NATIVE_MARKER") &&
+        !hasUserText(body, "Use the requested native ecosystem capabilities")
+      ) {
         sendSse(response, { content: "CHILD_NATIVE_MARKER_OK" }, "stop");
         return;
       }
@@ -85,7 +88,6 @@ const server = createServer((request, response) => {
           sendToolCall(response, results, "subagent", {
             description: "Native child marker",
             prompt: "Return CHILD_NATIVE_MARKER exactly.",
-            run_in_background: false,
           });
           return;
         case 6:

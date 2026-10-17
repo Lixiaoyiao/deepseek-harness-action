@@ -292,84 +292,100 @@ describe("runDsh isolation", () => {
     expect(captured?.args).not.toContain("--profile");
   });
 
-  it("mediates web search through exact proxy options and worker-only proxy environment", async () => {
-    const fixture = await fixtures();
-    const runtime = await createDshRuntime(fixture.root);
-    const proxy = {
-      ...fakeProxy(),
-      workerWebSearchBaseUrl: "http://host.docker.internal:3456/anthropic/v1",
-    };
-    let proxyOptions: DeepSeekProxyOptions | undefined;
-    let captured: DshProcessSpec | undefined;
+  it.each(["native.web-search", "native.web-fetch"] as const)(
+    "mediates %s independently through worker-only proxy configuration",
+    async (webTool) => {
+      const fixture = await fixtures();
+      const runtime = await createDshRuntime(fixture.root);
+      const proxy = {
+        ...fakeProxy(),
+        ...(webTool === "native.web-search"
+          ? {
+              workerWebSearchBaseUrl: "http://host.docker.internal:3456/anthropic/v1",
+              workerWebSearchProvider: "deepseek-official" as const,
+            }
+          : {}),
+      };
+      let proxyOptions: DeepSeekProxyOptions | undefined;
+      let captured: DshProcessSpec | undefined;
 
-    await runDsh(
-      request({
-        isolation: "docker",
-        workspacePath: fixture.workspace,
-        nativeTools: ["workspace.read", "native.web-search"],
-      }),
-      {
-        assetsDirectory: fixture.assets,
-        runtime,
-        startProxy: (options) => {
-          proxyOptions = options;
-          return Promise.resolve(proxy);
-        },
-        executeProcess: (spec) => {
-          const inspected = networkInspectResult(spec);
-          if (inspected !== undefined) return Promise.resolve(inspected);
-          const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
-          if (isDsh) captured = spec;
-          return Promise.resolve({
-            stdout: isDsh
-              ? JSON.stringify({
-                  protocolVersion: 1,
-                  operation: "review",
-                  state: "final",
-                  summary: "Done.",
-                  findings: [],
-                })
-              : "",
-            stderr: "",
-            exitCode: 0,
-            signal: null,
-          });
-        },
-      },
-    );
-
-    expect(proxyOptions).toMatchObject({
-      apiKey: "controller-real-key",
-      baseUrl: "https://api.deepseek.com",
-      webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
-      allowWebSearch: true,
-      bindHost: "172.30.0.1",
-      workerHost: "172.30.0.1",
-    });
-    expect(captured?.args).toContain(
-      "DEEPSEEK_SEARCH_BASE_URL=http://host.docker.internal:3456/anthropic/v1",
-    );
-    expect(captured?.args.join(" ")).not.toContain("https://api.deepseek.com/anthropic/v1");
-    expect(Object.values(captured?.env ?? {})).not.toContain("controller-real-key");
-    expect(runtime.binding?.binding.webSearchBaseUrl).toBe("https://api.deepseek.com/anthropic/v1");
-
-    await expect(
-      runDsh(
+      await runDsh(
         request({
           isolation: "docker",
           workspacePath: fixture.workspace,
-          nativeTools: ["workspace.read", "native.web-search"],
-          webSearchBaseUrl: "https://search.example.test/anthropic/v1",
+          nativeTools: ["workspace.read", webTool],
         }),
         {
           assetsDirectory: fixture.assets,
           runtime,
-          startProxy: vi.fn(),
-          executeProcess: vi.fn(),
+          startProxy: (options) => {
+            proxyOptions = options;
+            return Promise.resolve(proxy);
+          },
+          executeProcess: (spec) => {
+            const inspected = networkInspectResult(spec);
+            if (inspected !== undefined) return Promise.resolve(inspected);
+            const isDsh = spec.args.includes(CONTAINER_LAUNCHER);
+            if (isDsh) captured = spec;
+            return Promise.resolve({
+              stdout: isDsh
+                ? JSON.stringify({
+                    protocolVersion: 1,
+                    operation: "review",
+                    state: "final",
+                    summary: "Done.",
+                    findings: [],
+                  })
+                : "",
+              stderr: "",
+              exitCode: 0,
+              signal: null,
+            });
+          },
         },
-      ),
-    ).rejects.toThrow(/binding changed:.*webSearchBaseUrl/u);
-  });
+      );
+
+      expect(proxyOptions).toMatchObject({
+        apiKey: "controller-real-key",
+        baseUrl: "https://api.deepseek.com",
+        webSearchBaseUrl: "https://api.deepseek.com/anthropic/v1",
+        allowWebSearch: webTool === "native.web-search",
+        allowWebFetch: webTool === "native.web-fetch",
+        bindHost: "172.30.0.1",
+        workerHost: "172.30.0.1",
+      });
+      if (webTool === "native.web-search") {
+        expect(captured?.args).toContain(
+          "DEEPSEEK_SEARCH_BASE_URL=http://host.docker.internal:3456/anthropic/v1",
+        );
+        expect(captured?.args).toContain("DSH_ACTION_SEARCH_PROVIDER=deepseek-official");
+      } else {
+        expect(captured?.args.join(" ")).not.toContain("DEEPSEEK_SEARCH_BASE_URL=");
+      }
+      expect(captured?.args.join(" ")).not.toContain("https://api.deepseek.com/anthropic/v1");
+      expect(Object.values(captured?.env ?? {})).not.toContain("controller-real-key");
+      expect(runtime.binding?.binding.webSearchBaseUrl).toBe(
+        "https://api.deepseek.com/anthropic/v1",
+      );
+
+      await expect(
+        runDsh(
+          request({
+            isolation: "docker",
+            workspacePath: fixture.workspace,
+            nativeTools: ["workspace.read", webTool],
+            webSearchBaseUrl: "https://search.example.test/anthropic/v1",
+          }),
+          {
+            assetsDirectory: fixture.assets,
+            runtime,
+            startProxy: vi.fn(),
+            executeProcess: vi.fn(),
+          },
+        ),
+      ).rejects.toThrow(/binding changed:.*webSearchBaseUrl/u);
+    },
+  );
 
   it("resolves the launcher and policy plugins from the action package instead of the caller workspace", async () => {
     const fixture = await fixtures();

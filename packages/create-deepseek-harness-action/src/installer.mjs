@@ -8,7 +8,7 @@ import { runGuidedSetup } from "./guided.mjs";
 import { canonicalWorkflowText } from "./workflow-text.mjs";
 
 const DOCUMENTATION_URL =
-  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/create-deepseek-harness-action-v0.6.1/docs/setup.md";
+  "https://github.com/Lixiaoyiao/deepseek-harness-action/blob/create-deepseek-harness-action-v0.7.0/docs/setup.md";
 const ACTION_REFERENCE_PATTERN = /uses: Lixiaoyiao\/deepseek-harness-action@[0-9a-f]{40}(?:\s|$)/gu;
 const MODES = new Set(["review", "commands", "both", "session"]);
 const DSH_MODES = new Set(["controlled", "native"]);
@@ -56,9 +56,11 @@ function usage() {
   return [
     "Usage: create-deepseek-harness-action [--advanced] [--mode review|commands|both|session] [--dsh-mode controlled|native]",
     "  [--test-commands '<JSON argv arrays>'] [--container-image '<name>@sha256:<digest>']",
+    "  [--import-plugins] [--dsh-home '<local DSH folder>']",
     "",
-    "Without flags, a terminal guides read-only PR Review setup, Secret setup and separately confirmed commit/push.",
+    "Without flags, the guide sets up PR Review and your API key, then asks before committing and pushing.",
     "Use --advanced for interactive workflow/composition choices; explicit --mode generates files only.",
+    "Use --import-plugins in a terminal to choose installed local DSH plugins for cloud installation.",
     "",
     "Workflow choices:",
     "  1) PR Review",
@@ -67,11 +69,11 @@ function usage() {
     "  4) Automatic Session",
     "",
     "DSH mode choices:",
-    "  1) Controlled (compatible default)",
-    "  2) Native",
+    "  1) Controlled (default: choose which tools DSH may use)",
+    "  2) Native (use DSH's own plugins and tools inside Docker)",
     "",
     "CI/non-interactive usage requires --mode; --dsh-mode defaults to controlled.",
-    "Validation argv are explicitly maintainer-selected; the installer never reads or executes repository scripts.",
+    "For coding writes, supply the commands that check your project. The installer does not run them.",
   ].join("\n");
 }
 
@@ -129,9 +131,23 @@ export function parseArguments(argv) {
   let testCommands;
   let containerImage;
   let advanced = false;
+  let importPlugins = false;
+  let dshHome;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === "--import-plugins") {
+      if (importPlugins) throw new Error("--import-plugins may be provided only once");
+      importPlugins = true;
+      continue;
+    }
+    if (argument === "--dsh-home" || argument?.startsWith("--dsh-home=")) {
+      if (dshHome !== undefined) throw new Error("--dsh-home may be provided only once");
+      dshHome = argument === "--dsh-home" ? argv[++index] : argument.slice("--dsh-home=".length);
+      if (!dshHome || dshHome.startsWith("--") || dshHome.includes("\0"))
+        throw new Error("--dsh-home requires a folder path");
+      continue;
+    }
     if (argument === "--advanced") {
       advanced = true;
       continue;
@@ -217,11 +233,15 @@ export function parseArguments(argv) {
       "--test-commands/--container-image are for commands or both; review and session need no write setup",
     );
   }
+  if (dshHome !== undefined && !importPlugins)
+    throw new Error("--dsh-home requires --import-plugins");
   return {
     help,
     mode,
     dshMode,
     ...(advanced ? { advanced } : {}),
+    ...(importPlugins ? { importPlugins } : {}),
+    ...(dshHome === undefined ? {} : { dshHome }),
     ...(testCommands === undefined ? {} : { testCommands }),
     ...(containerImage === undefined ? {} : { containerImage }),
   };
@@ -291,9 +311,12 @@ async function promptForDshMode(readline, output) {
   while (true) {
     const answer = (
       await readline.question(
-        ["Choose the DSH mode:\n", "  1) Controlled\n", "  2) Native\n", "Selection [1-2]: "].join(
-          "",
-        ),
+        [
+          "Choose the DSH mode:\n",
+          "  1) Controlled — choose allowed tools (default)\n",
+          "  2) Native — use DSH's own tools and plugins\n",
+          "Selection [1-2]: ",
+        ].join(""),
       )
     )
       .trim()
@@ -305,7 +328,15 @@ async function promptForDshMode(readline, output) {
   }
 }
 
-async function promptForMissingSelections({ input, output, mode, dshMode }) {
+async function promptForMissingSelections({
+  input,
+  output,
+  mode,
+  dshMode,
+  importPlugins,
+  dshHome,
+  env,
+}) {
   const readline = createInterface({ input, output, terminal: false });
   const answers = readline[Symbol.asyncIterator]();
   const prompt = {
@@ -319,9 +350,16 @@ async function promptForMissingSelections({ input, output, mode, dshMode }) {
     },
   };
   try {
+    mode ??= await promptForMode(prompt, output);
+    dshMode ??= await promptForDshMode(prompt, output);
     return {
-      mode: mode ?? (await promptForMode(prompt, output)),
-      dshMode: dshMode ?? (await promptForDshMode(prompt, output)),
+      mode,
+      dshMode,
+      pluginImport: importPlugins
+        ? await (
+            await import("./local-plugins.mjs")
+          ).selectLocalPlugins({ home: dshHome, env, prompt, output, dshMode, mode })
+        : undefined,
     };
   } finally {
     readline.close();
@@ -363,6 +401,7 @@ async function installWorkflows({
   testCommands,
   containerImage,
   preserveGenerated = false,
+  pluginImport,
 }) {
   const definitions = workflowDefinitions(mode, dshMode).map((definition) => ({
     ...definition,
@@ -414,6 +453,13 @@ async function installWorkflows({
       await readFile(join(templateDirectory, definition.source), "utf8"),
     );
     assertReleaseBuiltTemplate(contents, definition.source);
+    if (pluginImport)
+      contents = (await import("./local-plugins.mjs")).addPluginInputs(
+        contents,
+        pluginImport,
+        definition.target.endsWith("dsh-review.yml"),
+        definition.target.endsWith("dsh-commands.yml"),
+      );
     if (definition.target.endsWith("dsh-commands.yml")) {
       if (testCommands !== undefined) {
         contents = contents.replace(
@@ -498,11 +544,10 @@ function printSuccess(output, mode, dshMode, createdFiles, testCommands) {
         "",
         "Required before coding writes:",
         testCommands === undefined
-          ? "  Replace the fail-closed test-commands placeholder with your repository's commands."
-          : "  Explicit validation argv were written; review their trusted source before enabling coding writes.",
+          ? "  Replace test-commands with the commands that build and test your project. Writes stay off until they pass."
+          : "  Your test commands are saved. They must pass before the Action can publish code changes.",
         "  Replace the digest-pinned container-image too if validation needs another toolchain.",
-        "  No repository scripts were discovered, executed, or automatically trusted.",
-        "  run-tests=true, successful validation and fresh Controller authorization remain mandatory.",
+        "  The installer has not run your project. Keep run-tests=true to check changes before publishing.",
       ].join("\n"),
     );
     output.write("\n");
@@ -525,7 +570,7 @@ function printSuccess(output, mode, dshMode, createdFiles, testCommands) {
   }
   output.write(`\nDocumentation: ${DOCUMENTATION_URL}\n`);
   output.write(
-    "\nNot checked: credential validity/token scopes/quota, Docker daemon/image, repository validation commands, actor/event/SHA authority. These are checked at execution.\n",
+    "\nThe first GitHub run will check your key, repository access and runner setup. Open the Actions tab if it fails.\n",
   );
 }
 
@@ -547,12 +592,18 @@ export async function runInstaller(options = {}) {
 
   let mode = parsed.mode;
   let dshMode = parsed.dshMode;
+  let pluginImport;
   const interactive = isTTY && !environment.CI;
+  if (parsed.importPlugins && !interactive)
+    throw new Error(
+      "Plugin import needs a terminal so you can choose and confirm the plugins. Run without CI or omit --import-plugins.",
+    );
   if (
     interactive &&
     mode === undefined &&
     dshMode === undefined &&
     !parsed.advanced &&
+    !parsed.importPlugins &&
     parsed.testCommands === undefined &&
     parsed.containerImage === undefined
   ) {
@@ -580,8 +631,19 @@ export async function runInstaller(options = {}) {
     }
   }
 
-  if (interactive && (mode === undefined || (parsed.advanced && dshMode === undefined))) {
-    ({ mode, dshMode } = await promptForMissingSelections({ input, output, mode, dshMode }));
+  if (
+    interactive &&
+    (mode === undefined || (parsed.advanced && dshMode === undefined) || parsed.importPlugins)
+  ) {
+    ({ mode, dshMode, pluginImport } = await promptForMissingSelections({
+      input,
+      output,
+      mode,
+      dshMode: dshMode ?? (mode !== undefined && !parsed.advanced ? DEFAULT_DSH_MODE : undefined),
+      importPlugins: parsed.importPlugins,
+      dshHome: parsed.dshHome,
+      env: environment,
+    }));
   }
   dshMode ??= DEFAULT_DSH_MODE;
 
@@ -598,6 +660,7 @@ export async function runInstaller(options = {}) {
     templateDirectory,
     testCommands: parsed.testCommands,
     containerImage: parsed.containerImage,
+    pluginImport,
   });
   printSuccess(output, mode, dshMode, createdFiles, parsed.testCommands);
   return { mode, dshMode, createdFiles };

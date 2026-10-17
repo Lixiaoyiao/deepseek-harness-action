@@ -247,6 +247,7 @@ export const ACTION_INPUT_CONTRACT = [
   {
     name: "dsh-version",
     runtimeKey: "dshVersion",
+    installer: true,
     required: false,
     default: DSH_VERSION,
     description: `Pinned @deepseek-ai/dsh version. The Action accepts only the audited ${DSH_VERSION} runtime.`,
@@ -329,7 +330,7 @@ export const ACTION_INPUT_CONTRACT = [
     required: false,
     default: "https://api.deepseek.com",
     description:
-      "Trusted credential-routing input. The controller-side proxy forwards DeepSeek requests to this URL; never derive it from untrusted content.",
+      "Trusted credential-routing input for model requests and DeepSeek Search/Fetch APIs. Never derive it from untrusted content.",
     docsGroup: "credentials",
   },
   {
@@ -338,7 +339,7 @@ export const ACTION_INPUT_CONTRACT = [
     required: false,
     default: "https://api.deepseek.com/anthropic/v1",
     description:
-      "Trusted credential-routing input for the Controller-mediated DeepSeek Anthropic Messages web-search endpoint.",
+      "An explicit custom URL preserves legacy Messages search. The default uses the new DeepSeek Search API through base-url; Fetch also uses base-url.",
     docsGroup: "credentials",
   },
   {

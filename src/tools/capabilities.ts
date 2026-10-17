@@ -86,7 +86,7 @@ export const CONTROLLER_BUILTIN_CAPABILITY_CONTRACTS = Object.freeze([
     manifest: {
       id: "native.web-search",
       description:
-        "Search the web through the Controller-mediated DeepSeek Messages proxy without receiving the real API key.",
+        "Search the web through the Controller-mediated DeepSeek Search API without receiving the real API key.",
       provider: "builtin",
       permissions: ["network"],
       inputSchema: { type: "object", additionalProperties: false },
@@ -100,9 +100,24 @@ export const CONTROLLER_BUILTIN_CAPABILITY_CONTRACTS = Object.freeze([
   },
   {
     manifest: {
+      id: "native.web-fetch",
+      description: "Read a public web page through the Controller-mediated DeepSeek Fetch API.",
+      provider: "builtin",
+      permissions: ["network"],
+      inputSchema: { type: "object", additionalProperties: false },
+    },
+    requirements: {
+      capabilities: ["accessNetwork"],
+      trust: ["trusted-read", "trusted-write"],
+      isolation: "docker",
+    },
+    denialReason: "Web fetch requires a trusted same-repository actor and Docker",
+  },
+  {
+    manifest: {
       id: "native.subagent",
       description:
-        "Delegate bounded foreground work to one in-process DSH subagent with inherited tool restrictions.",
+        "Delegate bounded work to a managed in-process DSH subagent with inherited tool restrictions.",
       provider: "builtin",
       permissions: ["read", "execute"],
       inputSchema: { type: "object", additionalProperties: false },

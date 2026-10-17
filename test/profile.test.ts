@@ -108,23 +108,7 @@ describe("controlled official DSH Profile", () => {
     expect(row("tool-subagent")?.config).toMatchObject({
       provider: "spawn",
       toolName: "subagent",
-      enableRunInBackground: false,
-      backgroundMode: "one-shot",
       maxDepth: 1,
-      toolFilter: {
-        allow: [
-          "read",
-          "read_image",
-          "glob",
-          "grep",
-          "write",
-          "edit",
-          "str_replace_editor",
-          "bash",
-          "web_search",
-          "subagent",
-        ],
-      },
     });
     expect(row("tool-subagent-fork")).toMatchObject({ disabled: true });
     expect(

@@ -1,6 +1,6 @@
 {
   "name": "create-deepseek-harness-action",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Create safe DeepSeek Harness GitHub workflows",
   "private": false,
   "type": "module",
@@ -33,5 +33,8 @@
     "code-review"
   ],
   "author": "Lixiaoyiao",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "semver": "7.8.5"
+  }
 }

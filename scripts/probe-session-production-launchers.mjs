@@ -45,7 +45,7 @@ export async function runProductionSessionProbe({
       "utf8",
     ),
   ).version;
-  assert.equal(runtimeVersion, "0.2.0-rc.2");
+  assert.equal(runtimeVersion, "0.2.1-rc.2");
   assert.equal(prunerVersion, runtimeVersion);
   const root = await mkdtemp(
     join(

@@ -3,7 +3,7 @@
 [中文](zh-CN/session.md) · [Configuration](configuration.md) · [Security](../SECURITY.md)
 
 Session is an explicit opt-in for continuing one portable text task in a later
-Actions run. It uses DSH **0.2.0-rc.2** public JSONL persistence and `--session-id`. The checkpoint
+Actions run. It uses DSH **0.2.1-rc.2** public JSONL persistence and `--session-id`. The checkpoint
 contains the complete raw v4 Session log and a provenance manifest. A headless
 NDJSON event projection or concatenated GitHub comments is not a Session log.
 
@@ -207,3 +207,7 @@ configuration/output and create a fresh Session; editing raw records would lose
 the integrity and lossless restoration guarantee. A configuration-only check
 does not establish online provenance, Docker availability or artifact access;
 the actual run verifies those requirements before model startup.
+
+### Upgrading to DSH 0.2.1-rc.2
+
+Checkpoints bind to the exact DSH version. Start with a new Session key after this upgrade; checkpoints created with 0.2.0-rc.2 are not automatically imported. Existing artifacts remain available to their original runtime.

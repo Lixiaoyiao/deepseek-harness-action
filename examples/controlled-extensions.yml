@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
         id: dsh
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -38,7 +38,7 @@ jobs:
           task-access: read
           allow-write: "false"
           permission-profile: custom
-          dsh-version: 0.2.0-rc.2
+          dsh-version: 0.2.1-rc.2
           isolation: docker
           container-image: docker.io/library/node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059
 

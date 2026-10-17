@@ -86,11 +86,11 @@ corrupt or unknown history requires reconciliation before continuing.
 npm create deepseek-harness-action@latest -- --mode session
 ```
 
-Installer `0.6.1` targets formal Action `v0.10.2` and exact DSH `0.2.0-rc.2`
+Installer `0.7.0` targets formal Action `v0.10.3` and exact DSH `0.2.1-rc.2`
 in both compositions. Only after the Action tag, GitHub Release and canary agree
 does packing receive the verified full commit through `DSH_ACTION_RELEASE_SHA`.
 The separately reviewed installer source is tagged
-`create-deepseek-harness-action-v0.6.1`. Source templates retain the controlled
+`create-deepseek-harness-action-v0.7.0`. Source templates retain the controlled
 build token; generated workflows contain neither that token nor a candidate SHA,
 floating tag or branch. A source commit cannot supply its own future identity.
 
@@ -133,7 +133,7 @@ tests and untouched placeholders before model startup. A bounded, credential-fre
 `docker info` probe reports an unavailable CLI/daemon before runtime installation.
 These checks never grant authority or replace executed Controller validation.
 
-Installer 0.6.1 accepts optional `--test-commands` JSON argv arrays and
+Installer 0.7.0 accepts optional `--test-commands` JSON argv arrays and
 `--container-image name@sha256:<64 lowercase hex>` for `commands` or `both`. Maintainers must explicitly choose reviewed,
 credential-free commands. The installer never discovers or executes scripts,
 and omitting the flags preserves the fail-closed placeholder.
@@ -168,11 +168,11 @@ The default `github-token` is `${{ github.token }}` and is also Controller-only.
 The examples use the current release tag for readability:
 
 ```yaml
-uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
 ```
 
 For production, replace the tag with the full immutable commit SHA resolved
-from formal `v0.10.2`. Installer `0.6.1` targets that Action identity, with a
+from formal `v0.10.3`. Installer `0.7.0` targets that Action identity, with a
 separately reviewed source commit. Generated workflows use the verified release
 commit; source templates receive it through the release build.
 
@@ -185,7 +185,7 @@ floating ref. Keep `dsh-version` at the Action's audited exact value:
 
 ```yaml
 with:
-  dsh-version: 0.2.0-rc.2
+  dsh-version: 0.2.1-rc.2
 ```
 
 The Action rejects a different DSH version until that package family and its Profile/tool surface have been reviewed and released together.
@@ -221,10 +221,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
-          dsh-version: 0.2.0-rc.2
+          dsh-version: 0.2.1-rc.2
 ```
 
 `pull_request_target` can access secrets and a privileged token, so this workflow checks out only the immutable trusted base SHA. The Action obtains the pull request diff and changed-file context through GitHub APIs; it does not check out or execute the fork revision. Preserve `persist-credentials: false`.
@@ -298,9 +298,23 @@ The Docker image is executable worker code. Writes and extensions require a full
 After the first run, check that:
 
 1. Checkout reports `persist-credentials: false` and the expected trusted SHA.
-2. The Action resolves `dsh-version` to `0.2.0-rc.2`.
+2. The Action resolves `dsh-version` to `0.2.1-rc.2`.
 3. A read-only review reports no workspace write capability.
 4. Only the intended Controller-owned summary comment and inline findings appear.
 5. The step summary and `result-json` show the expected operation, permission profile, effective tools, and network path.
 
 Next, read [Usage](usage.md) for commands and [Configuration](configuration.md) for every input, permission boundary, and output.
+
+## Import local DSH plugins
+
+Run `npm create deepseek-harness-action@latest -- --advanced --import-plugins` in a terminal. The installer reads only package metadata under `DSH_HOME/profiles` (default `~/.dsh/profiles`). It lists third-party package names, installed versions and compatibility with DSH `0.2.1-rc.2`, then asks for the package numbers and confirmation. Use `--dsh-home` for another location.
+
+Enabled npm DSH Bundles can be reinstalled at exact versions in Native mode. Controlled mode also asks for the exact `plugin__owner__tool` names and grants only the selected read-only tools. Packages using arbitrary tool names need Native mode or manual configuration. Local paths, npm aliases, disabled Bundles, incompatible versions and plain dependencies need manual setup; the list explains each case. An undeclared compatibility range is shown as unverified.
+
+The generated workflow enables package installation only after confirmation. It does not copy `.env`, credentials, local Cordis patches, compatibility exceptions or plugin settings. Imported plugins use package defaults and request no extra network or workspace-write access; existing workflow permissions and shared worker mounts still apply. Add any required cloud configuration separately with the existing extension inputs. Fork reviews retain their extension-free configuration.
+
+Native web search and fetch now use the DeepSeek Search/Fetch API through the Controller proxy. Controlled search uses the same Search API; add `native.web-fetch` explicitly under a custom or standard permission profile to enable Fetch. The `base-url` input also selects the upstream for these API routes; `web-search-base-url` remains the legacy Messages-search route. The API model ID for the new Flash catalog entry is `deepseek-flash`.
+
+Controlled automatic import targets read-only Review and Session workflows. Coding-command plugins need manual per-task permission declarations; selecting both workflows imports into Review and leaves Commands unchanged. Native commands retain the existing trusted-context gates, so plugins cannot run for untrusted fork commands.
+
+An explicit custom `web-search-base-url` keeps its legacy Messages-search protocol. The default selects the new Search API. Fetch always uses its separate API grant and `base-url`, including when Fetch is the only selected web tool.

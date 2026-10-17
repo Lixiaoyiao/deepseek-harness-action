@@ -22,7 +22,7 @@ import { sessionKeyHash } from "../src/session/contracts.js";
 import { assertSessionWorkflowPolicy } from "../src/session/workflow-policy.js";
 
 const execFileAsync = promisify(execFile);
-const INSTALLER_VERSION = "0.6.1";
+const INSTALLER_VERSION = "0.7.0";
 // Test-only binding. Production packing must resolve the qualified formal tag.
 const RELEASE_SHA = "0123456789abcdef0123456789abcdef01234567";
 const RELEASE_TOKEN = "__DSH_ACTION_RELEASE_SHA__";
@@ -118,7 +118,7 @@ afterAll(async () => {
 });
 
 describe("create-deepseek-harness-action release build", () => {
-  it("declares the independent 0.6.1 npm create package", async () => {
+  it("declares the independent 0.7.0 npm create package", async () => {
     const manifest: unknown = JSON.parse(
       await readFile(new URL("package.json", packageRoot), "utf8"),
     );
@@ -190,12 +190,12 @@ describe("create-deepseek-harness-action release build", () => {
       expect(runtime).not.toContain(DSH_MODE_TOKEN);
     }
     await expect(readFile(join(builtPackage, "installer.mjs"), "utf8")).resolves.toContain(
-      "/blob/create-deepseek-harness-action-v0.6.1/docs/setup.md",
+      "/blob/create-deepseek-harness-action-v0.7.0/docs/setup.md",
     );
 
     for (const [index, invalidReleaseSha] of [
       undefined,
-      "v0.6.1",
+      "v0.7.0",
       "1234",
       "A".repeat(40),
       "g".repeat(40),
@@ -264,6 +264,7 @@ describe("create-deepseek-harness-action release build", () => {
         "dist/cli.mjs",
         "dist/guided.mjs",
         "dist/installer.mjs",
+        "dist/local-plugins.mjs",
         "dist/process.mjs",
         "dist/prompts.mjs",
         "dist/publication.mjs",
@@ -383,10 +384,10 @@ describe("explicit maintainer validation setup", () => {
       expect(contents).toContain(`deepseek-harness-action@${RELEASE_SHA}`);
       expect(contents).not.toContain("REQUIRED: replace test-commands");
       await expect(readFile(marker)).rejects.toThrow();
+      expect(output.text).toContain("The installer has not run your project");
       expect(output.text).toContain(
-        "No repository scripts were discovered, executed, or automatically trusted",
+        "The first GitHub run will check your key, repository access and runner setup",
       );
-      expect(output.text).toContain("Not checked: credential validity/token scopes/quota, Docker");
     },
   );
 
@@ -489,7 +490,9 @@ describe("installer modes", () => {
     expect(commands).not.toMatch(/\b(?:npm|pnpm|yarn)\b/u);
     expect(result.dshMode).toBe("controlled");
     expect(result.createdFiles).toEqual([".github/workflows/dsh-commands.yml"]);
-    expect(output).toContain("Replace the fail-closed test-commands placeholder");
+    expect(output).toContain(
+      "Replace test-commands with the commands that build and test your project",
+    );
     expect(output).toContain("digest-pinned container-image");
     expect(output).toContain("start an Issue or pull request comment with an @dsh command");
     expect(output).toContain("DEEPSEEK_API_KEY");

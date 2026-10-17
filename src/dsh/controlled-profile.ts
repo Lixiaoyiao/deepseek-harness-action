@@ -55,8 +55,8 @@ const nativeToolGroups: readonly {
   { rows: ["tool-str-replace-editor"], grants: { "workspace.edit": ["str_replace_editor"] } },
   { rows: ["tool-bash"], grants: { "native.bash": ["bash"] } },
   {
-    rows: ["web", "web-search-deepseek", "tool-web"],
-    grants: { "native.web-search": ["web_search"] },
+    rows: ["web", "web-deepseek-api", "tool-web"],
+    grants: { "native.web-search": ["web_search"], "native.web-fetch": ["web_fetch"] },
   },
   {
     rows: ["subagent", "subagent-spawn-in-process", "tool-subagent"],
@@ -86,7 +86,7 @@ function nativeRuleLimits(
       groupMaxCalls: 40,
     };
   }
-  if (id === "native.web-search") {
+  if (id === "native.web-search" || id === "native.web-fetch") {
     return {
       groupId: "builtin.web",
       timeoutMs: 65_000,
@@ -211,6 +211,8 @@ function pluginEntry(
 }
 
 const ALWAYS_DISABLED_BASE_ROWS = [
+  "tool-working-directory",
+  "web-search-deepseek",
   "session-title-llm",
   "session-telemetry-otel",
   "session-log-deepseek",
@@ -285,37 +287,31 @@ function controlledRows(
             config: {
               provider: "spawn",
               toolName: "subagent",
-              enableRunInBackground: false,
-              backgroundMode: "one-shot",
               maxDepth: 1,
-              toolFilter: {
-                allow: [
-                  ...new Set([
-                    ...nativeRules(options.nativeTools).map(({ runtimeName }) => runtimeName),
-                    ...options.plan.tools.map(({ runtimeName }) => runtimeName),
-                  ]),
-                ],
-              },
             },
           },
         ]
       : []),
-    ...(enabled.has("native.web-search")
+    ...(enabled.has("native.web-search") || enabled.has("native.web-fetch")
       ? [
           {
             id: "web",
             name: "@deepseek-ai/dsh-web",
-            config: { searchProvider: "deepseek-official" },
+            config: { searchProvider: "deepseek-search-api", fetchProvider: "deepseek-fetch-api" },
           },
           {
-            id: "web-search-deepseek",
-            name: "@deepseek-ai/dsh-web-search-deepseek",
+            id: "web-deepseek-api",
+            name: "@deepseek-ai/dsh-web-deepseek-api",
             config: { apiKeyEnv: "DEEPSEEK_API_KEY" },
           },
           {
             id: "tool-web",
             name: "@deepseek-ai/dsh-tool-web",
-            config: { search: true, fetch: false, searchTimeoutMs: 60_000 },
+            config: {
+              search: enabled.has("native.web-search"),
+              fetch: enabled.has("native.web-fetch"),
+              searchTimeoutMs: 60_000,
+            },
           },
         ]
       : []),

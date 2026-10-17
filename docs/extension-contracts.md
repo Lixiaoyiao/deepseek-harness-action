@@ -8,7 +8,7 @@ The controlled extension model introduced in v0.4 remains active unchanged
 through DeepSeek Harness's official extension mechanisms. The Action does not
 define a second plugin system:
 
-- `@deepseek-ai/dsh-mcp-client@0.2.0-rc.2` owns MCP connection, discovery,
+- `@deepseek-ai/dsh-mcp-client@0.2.1-rc.2` owns MCP connection, discovery,
   registration, reconnect, and dispatch.
 - DSH Profile and Bundle manifests own Bundle composition. Cordis owns plugin
   loading and configuration.
@@ -20,7 +20,7 @@ define a second plugin system:
   Controller as its tool-policy owner. Controller orchestration records the
   matching exact requested/effective/denied audit.
 - Experimental `NativeComposition` uses the locked official DSH
-  `0.2.0-rc.2` headless composition without constructing the controlled
+  `0.2.1-rc.2` headless composition without constructing the controlled
   `github-action` grant Profile or its ToolRuntime policy adapter. Its native
   Profile composes configured Bundles as official layers, official MCP client
   rows, and direct Cordis Plugins. DSH owns discovery, registration, the
@@ -38,7 +38,7 @@ Controlled Profile rows, runtime tool names, and tool budgets belong to the
 DSH controlled composition. The shared extension module resolves installed
 plugin entry points for both compositions; it does not select runtime policy.
 The Action boots its controlled Profile through the official
-`@deepseek-ai/dsh-app-boot@0.2.0-rc.2` public API.
+`@deepseek-ai/dsh-app-boot@0.2.1-rc.2` public API.
 
 Each outer-loop iteration starts a DSH headless process over the run-scoped
 `.git`-less workspace. Controlled mode also reuses invocation counts and
@@ -64,19 +64,19 @@ native declares only owners, official loading definitions, and process-level
 network/workspace requirements. A controlled-shaped native configuration fails
 closed instead of being reinterpreted.
 
-The Controller accepts only `@deepseek-ai/dsh@0.2.0-rc.2` and the matching
+The Controller accepts only `@deepseek-ai/dsh@0.2.1-rc.2` and the matching
 official package family. Every directly used DSH package is an exact top-level
 pin, shipped packages are installed from the committed lockfile, and the
 runtime verifies that every installed `@deepseek-ai/dsh*` entry has the audited
 rc.2 version. A new DSH version requires a reviewed Profile, native tool
 inventory, compatibility tests, and a new accepted pin.
 
-The [0.1.7-rc.2-to-0.2.0-rc.2 audit](dsh-0.2.0-rc.2-migration.md) covers
+The [0.1.7-rc.2-to-0.2.1-rc.2 audit](dsh-0.2.1-rc.2-migration.md) covers
 app-boot, Profile/Bundle/Plugin composition, MCP, ToolRuntime, Bash, Web Search,
 Subagent, Workflow/PTC, Session lifecycle, receipts, and Docker/path/timeout
 behavior. The Action retains its existing inputs, outputs, and permission
 semantics while adapting the affected runtime contracts. Qualification applies
-only to the exact `0.2.0-rc.2` family; later release candidates, alpha versions,
+only to the exact `0.2.1-rc.2` family; later release candidates, alpha versions,
 and the upstream development branch require independent review.
 
 ## Run-scoped lifecycle and bounded phases
@@ -180,7 +180,7 @@ name never replaces the canonical Action ID as an authorization key.
 ## Native official-ecosystem composition
 
 This section applies only to `dsh-mode: native`. Native prepares a run-scoped
-official Profile over the exact `0.2.0-rc.2` package family. Its manifest keeps
+official Profile over the exact `0.2.1-rc.2` package family. Its manifest keeps
 the locked `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-headless` layers and
 appends each admitted Bundle package to `dsh.profile.bundles`. Its Cordis patch
 inserts each MCP owner as an official `@deepseek-ai/dsh-mcp-client` row and each
@@ -509,7 +509,7 @@ outer Agent loop. The fixed `result-json` schema-v1 audit envelope remains the
 Controller record; `taskOutput` is data only.
 
 GitHub attachment images remain deferred. The exact audited
-`@deepseek-ai/dsh-headless@0.2.0-rc.2` configuration accepts one `task` string
+`@deepseek-ai/dsh-headless@0.2.1-rc.2` configuration accepts one `task` string
 and constructs one text block, with no supported multimodal input contract.
 The Action therefore removes Markdown image references from untrusted text and
 does not download, mount, or forward attachment bytes through an unofficial

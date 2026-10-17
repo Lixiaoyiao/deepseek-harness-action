@@ -4,4 +4,8 @@ export const INSTALLER_ACTION_INPUTS = Object.freeze({
     name: "dsh-mode",
     defaultValue: "controlled",
   }),
+  dshVersion: Object.freeze({
+    name: "dsh-version",
+    defaultValue: "0.2.1-rc.2",
+  }),
 });

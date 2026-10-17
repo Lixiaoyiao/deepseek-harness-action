@@ -293,7 +293,7 @@ describe("published worker Session admission", () => {
         ),
       })
       .parse(JSON.parse(stdout));
-    expect(report.runtimeVersion).toBe("0.2.0-rc.2");
+    expect(report.runtimeVersion).toBe("0.2.1-rc.2");
     expect(report.checks.map(({ mode }) => mode)).toEqual(["controlled", "native"]);
     for (const check of report.checks)
       expect(check).toMatchObject({
@@ -329,7 +329,7 @@ describe("published worker Session admission", () => {
         })
         .parse(JSON.parse(await readFile(evidence, "utf8")));
       expect(report).toMatchObject({
-        runtimeVersion: "0.2.0-rc.2",
+        runtimeVersion: "0.2.1-rc.2",
         remoteModelCalls: 0,
         githubWrites: 0,
         titleDisabledByProbe: false,

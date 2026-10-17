@@ -44,6 +44,8 @@ export function parseArguments(argv: readonly string[]): {
   readonly testCommands?: readonly (readonly string[])[];
   readonly containerImage?: string;
   readonly advanced?: boolean;
+  readonly importPlugins?: boolean;
+  readonly dshHome?: string;
 };
 
 export function runInstaller(options?: InstallerOptions): Promise<InstallerResult>;

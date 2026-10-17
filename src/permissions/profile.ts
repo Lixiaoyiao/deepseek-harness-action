@@ -200,7 +200,9 @@ export function buildPermissionAudit(options: {
       ? options.extensions.network
       : options.extensions?.workerNetwork === true;
   const bridge = commandBridge || extensionBridge;
-  const mediatedWeb = options.mediatedWeb ?? effective.has("native.web-search");
+  const mediatedWeb =
+    options.mediatedWeb ??
+    (effective.has("native.web-search") || effective.has("native.web-fetch"));
   const network: PermissionAudit["network"] = bridge
     ? "bridge"
     : mediatedWeb

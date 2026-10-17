@@ -90,7 +90,7 @@ function checkpoint(
       runAttempt: 1,
       sourceSha: "d".repeat(40),
     },
-    runtime: { dshVersion: "0.2.0-rc.2", mode: options.dshMode ?? "controlled" },
+    runtime: { dshVersion: "0.2.1-rc.2", mode: options.dshMode ?? "controlled" },
     session: { sessionId: id, keyHash: "e".repeat(64), generation },
     payload: { file: "session.jsonl", bytes: payload.length, sha256: hash(payload) },
   };

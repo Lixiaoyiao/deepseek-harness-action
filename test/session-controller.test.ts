@@ -124,7 +124,7 @@ function fixture(overrides: Partial<ControlledActionInputs> = {}) {
     workflow: { path: ".github/workflows/session.yml", jobId: "session", jobName },
     task: { kind: "pull_request", identity: "task:7" },
     runtime: {
-      dshVersion: "0.2.0-rc.2",
+      dshVersion: "0.2.1-rc.2",
       mode: "controlled",
       compositionId: new ControlledComposition().id,
       containerImage: configured.containerImage,

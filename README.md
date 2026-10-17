@@ -16,68 +16,66 @@ The Action starts a credential-isolated DSH worker, validates its structured res
 
 ## Quick Start
 
-Run the installer anywhere inside the existing GitHub repository you want to configure:
+The Action runs DSH on GitHub-hosted Linux runners. **You do not need to install DSH or Docker on your computer.** Local DSH runs on your own computer; its keys and settings are separate from the GitHub Action.
 
-```bash
-npm create deepseek-harness-action@latest
+### 1. Install the tools
+
+On Windows, install [Node.js 24 or later](https://nodejs.org/en/download), [Git for Windows](https://git-scm.com/download/win), and [GitHub CLI](https://cli.github.com/). Keep the default installation options. Close and reopen PowerShell, then check:
+
+```powershell
+node --version
+npm.cmd --version
+git --version
+gh --version
 ```
 
-In a terminal, the default guided flow starts with **read-only PR Review**.
-It finds the Git root and `github.com` origin, checks GitHub CLI availability
-and login, then creates an immutable-SHA workflow after your confirmation.
-It creates no remote repository. If logged in, you can set `DEEPSEEK_API_KEY`
-using hidden input; the key goes to `gh` through stdin and is never logged or
-placed in command arguments. Missing login or Secret access prints recovery
-steps, and rerunning preserves the identical generated workflow.
+Use `npm.cmd` if PowerShell blocks `npm.ps1`; no execution-policy change is needed. On macOS and Linux, use `npm`.
 
-Commit and push each need a separate confirmation, defaulting to No. The
-installer commits only its generated workflow, preserves other changes,
-refuses an existing staged set, and runs no repository hooks or filters.
-Its unsigned commit and checked non-force push require a compatible existing
-branch; signed commits or other unpublished history can be completed manually.
-The workflow must reach the default branch before opening a non-draft PR.
+### 2. Open your repository and sign in
 
-Use `--advanced` for interactive workflow and controlled/native choices:
+Use the existing local repository folder. You do not need to clone it again.
 
-```bash
-npm create deepseek-harness-action@latest -- --advanced
+```powershell
+cd "C:\path\to\your-repository"
+git remote -v
+gh auth login
 ```
 
-Advanced choices are **PR Review**, **@dsh Coding Commands**, **Both**, and
-**Automatic Session**. This flow and explicit `--mode` flags generate files
-only. For CI or another non-interactive environment, pass the mode explicitly:
+Choose GitHub.com and browser sign-in. The `origin` remote should point to the repository you want to set up. The installer uses that repository; it does not create a new one.
 
-```bash
-npm create deepseek-harness-action@latest -- --mode both
+### 3. Install the workflow and set your key
+
+```powershell
+npm.cmd create deepseek-harness-action@latest
 ```
 
-With explicit `--mode`, omitting `--dsh-mode` keeps `controlled` in any
-environment. Select native composition explicitly when needed:
+The guide starts with **read-only PR Review**. It shows the target repository and asks before creating files, setting the key, committing and pushing. Paste your DeepSeek API key at the hidden prompt. It is saved as the repository Actions secret `DEEPSEEK_API_KEY`.
 
-```bash
-npm create deepseek-harness-action@latest -- --mode both --dsh-mode native
+To add it manually, open **Settings → Secrets and variables → Actions → New repository secret** on GitHub. Set the name to `DEEPSEEK_API_KEY` and paste the key as its value. A key stored in local DSH does not configure this secret.
+
+### 4. Trigger your first PR Review
+
+Make sure `.github/workflows/dsh-review.yml` is on the default branch, usually `main`. If direct pushes are blocked, submit and merge a PR containing the workflow first.
+
+Create a branch, make a small change, push it and open a **non-draft pull request**. The Action posts a review on the PR. Follow progress or read failure details under **Actions → DSH review**. For a PR opened before installation, push a new commit to trigger it. Review comments on code without changing your files.
+
+### Optional: local plugins and other workflows
+
+Choose Review, Coding Commands, both, or automatic Session with `--advanced`. If you already have local DSH plugins, add `--import-plugins` to list their installed versions and compatibility, select packages, and confirm:
+
+```powershell
+npm.cmd create deepseek-harness-action@latest -- --advanced --import-plugins
 ```
 
-Automatic Session creates a read-only starter with `queue: max` to retain pending
-follow-ups. Commit it to the default branch and dispatch there with a lowercase
-key. Reuse the key with a new prompt; no source run ID is needed. Failed,
-expired, corrupt or unknown history requires reconciliation.
+Native mode supports DSH Bundles directly. Controlled mode also asks for their exact read-only tool names (`plugin__owner__tool`). Plugins without that contract need manual configuration. The cloud installs selected packages at exact versions; local settings and keys stay on your computer. Local-only, disabled and incompatible packages show a short explanation. Use `--dsh-home "C:\path\to\.dsh"` with the import option for another DSH home.
 
-```bash
-npm create deepseek-harness-action@latest -- --mode session
+File-only and non-interactive setup remains available:
+
+```powershell
+npm.cmd create deepseek-harness-action@latest -- --mode both --dsh-mode native
 ```
 
-Installer `0.6.1` targets formal Action `v0.10.2`, retaining exact DSH
-`0.2.0-rc.2`. Packing receives the verified full Action commit through
-`DSH_ACTION_RELEASE_SHA` only after tag, Release and canary identity checks.
-The separate immutable installer source tag is
-`create-deepseek-harness-action-v0.6.1`; neither identity is guessed.
-
-If guided setup did not configure the Secret, add `DEEPSEEK_API_KEY` under
-**Settings → Secrets and variables → Actions**. Once the workflow reaches the
-default branch, open or update a non-draft PR. For Coding Commands, put `@dsh`
-on the first line of an Issue or PR comment and configure trusted validation
-before requesting a write. See [Setup](docs/setup.md) for resume and manual steps.
+Controlled remains the default. Coding writes require explicit validation commands; the installer tells you where to configure them. Installer `0.7.0` targets Action `v0.10.3` and DSH `0.2.1-rc.2`. Its build binds the qualified Action commit through `DSH_ACTION_RELEASE_SHA`; its source tag is `create-deepseek-harness-action-v0.7.0`. See the [setup guide](docs/setup.md) for manual setup and recovery.
 
 ### Manual installation
 
@@ -105,10 +103,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.2
+      - uses: Lixiaoyiao/deepseek-harness-action@v0.10.3
         with:
           deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
-          dsh-version: 0.2.0-rc.2
+          dsh-version: 0.2.1-rc.2
 ```
 
 Open a non-draft pull request. The Action checks out only the trusted base SHA, reads the pull request through GitHub APIs, and never executes fork code.
@@ -128,13 +126,13 @@ For production, pin the complete commit published in the corresponding GitHub Re
 | Structured results      | Keeps the schema-v1 audit envelope and can validate an optional maintainer-defined task result              |
 | Explicit Session resume | Continues a completed task in a new Actions run using a verified raw DSH checkpoint and current permissions |
 
-v0.9.2 retains the experimental `dsh-mode: native` path over the locked DSH `0.2.0-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
+The Action provides the experimental `dsh-mode: native` path over the locked DSH `0.2.1-rc.2` runtime and its official ecosystem composition. Native MCP servers, Profile Bundles, direct Cordis Plugins, repository Skills, Subagents, and Workflows retain DSH-native discovery and behavior. `controlled` remains the compatible default, so workflows that omit `dsh-mode` retain their existing composition, permissions, tools, budgets, receipts, and outputs.
 
 Native mode is not an unsafe mode. It returns ownership of DSH's internal headless composition, capability graph, and model-visible inventory to DSH. Native MCP servers load through official `@deepseek-ai/dsh-mcp-client`; Bundles become official Profile layers; direct Plugins load through Cordis; and repository Skills, Subagents, and Workflows retain DSH-native behavior. Its definition-only extension schema declares owners and process requirements, not Action tools, grants, or per-tool budgets. Dynamic ecosystem tools appear only in runtime `observedTools`, and native `toolPolicy` never claims Controller `effectiveTools`.
 
 The Action still owns trusted-workflow admission, exact package pins, lifecycle-script suppression, runtime inventory audit, Docker and `.git`-less workspace boundaries, the run-scoped DeepSeek credential proxy, GitHub credential isolation, actor/repository trust, validation and deferred writes, deadlines, cancellation, and secret redaction. Native remains Docker-only. Bridge network and read/write mounts are whole-worker capabilities, not per-extension or per-tool sandboxes. A user-configured GitHub MCP with its own credential is a trusted external extension whose direct effects do not receive the Controller Gateway's binding, revalidation, validation, or deferred-mutation guarantees. Controller-owned `command.*` and `github.*` capabilities remain a separate, mode-independent plane.
 
-v0.10.0 adds [automatic Session creation and continuation by key](docs/session.md), retaining explicit save/resume. A trusted workflow discovers the latest successful compatible checkpoint; failed, unknown, missing, expired or corrupt history prevents silent fallback. Matching workflow identity and concurrency bindings serialize one key while allowing different keys to run concurrently. The existing Controller / DSH / Gateway / validation ownership, exact `0.2.0-rc.2` pin and default-off Session path remain. Current authority is recalculated; previous GitHub writes are not replayed. [Text file context](docs/text-files.md), [offline configuration checks](docs/configuration-check.md) and [bounded GitHub diagnostics](docs/github-requests.md) remain available. Native image and Office attachments remain deferred for the [documented runtime/transport reasons](docs/v0.9.2-runtime-audit.md).
+The Action supports [automatic Session creation and continuation by key](docs/session.md), retaining explicit save/resume. A trusted workflow discovers the latest successful compatible checkpoint; failed, unknown, missing, expired or corrupt history prevents silent fallback. Matching workflow identity and concurrency bindings serialize one key while allowing different keys to run concurrently. The existing Controller / DSH / Gateway / validation ownership, exact `0.2.1-rc.2` pin and default-off Session path remain. Current authority is recalculated; previous GitHub writes are not replayed. [Text file context](docs/text-files.md), [offline configuration checks](docs/configuration-check.md) and [bounded GitHub diagnostics](docs/github-requests.md) remain available. Native image and Office attachments remain deferred for the [documented runtime/transport reasons](docs/v0.9.2-runtime-audit.md).
 
 ## Live runs
 

@@ -499,7 +499,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/cordis-plugin-group@1.0.4
+## @deepseek-ai/cordis-plugin-group@1.0.5
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -528,7 +528,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/cordis-plugin-loader@1.0.5
+## @deepseek-ai/cordis-plugin-loader@1.0.6
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -557,7 +557,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/cordis@4.0.4
+## @deepseek-ai/cordis@4.0.5
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -586,7 +586,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/cosmokit@1.8.5
+## @deepseek-ai/cosmokit@1.8.6
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -615,7 +615,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-app-boot@0.2.0-rc.2
+## @deepseek-ai/dsh-app-boot@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -644,7 +644,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-atomic-write@0.2.0-rc.2
+## @deepseek-ai/dsh-atomic-write@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -673,7 +673,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-brand@0.2.0-rc.2
+## @deepseek-ai/dsh-brand@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -702,7 +702,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-compaction-image-offload@0.2.0-rc.2
+## @deepseek-ai/dsh-compaction-image-offload@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -731,7 +731,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-home-paths@0.2.0-rc.2
+## @deepseek-ai/dsh-home-paths@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -760,7 +760,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-llm@0.2.0-rc.2
+## @deepseek-ai/dsh-llm@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -789,7 +789,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-scope@0.2.0-rc.2
+## @deepseek-ai/dsh-scope@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -818,7 +818,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format-catalog@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format-catalog@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -847,7 +847,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format-v0-to-v1@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format-v0-to-v1@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -876,7 +876,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format-v1-to-v2@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format-v1-to-v2@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -905,7 +905,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format-v2-to-v3@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format-v2-to-v3@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -934,7 +934,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format-v3-to-v4@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format-v3-to-v4@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -963,7 +963,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session-format@0.2.0-rc.2
+## @deepseek-ai/dsh-session-format@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -992,7 +992,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-session@0.2.0-rc.2
+## @deepseek-ai/dsh-session@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -1021,7 +1021,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-timeout@0.2.0-rc.2
+## @deepseek-ai/dsh-timeout@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -1050,7 +1050,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-typert-protocol@0.2.0-rc.2
+## @deepseek-ai/dsh-typert-protocol@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -1079,7 +1079,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/dsh-util-values@0.2.0-rc.2
+## @deepseek-ai/dsh-util-values@0.2.1-rc.2
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -1108,7 +1108,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @deepseek-ai/schemastery@3.18.4
+## @deepseek-ai/schemastery@3.18.5
 
 License: MIT
 Source: git+https://github.com/deepseek-ai/deepseek-harness.git
@@ -4911,7 +4911,7 @@ Apache License
    limitations under the License.
 ```
 
-## resolve.exports@2.0.3
+## resolve.exports@2.0.4
 
 License: MIT
 Source: lukeed/resolve.exports
